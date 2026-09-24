@@ -3,10 +3,11 @@
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .actions import ActionValidator
 from .fake_preview import FakePreview
+from .preview import PreviewAdapter
 from .storage import Storage
 from .time import hour_key, isoformat, parse_instant
 from .world import add_signal, new_world, project_world
@@ -25,11 +26,16 @@ STEPS = (
 
 
 class SimulatedCrash(RuntimeError):
-    """Fault injection raised after a fake remote commit but before checkpoint."""
+    """Fault injection raised after a product commit but before checkpoint."""
+
+
+PreviewFactory = Callable[[Storage, Dict[str, Any]], PreviewAdapter]
 
 
 class Orchestrator:
-    def __init__(self, root: Path):
+    def __init__(
+        self, root: Path, preview_factory: Optional[PreviewFactory] = None
+    ):
         self.root = root.resolve()
         self.storage = Storage(self.root)
         self.seed = self.storage.load_json(self.root / "seed" / "tenant.json")
@@ -38,6 +44,7 @@ class Orchestrator:
         )
         if self.seed is None or self.scenario is None:
             raise RuntimeError("seed/tenant.json and scenarios/hourly-match.json are required")
+        self._preview_factory = preview_factory or FakePreview
         self.validator = ActionValidator(
             pod_id=self.scenario["podId"],
             allowed_actions=self.scenario["allowedActions"],
@@ -47,12 +54,12 @@ class Orchestrator:
         instant = now or parse_instant(None)
         observed_at = isoformat(instant)
         world = self.storage.load_json(self.storage.world_path, default=None)
-        preview = FakePreview(self.storage, self.seed)
+        preview = self._preview()
 
         if world is None:
             if preview.is_fresh():
                 preview.rehydrate()
-            world = new_world(1, observed_at)
+            world = new_world(1, observed_at, preview_mode=preview.mode)
             add_signal(
                 world,
                 self._signal(observed_at, "SEED", "Preview Club opened from seed"),
@@ -65,7 +72,7 @@ class Orchestrator:
             previous_season = world["season"]["id"]
             next_number = int(world["season"]["number"]) + 1
             preview.rehydrate()
-            world = new_world(next_number, observed_at)
+            world = new_world(next_number, observed_at, preview_mode=preview.mode)
             message = (
                 f"Preview database refreshed after {previous_season}; product state was "
                 "reseeded and personal journals were preserved."
@@ -86,8 +93,20 @@ class Orchestrator:
         return world
 
     def reset_fake_preview(self) -> None:
-        preview = FakePreview(self.storage, self.seed)
+        preview = self._preview()
+        if not isinstance(preview, FakePreview):
+            raise RuntimeError("demo-reset is available only with the fake adapter")
         preview.reset_database()
+
+    @property
+    def preview_mode(self) -> str:
+        return self._preview().mode
+
+    def _preview(self) -> PreviewAdapter:
+        preview = self._preview_factory(self.storage, self.seed)
+        if not isinstance(preview, PreviewAdapter):
+            raise TypeError("preview factory returned an incompatible adapter")
+        return preview
 
     def run_beat(
         self,
@@ -102,7 +121,7 @@ class Orchestrator:
 
         with self.storage.writer_lock():
             world = self.ensure_world(instant)
-            preview = FakePreview(self.storage, self.seed)
+            preview = self._preview()
             world["clock"].update(
                 {"observedAt": observed_at, "simulationTime": observed_at}
             )
@@ -157,7 +176,7 @@ class Orchestrator:
     def _execute_step(
         self,
         world: Dict[str, Any],
-        preview: FakePreview,
+        preview: PreviewAdapter,
         occurrence: Dict[str, Any],
         step: str,
         observed_at: str,

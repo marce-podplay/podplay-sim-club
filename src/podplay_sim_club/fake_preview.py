@@ -8,6 +8,8 @@ from .storage import Storage
 
 
 class FakePreview:
+    mode = "fake"
+
     def __init__(self, storage: Storage, seed: Dict[str, Any]):
         self.storage = storage
         self.seed = seed

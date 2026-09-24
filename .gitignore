@@ -4,6 +4,9 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .coverage
+.env
+.env.*
+!.env.example
 
 # Local simulation state and credentials
 state/*

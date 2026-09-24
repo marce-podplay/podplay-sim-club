@@ -13,7 +13,9 @@ ACTORS = {
 }
 
 
-def new_world(season_number: int, observed_at: str) -> Dict[str, Any]:
+def new_world(
+    season_number: int, observed_at: str, preview_mode: str = "fake"
+) -> Dict[str, Any]:
     actors = {}
     for actor_id, definition in ACTORS.items():
         actor = deepcopy(definition)
@@ -30,12 +32,12 @@ def new_world(season_number: int, observed_at: str) -> Dict[str, Any]:
         "schemaVersion": 1,
         "season": {"id": f"season-{season_number:03d}", "number": season_number},
         "clock": {
-            "source": "fake-preview",
+            "source": preview_mode,
             "observedAt": observed_at,
             "simulationTime": observed_at,
             "rate": 1,
         },
-        "preview": {"mode": "fake", "reachable": True, "approved": True},
+        "preview": {"mode": preview_mode, "reachable": True, "approved": True},
         "beat": {"count": 0, "lastTurnCount": 0},
         "actors": actors,
         "pods": {

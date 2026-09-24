@@ -53,7 +53,10 @@ class ObservatoryServer:
                     )
                     return
                 if self.path == "/health":
-                    self._json(HTTPStatus.OK, {"ok": True, "mode": "fake"})
+                    self._json(
+                        HTTPStatus.OK,
+                        {"ok": True, "mode": orchestrator.preview_mode},
+                    )
                     return
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
 

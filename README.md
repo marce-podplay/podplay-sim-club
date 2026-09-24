@@ -4,8 +4,9 @@ PodPlay Sim Club is a persistent fictional tenant whose characters will exercise
 an approved PodPlay PR preview, talk to one another, try release features, and
 leave inspectable evidence when something does not work.
 
-The current implementation is the dependency-free **fake-world milestone**. It
-does not contact PodPlay, Firebase, Reflag, shared staging, or production.
+The current implementation is the dependency-free **fake-world plus target
+safety milestone**. It does not contact PodPlay, Firebase, Reflag, shared
+staging, or production.
 
 ## What works now
 
@@ -19,6 +20,10 @@ does not contact PodPlay, Firebase, Reflag, shared staging, or production.
 - sparse ASCII world view;
 - read-only local web observatory;
 - dependency-free `unittest` suite.
+- a typed preview-adapter boundary around all product operations;
+- explicit `fake`, `preview-readonly`, and `preview-write` configuration modes;
+- exact-origin PR-preview allowlisting with shared-staging and production denial;
+- cross-origin request and redirect rejection ready for the future HTTP client.
 
 Actors are deterministic fixtures in this milestone. A later milestone will
 replace one actor turn at a time with a short-lived model invocation while
@@ -76,6 +81,39 @@ rehydrates the fake preview, and starts a new season.
 ./club test
 ```
 
+## Preview target preflight
+
+Fake mode remains the only executable adapter. Target configuration can already
+be validated without making a network request:
+
+```console
+preview_origin=https://podify-pr-5207-staging-main-service-example-uk.a.run.app
+./club doctor \
+  --mode preview-readonly \
+  --preview-origin "$preview_origin" \
+  --allow-preview-origin "$preview_origin"
+```
+
+The target-policy check will pass for a recognized, exactly allowlisted PR
+preview. The complete doctor command will still fail with
+`preview_adapter_available` until the read-only HTTP adapter is implemented.
+This is intentional. Supplying a URL cannot activate network access.
+
+Configuration may alternatively be exported using the variable names in
+`.env.example`. The application does not automatically load `.env` or another
+repository's secret store.
+
+The web-v2 checkout has Firebase and E2E configuration that can inform the
+future authentication flow. Do not copy its complete `secrets.json`: it contains
+many unrelated high-privilege credentials. The simulator will accept only the
+minimum actor credentials through ignored local configuration, and no value is
+written to world state, journals, issues, or rendered output.
+
+A PodPlay admin such as Marcelo can later bootstrap the fictional users through
+supported APIs in the approved preview. That will happen after read-only target,
+tenant, and identity inspection succeeds; user creation is not part of this
+milestone.
+
 ## Local state
 
 Generated state is written below `state/` and ignored by Git:
@@ -101,10 +139,16 @@ Do not place tokens in actor identities, seed files, journals, or issues.
 
 ## Safety boundary
 
-No network adapter exists yet. Before a real adapter is enabled it must enforce:
+No network adapter exists yet. The target policy already enforces:
 
-- an explicit PR-preview allowlist;
-- hard denials for production and shared staging;
+- a recognized PodPlay PR-preview Cloud Run hostname;
+- an exact configured origin allowlist;
+- HTTPS without embedded credentials, custom ports, paths, queries, or fragments;
+- a second exact-origin confirmation for future preview-write mode;
+- rejection when a request or redirect crosses the approved origin.
+
+Before a real adapter is enabled it must additionally enforce:
+
 - Bearer-token handling outside committed files;
 - bounded methods, endpoints, writes, retries, and timeouts;
 - read-back reconciliation before retrying any mutation;
