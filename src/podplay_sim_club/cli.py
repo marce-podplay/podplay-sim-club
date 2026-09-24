@@ -1,6 +1,7 @@
 """Repository command-line interface."""
 
 import argparse
+from dataclasses import replace
 from pathlib import Path
 import subprocess
 import sys
@@ -10,8 +11,11 @@ from typing import List, Optional, Tuple
 from .config import ClubConfig, ConfigurationError, RunMode
 from .credentials import CredentialsError, PreviewCredentials
 from .firebase_auth import FirebaseAuthError, FirebaseAuthenticator
+from .identity_registry import IdentityRegistry, IdentityRegistryError
 from .orchestrator import Orchestrator
 from .preview_readonly import PreviewReadError, PreviewReadonlyClient, collection_items
+from .preview_seed import apply_identity_seed, build_seed_plan
+from .preview_write import PreviewWriteError
 from .server import serve
 from .target_policy import TargetPolicy, TargetPolicyError
 from .terminal import render
@@ -92,6 +96,16 @@ def build_parser() -> argparse.ArgumentParser:
     preview_subcommands.add_parser(
         "inspect", help="authenticate and summarize the preview using GET requests only"
     )
+    preview_seed = preview_subcommands.add_parser(
+        "seed", help="plan or create the stable Preview Club identities"
+    )
+    preview_seed_mode = preview_seed.add_mutually_exclusive_group(required=True)
+    preview_seed_mode.add_argument("--dry-run", action="store_true")
+    preview_seed_mode.add_argument("--apply", action="store_true")
+    preview_seed.add_argument(
+        "--confirm-origin",
+        help="required with --apply; must equal the exact preview origin",
+    )
     doctor.add_argument(
         "--preview-origin",
         help="override PODPLAY_SIM_PREVIEW_ORIGIN for this check",
@@ -130,6 +144,12 @@ def main(argv: Optional[list] = None) -> int:
     if args.command == "preview":
         if args.preview_command == "inspect":
             return inspect_preview(root)
+        if args.preview_command == "seed":
+            return seed_preview(
+                root,
+                apply=args.apply,
+                confirmation=args.confirm_origin,
+            )
         raise AssertionError(f"unhandled preview command {args.preview_command}")
 
     try:
@@ -319,6 +339,69 @@ def inspect_preview(root: Path) -> int:
     for name, pod_count in area_rows:
         print(f"- {name}: {pod_count} pods")
     print("writes: 0")
+    return 0
+
+
+def seed_preview(root: Path, apply: bool, confirmation: Optional[str]) -> int:
+    try:
+        credentials = PreviewCredentials.load(root)
+        read_policy = TargetPolicy.from_config(credentials.config)
+        auth = FirebaseAuthenticator(
+            root / "secrets" / "preview-auth-cache.json"
+        ).authenticate(
+            credentials.admin_email,
+            credentials.admin_password,
+            credentials.firebase_api_key,
+        )
+        client = PreviewReadonlyClient(read_policy, auth.id_token)
+        registry = IdentityRegistry(root / "secrets" / "preview-actors.json")
+        identities = registry.ensure()
+        if apply:
+            write_config = replace(
+                credentials.config,
+                mode=RunMode.PREVIEW_WRITE,
+                preview_write_confirmation=confirmation,
+            )
+            write_policy = TargetPolicy.from_config(write_config)
+            plan, results = apply_identity_seed(
+                root,
+                read_policy,
+                write_policy,
+                client,
+                identities,
+                credentials.firebase_api_key,
+            )
+        else:
+            plan = build_seed_plan(root, client, identities)
+            results = []
+    except (
+        CredentialsError,
+        FirebaseAuthError,
+        IdentityRegistryError,
+        PreviewReadError,
+        PreviewWriteError,
+        TargetPolicyError,
+    ) as exc:
+        print(f"ERROR preview seed: {exc}", file=sys.stderr)
+        return 2
+
+    print(
+        f"PREVIEW CLUB SEED // {'APPLIED' if apply else 'DRY RUN'} // "
+        f"PR #{read_policy.pull_request_number}"
+    )
+    print(f"tenant: {plan['tenantName']} ({plan['tenantId']})")
+    print(f"location: {plan['areaName']} / {plan['podName']}")
+    print(f"activity: {plan['eventCount42Days']} events in the 42-day survey window")
+    print(f"signup prerequisites: {'safe' if plan['prerequisitesOk'] else 'blocked'}")
+    if apply:
+        for result in results:
+            print(f"- {result['actorId']}: {result['action']} and verified ({result['email']})")
+        print(f"writes: {sum(1 for result in results if result['action'] == 'created')} user signups")
+    else:
+        for actor_id, actor in plan["actors"].items():
+            print(f"- {actor_id}: {actor['status']} ({actor['email']})")
+        missing = sum(1 for actor in plan["actors"].values() if actor["status"] == "missing")
+        print(f"writes planned: {missing} user signups; no roles, credits, memberships, or bookings")
     return 0
 
 

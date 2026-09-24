@@ -53,6 +53,7 @@ def canonical_origin(value: str) -> str:
 class TargetPolicy:
     target_origin: str
     pull_request_number: int
+    writes_allowed: bool = False
 
     @classmethod
     def from_config(cls, config: ClubConfig) -> "TargetPolicy":
@@ -77,7 +78,11 @@ class TargetPolicy:
                     "preview-write confirmation must equal the exact target origin"
                 )
         pr_number = int(match.group("modern") or match.group("legacy"))
-        return cls(target_origin=target, pull_request_number=pr_number)
+        return cls(
+            target_origin=target,
+            pull_request_number=pr_number,
+            writes_allowed=config.mode is RunMode.PREVIEW_WRITE,
+        )
 
     def assert_url(self, candidate: str) -> None:
         if origin_of(candidate) != self.target_origin:

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "ticket": "PP-7444",
+  "marker": "preview-club",
+  "location": {
+    "areaId": "e95",
+    "areaName": "East 95th",
+    "podId": "26c98855-26e1-4ed5-8a63-fb0f9726a8de",
+    "podName": "Test",
+    "selection": "Zero non-canceled events observed from 21 days before through 21 days after 2026-09-24"
+  },
+  "productIdentities": [
+    "sofia",
+    "red-captain",
+    "blue-captain"
+  ],
+  "operatorMappings": {
+    "alex": "marcelo@podplay.app",
+    "riley": "file-only"
+  }
+}

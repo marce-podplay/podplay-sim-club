@@ -3,13 +3,14 @@
 PodPlay Sim Club is a persistent fictional club whose characters will exercise
 an approved PodPlay PR preview, talk to one another, try release features, and
 leave inspectable evidence when something does not work. Preview Club is a
-namespaced simulated cohort inside a PR-specific copy of PingPod staging, not a
-separate tenant.
+clearly marked group of simulated users inside a PR-specific copy of PingPod
+staging, not a separate tenant.
 
 The current implementation is the dependency-free **fake-world plus read-only
-preview inspection milestone**. The inspector contacts only the explicitly
-allowlisted PR-preview API; it does not directly call shared staging, Reflag,
-Stripe, Pub/Sub, Insights Cube, or production.
+preview inspection and identity-seed milestone**. Direct calls are limited to
+the explicitly allowlisted PR-preview API and Firebase authentication. Signup
+may cause the preview application to create a Stripe test customer or send
+normal staging email; the simulator does not call those services directly.
 
 ## What works now
 
@@ -29,6 +30,7 @@ Stripe, Pub/Sub, Insights Cube, or production.
 - cross-origin request and redirect rejection in the GET-only HTTP client;
 - Firebase password/refresh authentication with a private local token cache;
 - an origin-locked, GET-only preview inspector for tenant, identity, areas, and pods.
+- an idempotent dry run and exact-confirmation signup path for three persistent actors.
 
 Actors are deterministic fixtures in this milestone. A later milestone will
 replace one actor turn at a time with a short-lived model invocation while
@@ -137,6 +139,24 @@ caps response sizes and area fan-out, and prints a small summary. ID and refresh
 tokens are cached in ignored `secrets/preview-auth-cache.json` with mode `0600`;
 passwords and tokens are never rendered or copied into simulator state.
 
+Plan the persistent Preview Club identities and selected low-activity pod:
+
+```console
+./club preview seed --dry-run
+```
+
+Applying the plan requires repeating the exact target origin:
+
+```console
+./club preview seed --apply --confirm-origin "$preview_origin"
+```
+
+The first seed creates only Sofia, Red Captain, and Blue Captain through the
+normal signup API, verifies each Firebase login and `/users/current` response,
+and stores passwords and stable UIDs only in ignored `0600` files. Alex maps to
+the existing operator admin and Riley remains file-only. Roles, memberships,
+credits, waivers, and bookings are separate later gates.
+
 Configuration may alternatively be exported using the variable names in
 `.env.example`. The application does not automatically load `.env` or another
 repository's secret store.
@@ -178,7 +198,7 @@ Do not place tokens in actor identities, seed files, journals, or issues.
 
 ## Safety boundary
 
-The GET-only network adapter and target policy enforce:
+The GET-only network adapter, narrow identity writer, and target policy enforce:
 
 - a recognized PodPlay PR-preview Cloud Run hostname;
 - an exact configured origin allowlist;
@@ -186,7 +206,11 @@ The GET-only network adapter and target policy enforce:
 - a second exact-origin confirmation for future preview-write mode;
 - rejection when a request or redirect crosses the approved origin.
 
-Before any write adapter is enabled it must additionally enforce:
+Identity writes are limited to `POST /apis/v2/users`, require the exact target
+origin to be repeated, and are followed by Firebase login and profile read-back.
+
+Before booking, membership, role, credit, waiver, or settings writes are enabled,
+they must additionally enforce:
 
 - Bearer-token handling outside committed files;
 - bounded methods, endpoints, writes, retries, and timeouts;

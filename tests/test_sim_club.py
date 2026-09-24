@@ -21,10 +21,12 @@ from podplay_sim_club.cli import main
 from podplay_sim_club.config import ClubConfig, ConfigurationError, RunMode
 from podplay_sim_club.credentials import CredentialsError, PreviewCredentials
 from podplay_sim_club.firebase_auth import FirebaseAuthenticator
+from podplay_sim_club.identity_registry import IdentityRegistry
 from podplay_sim_club.fake_preview import FakePreview
 from podplay_sim_club.orchestrator import Orchestrator, SimulatedCrash
 from podplay_sim_club.preview import PreviewAdapter
 from podplay_sim_club.preview_readonly import PreviewReadonlyClient
+from podplay_sim_club.preview_write import PreviewIdentityWriter, PreviewWriteError
 from podplay_sim_club.server import ObservatoryServer
 from podplay_sim_club.target_policy import TargetPolicy, TargetPolicyError
 from podplay_sim_club.terminal import render
@@ -227,6 +229,7 @@ class TargetPolicyTestCase(unittest.TestCase):
             )
         )
         self.assertEqual(PREVIEW_ORIGIN, policy.target_origin)
+        self.assertTrue(policy.writes_allowed)
 
     def test_cross_origin_request_or_redirect_is_rejected(self):
         policy = TargetPolicy.from_config(self.config())
@@ -327,6 +330,29 @@ class PreviewConnectionTestCase(unittest.TestCase):
         self.assertEqual("Bearer secret-token", requests[0][0].get_header("Authorization"))
         with self.assertRaises(TargetPolicyError):
             client.get("https://example.com/apis/v2/areas")
+
+    def test_identity_registry_generates_private_stable_credentials(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "preview-actors.json"
+            registry = IdentityRegistry(path)
+            first = registry.ensure()
+            second = registry.ensure()
+
+            self.assertEqual(first["sofia"].email, second["sofia"].email)
+            self.assertEqual(first["sofia"].password, second["sofia"].password)
+            self.assertEqual(0o600, path.stat().st_mode & 0o777)
+            self.assertNotIn(first["sofia"].password, repr(first["sofia"]))
+
+    def test_identity_writer_requires_write_policy(self):
+        policy = TargetPolicy.from_config(
+            ClubConfig(
+                mode=RunMode.PREVIEW_READONLY,
+                preview_origin=PREVIEW_ORIGIN,
+                allowed_preview_origins=(PREVIEW_ORIGIN,),
+            )
+        )
+        with self.assertRaises(PreviewWriteError):
+            PreviewIdentityWriter(policy)
 
 
 def base64_url(value):
