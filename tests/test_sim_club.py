@@ -25,9 +25,19 @@ from podplay_sim_club.identity_registry import IdentityRegistry
 from podplay_sim_club.fake_preview import FakePreview
 from podplay_sim_club.orchestrator import Orchestrator, SimulatedCrash
 from podplay_sim_club.preview import PreviewAdapter
+from podplay_sim_club.preview_evaluation import (
+    PreviewBookingEvaluator,
+    PreviewEvaluationError,
+    summarize_booking_preview,
+)
 from podplay_sim_club.preview_readonly import PreviewReadonlyClient
 from podplay_sim_club.preview_readiness import select_candidate_session, summarize_payment
-from podplay_sim_club.preview_write import PreviewIdentityWriter, PreviewWriteError
+from podplay_sim_club.preview_payment import load_test_stripe_secret
+from podplay_sim_club.preview_write import (
+    PreviewCreditWriter,
+    PreviewIdentityWriter,
+    PreviewWriteError,
+)
 from podplay_sim_club.server import ObservatoryServer
 from podplay_sim_club.target_policy import TargetPolicy, TargetPolicyError
 from podplay_sim_club.terminal import render
@@ -355,6 +365,9 @@ class PreviewConnectionTestCase(unittest.TestCase):
         with self.assertRaises(PreviewWriteError):
             PreviewIdentityWriter(policy)
 
+        with self.assertRaises(PreviewWriteError):
+            PreviewCreditWriter(policy, "admin-token")
+
     def test_payment_reference_is_not_a_saved_payment_method(self):
         result = summarize_payment(
             {
@@ -403,6 +416,97 @@ class PreviewConnectionTestCase(unittest.TestCase):
         self.assertEqual("session-1", result["sessionId"])
         self.assertEqual("fixed", result["tableId"])
         self.assertEqual(15.0, result["rate"])
+
+    def test_booking_evaluator_sends_only_fixed_preview_payload(self):
+        policy = TargetPolicy.from_config(
+            ClubConfig(
+                mode=RunMode.PREVIEW_READONLY,
+                preview_origin=PREVIEW_ORIGIN,
+                allowed_preview_origins=(PREVIEW_ORIGIN,),
+            )
+        )
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return None
+
+            def geturl(self):
+                return PREVIEW_ORIGIN + "/apis/v2/bookings"
+
+            def read(self, _limit):
+                return b'{"type":"PREVIEW","status":"DRAFT","summary":{"total":0}}'
+
+        requests = []
+
+        def transport(request, timeout):
+            requests.append((request, timeout))
+            return Response()
+
+        result = PreviewBookingEvaluator(policy, "secret", transport).evaluate(
+            "session-1", "table-1"
+        )
+        body = json.loads(requests[0][0].data.decode("utf-8"))
+
+        self.assertEqual("PREVIEW", result["type"])
+        self.assertEqual("POST", requests[0][0].method)
+        self.assertEqual("PREVIEW", body["type"])
+        self.assertEqual("USE_NONE", body["passesStrategy"])
+        self.assertEqual(0, body["virtualCredits"])
+        self.assertNotIn("owner", body)
+
+    def test_booking_evaluator_rejects_order_payload(self):
+        with self.assertRaises(PreviewEvaluationError):
+            PreviewBookingEvaluator._validate_payload(
+                {
+                    "type": "ORDER",
+                    "items": [],
+                    "chargeStrategy": "ONLY_OWNER",
+                    "passesStrategy": "USE_NONE",
+                    "virtualCredits": 0,
+                    "termsAgreed": True,
+                    "bookingMode": "USER_BOOKED",
+                }
+            )
+
+    def test_booking_preview_summary_is_sanitized(self):
+        result = summarize_booking_preview(
+            {
+                "type": "PREVIEW",
+                "status": "DRAFT",
+                "summary": {
+                    "total": 0,
+                    "currency": "USD",
+                    "virtualCredits": 0,
+                    "maxChargableAmount": 0,
+                    "errors": [],
+                },
+                "items": [{"errors": []}],
+            }
+        )
+
+        self.assertTrue(result["readyForOrder"])
+        self.assertEqual([], result["errorCodes"])
+
+    def test_payment_seed_refuses_live_stripe_secret(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "stripe.env"
+            path.write_text("STRIPE_SECRET_KEY=sk_live_forbidden\n", encoding="utf-8")
+
+            with self.assertRaises(PreviewWriteError):
+                load_test_stripe_secret(path)
+
+    def test_payment_seed_loads_only_test_stripe_secret(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "stripe.env"
+            path.write_text(
+                "UNRELATED=value\nSTRIPE_SECRET_KEY='sk_test_example'\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual("sk_test_example", load_test_stripe_secret(path))
 
 
 def base64_url(value):

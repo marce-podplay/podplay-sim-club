@@ -17,5 +17,9 @@
   "operatorMappings": {
     "alex": "marcelo@podplay.app",
     "riley": "file-only"
+  },
+  "virtualCredits": {
+    "red-captain": 25.0,
+    "blue-captain": 25.0
   }
 }

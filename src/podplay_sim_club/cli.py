@@ -13,11 +13,23 @@ from .credentials import CredentialsError, PreviewCredentials
 from .firebase_auth import FirebaseAuthError, FirebaseAuthenticator
 from .identity_registry import IdentityRegistry, IdentityRegistryError
 from .orchestrator import Orchestrator
+from .preview_evaluation import (
+    PreviewBookingEvaluator,
+    PreviewEvaluationError,
+    summarize_booking_preview,
+)
+from .preview_funding import apply_funding_plan, build_funding_plan
+from .preview_payment import (
+    PreviewPaymentMethodWriter,
+    load_test_stripe_secret,
+    wait_for_payment_method,
+)
 from .preview_readonly import PreviewReadError, PreviewReadonlyClient, collection_items
 from .preview_readiness import inspect_preview_readiness
 from .preview_seed import apply_identity_seed, build_seed_plan
 from .preview_write import PreviewWriteError
 from .server import serve
+from .storage import Storage
 from .target_policy import TargetPolicy, TargetPolicyError
 from .terminal import render
 from .time import parse_instant
@@ -100,6 +112,9 @@ def build_parser() -> argparse.ArgumentParser:
     preview_subcommands.add_parser(
         "readiness", help="inspect actors, payment state, and one legal future slot"
     )
+    preview_subcommands.add_parser(
+        "booking-preview", help="calculate one non-persisting baseline booking preview"
+    )
     preview_seed = preview_subcommands.add_parser(
         "seed", help="plan or create the stable Preview Club identities"
     )
@@ -109,6 +124,31 @@ def build_parser() -> argparse.ArgumentParser:
     preview_seed.add_argument(
         "--confirm-origin",
         help="required with --apply; must equal the exact preview origin",
+    )
+    preview_fund = preview_subcommands.add_parser(
+        "fund", help="plan or reconcile bounded virtual credits for the captains"
+    )
+    preview_fund_mode = preview_fund.add_mutually_exclusive_group(required=True)
+    preview_fund_mode.add_argument("--dry-run", action="store_true")
+    preview_fund_mode.add_argument("--apply", action="store_true")
+    preview_fund.add_argument(
+        "--confirm-origin",
+        help="required with --apply; must equal the exact preview origin",
+    )
+    preview_payment = preview_subcommands.add_parser(
+        "payment-method", help="plan or attach Stripe test Visa methods to the captains"
+    )
+    preview_payment_mode = preview_payment.add_mutually_exclusive_group(required=True)
+    preview_payment_mode.add_argument("--dry-run", action="store_true")
+    preview_payment_mode.add_argument("--apply", action="store_true")
+    preview_payment.add_argument(
+        "--confirm-origin",
+        help="required with --apply; must equal the exact preview origin",
+    )
+    preview_payment.add_argument(
+        "--stripe-env",
+        type=Path,
+        help="ignored env file containing STRIPE_SECRET_KEY; required with --apply",
     )
     doctor.add_argument(
         "--preview-origin",
@@ -150,6 +190,14 @@ def main(argv: Optional[list] = None) -> int:
             return inspect_preview(root)
         if args.preview_command == "readiness":
             return inspect_readiness(root)
+        if args.preview_command == "booking-preview":
+            return evaluate_booking_preview(root)
+        if args.preview_command == "fund":
+            return fund_preview(root, args.apply, args.confirm_origin)
+        if args.preview_command == "payment-method":
+            return seed_payment_methods(
+                root, args.apply, args.confirm_origin, args.stripe_env
+            )
         if args.preview_command == "seed":
             return seed_preview(
                 root,
@@ -464,12 +512,219 @@ def inspect_readiness(root: Path) -> int:
     else:
         print("candidate: none found from day +2 through day +14")
     print(f"waiver: {'required' if report['waiverRequired'] else 'not required by tenant settings'}")
-    status = "READY" if report["readyForManualMatch"] else "BLOCKED"
-    print(f"manual match gate: {status}")
+    status = "READY" if report["readyForBookingPreview"] else "BLOCKED"
+    print(f"booking preview gate: {status}")
     if report["blockers"]:
         print("blockers: " + ", ".join(report["blockers"]))
     print("writes: 0 remote; sanitized report: state/preview-readiness.json")
-    return 0 if report["readyForManualMatch"] else 1
+    return 0 if report["readyForBookingPreview"] else 1
+
+
+def evaluate_booking_preview(root: Path) -> int:
+    try:
+        credentials = PreviewCredentials.load(root)
+        policy = TargetPolicy.from_config(credentials.config)
+        admin_auth = FirebaseAuthenticator(
+            root / "secrets" / "preview-auth-cache.json"
+        ).authenticate(
+            credentials.admin_email,
+            credentials.admin_password,
+            credentials.firebase_api_key,
+        )
+        admin_client = PreviewReadonlyClient(policy, admin_auth.id_token)
+        identities = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure()
+        report = inspect_preview_readiness(
+            root,
+            policy,
+            admin_client,
+            identities,
+            credentials.firebase_api_key,
+        )
+        if not report["readyForBookingPreview"] or not report["candidateSession"]:
+            raise PreviewEvaluationError("readiness gate must pass before booking preview")
+        red = identities["red-captain"]
+        red_auth = FirebaseAuthenticator(
+            root / "secrets" / "actor-auth" / "red-captain.json"
+        ).authenticate(red.email, red.password, credentials.firebase_api_key)
+        candidate = report["candidateSession"]
+        requested_credits = min(
+            float(report["actors"]["red-captain"]["virtualCredits"]), 25.0
+        )
+        response = PreviewBookingEvaluator(policy, red_auth.id_token).evaluate(
+            candidate["sessionId"], candidate["tableId"], requested_credits
+        )
+        evaluation = summarize_booking_preview(response)
+        output = {
+            "schemaVersion": 1,
+            "observedAt": report["observedAt"],
+            "pullRequest": policy.pull_request_number,
+            "location": report["location"],
+            "candidateSession": candidate,
+            "evaluation": evaluation,
+            "remoteMutations": 0,
+            "evaluationPosts": 1,
+        }
+        storage = Storage(root)
+        storage.write_json(storage.state / "preview-booking-evaluation.json", output)
+    except (
+        CredentialsError,
+        FirebaseAuthError,
+        IdentityRegistryError,
+        PreviewEvaluationError,
+        PreviewReadError,
+        TargetPolicyError,
+    ) as exc:
+        print(f"ERROR booking preview: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"PREVIEW BOOKING CALCULATION // PR #{policy.pull_request_number}")
+    print(f"session: {candidate['startTime']} to {candidate['endTime']}")
+    print(
+        f"result: status={evaluation['status']}; total={evaluation['total']:.2f} "
+        f"{evaluation['currency'] or ''}; errors={','.join(evaluation['errorCodes']) or 'none'}"
+    )
+    print(f"manual order gate: {'READY' if evaluation['readyForOrder'] else 'BLOCKED'}")
+    print("remote mutations: 0; evaluation POSTs: 1")
+    print("sanitized report: state/preview-booking-evaluation.json")
+    return 0 if evaluation["readyForOrder"] else 1
+
+
+def fund_preview(root: Path, apply: bool, confirmation: Optional[str]) -> int:
+    try:
+        credentials = PreviewCredentials.load(root)
+        read_policy = TargetPolicy.from_config(credentials.config)
+        admin_auth = FirebaseAuthenticator(
+            root / "secrets" / "preview-auth-cache.json"
+        ).authenticate(
+            credentials.admin_email,
+            credentials.admin_password,
+            credentials.firebase_api_key,
+        )
+        admin_client = PreviewReadonlyClient(read_policy, admin_auth.id_token)
+        identities = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure()
+        if apply:
+            write_config = replace(
+                credentials.config,
+                mode=RunMode.PREVIEW_WRITE,
+                preview_write_confirmation=confirmation,
+            )
+            write_policy = TargetPolicy.from_config(write_config)
+            plan = apply_funding_plan(
+                root,
+                read_policy,
+                write_policy,
+                admin_client,
+                admin_auth.id_token,
+                identities,
+                credentials.firebase_api_key,
+            )
+        else:
+            plan, _ = build_funding_plan(
+                root,
+                read_policy,
+                admin_client,
+                identities,
+                credentials.firebase_api_key,
+            )
+            plan["writes"] = 0
+    except (
+        CredentialsError,
+        FirebaseAuthError,
+        IdentityRegistryError,
+        PreviewReadError,
+        PreviewWriteError,
+        TargetPolicyError,
+    ) as exc:
+        print(f"ERROR preview funding: {exc}", file=sys.stderr)
+        return 2
+
+    print(
+        f"PREVIEW CLUB CREDITS // {'APPLIED' if apply else 'DRY RUN'} // "
+        f"PR #{read_policy.pull_request_number}"
+    )
+    for actor_id, row in plan["actors"].items():
+        suffix = f"; verified={row['verified']:.2f}" if "verified" in row else ""
+        print(
+            f"- {actor_id}: current={row['current']:.2f}; desired={row['desired']:.2f}; "
+            f"increment={row['increment']:.2f}{suffix}"
+        )
+    planned = sum(1 for row in plan["actors"].values() if row["increment"] > 0)
+    print(f"writes: {plan['writes']}; writes planned: {planned if not apply else 0}")
+    return 0
+
+
+def seed_payment_methods(
+    root: Path,
+    apply: bool,
+    confirmation: Optional[str],
+    stripe_env: Optional[Path],
+) -> int:
+    try:
+        credentials = PreviewCredentials.load(root)
+        read_policy = TargetPolicy.from_config(credentials.config)
+        identities = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure()
+        actor_rows = {}
+        actor_sessions = {}
+        for actor_id in ("red-captain", "blue-captain"):
+            identity = identities[actor_id]
+            auth = FirebaseAuthenticator(
+                root / "secrets" / "actor-auth" / f"{actor_id}.json"
+            ).authenticate(identity.email, identity.password, credentials.firebase_api_key)
+            client = PreviewReadonlyClient(read_policy, auth.id_token)
+            payment = client.get("/apis/v2/users/current/payment-method")
+            element = payment.get("paymentElement") if isinstance(payment, dict) else None
+            present = bool(isinstance(element, dict) and element.get("id")) or bool(
+                isinstance(payment, dict)
+                and (payment.get("preferredCard") or payment.get("preferredBankAccount"))
+            )
+            actor_rows[actor_id] = {"present": present, "action": "reuse" if present else "add"}
+            actor_sessions[actor_id] = (auth, client)
+        writes = 0
+        if apply:
+            if stripe_env is None:
+                raise PreviewWriteError("--stripe-env is required with --apply")
+            stripe_secret = load_test_stripe_secret(stripe_env.resolve())
+            write_config = replace(
+                credentials.config,
+                mode=RunMode.PREVIEW_WRITE,
+                preview_write_confirmation=confirmation,
+            )
+            write_policy = TargetPolicy.from_config(write_config)
+            for actor_id, row in actor_rows.items():
+                if row["present"]:
+                    row["verified"] = True
+                    continue
+                auth, client = actor_sessions[actor_id]
+                PreviewPaymentMethodWriter(
+                    write_policy, auth.id_token, stripe_secret
+                ).add_visa()
+                writes += 1
+                row["verified"] = wait_for_payment_method(client)
+                if not row["verified"]:
+                    raise PreviewWriteError(
+                        f"payment-method read-back timed out for {actor_id}"
+                    )
+    except (
+        CredentialsError,
+        FirebaseAuthError,
+        IdentityRegistryError,
+        PreviewReadError,
+        PreviewWriteError,
+        TargetPolicyError,
+    ) as exc:
+        print(f"ERROR preview payment method: {exc}", file=sys.stderr)
+        return 2
+
+    print(
+        f"PREVIEW CLUB PAYMENT METHODS // {'APPLIED' if apply else 'DRY RUN'} // "
+        f"PR #{read_policy.pull_request_number}"
+    )
+    for actor_id, row in actor_rows.items():
+        verified = f"; verified={row['verified']}" if "verified" in row else ""
+        print(f"- {actor_id}: {row['action']}{verified}")
+    planned = sum(1 for row in actor_rows.values() if row["action"] == "add")
+    print(f"writes: {writes}; writes planned: {planned if not apply else 0}")
+    return 0
 
 
 if __name__ == "__main__":

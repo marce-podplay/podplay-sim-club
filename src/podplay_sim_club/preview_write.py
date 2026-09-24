@@ -1,6 +1,7 @@
-"""Narrow write client for creating Preview Club user identities."""
+"""Narrow write clients for Preview Club identity and credit seeding."""
 
 import json
+import re
 from typing import Any, Dict, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -62,4 +63,72 @@ class PreviewIdentityWriter:
             raise PreviewWriteError("preview user signup returned invalid JSON") from exc
         if not isinstance(value, dict) or not isinstance(value.get("id"), str):
             raise PreviewWriteError("preview user signup response did not contain an ID")
+        return value
+
+
+class PreviewCreditWriter:
+    REASON = "PP-7444 Preview Club seed"
+    USER_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+    def __init__(self, policy: TargetPolicy, admin_token: str):
+        if not policy.writes_allowed:
+            raise PreviewWriteError("preview-write policy confirmation is required")
+        self.policy = policy
+        self._admin_token = admin_token
+        self._opener = build_opener(_RejectRedirects())
+
+    def credit(self, user_id: str, amount: float) -> Dict[str, Any]:
+        if not self.USER_ID.fullmatch(user_id):
+            raise PreviewWriteError("virtual-credit target user ID is invalid")
+        if not isinstance(amount, (int, float)) or amount <= 0 or amount > 50:
+            raise PreviewWriteError("virtual-credit increment must be between 0 and 50")
+        normalized_amount = round(float(amount), 2)
+        url = (
+            self.policy.target_origin
+            + f"/apis/v2/users/{user_id}/virtual-credits-transactions"
+        )
+        self.policy.assert_url(url)
+        payload = {
+            "amount": normalized_amount,
+            "amountType": "INCOME",
+            "reason": self.REASON,
+        }
+        request = Request(
+            url,
+            data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self._admin_token}",
+                "User-Agent": "podplay-sim-club/0.1 credit-seed",
+            },
+            method="POST",
+        )
+        try:
+            with self._opener.open(request, timeout=20) as response:
+                self.policy.assert_url(response.geturl())
+                body = response.read(MAX_RESPONSE_BYTES + 1)
+                status = response.status
+        except PreviewWriteError:
+            raise
+        except HTTPError as exc:
+            raise PreviewWriteError(
+                f"virtual-credit seed failed with HTTP {exc.code}"
+            ) from exc
+        except URLError as exc:
+            raise PreviewWriteError("virtual-credit seed network request failed") from exc
+        if status != 201:
+            raise PreviewWriteError(f"virtual-credit seed returned HTTP {status}")
+        if len(body) > MAX_RESPONSE_BYTES:
+            raise PreviewWriteError("virtual-credit seed response exceeded the size limit")
+        try:
+            value = json.loads(body.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise PreviewWriteError("virtual-credit seed returned invalid JSON") from exc
+        if (
+            not isinstance(value, dict)
+            or not isinstance(value.get("id"), str)
+            or not isinstance(value.get("balance"), (int, float))
+        ):
+            raise PreviewWriteError("virtual-credit seed response has an unexpected shape")
         return value

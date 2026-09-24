@@ -74,15 +74,17 @@ def inspect_preview_readiness(
         actors.get(actor_id, {}).get("profileVerified") is True
         for actor_id in PLAYER_ACTORS
     )
-    rate = candidate.get("rate") if candidate else None
-    payment_ready = _payment_gate_ready(actors, rate)
     gates = {
         "targetApproved": True,
         "locationAvailable": str(pod.get("status") or "") == "AVAILABLE",
         "playerProfilesVerified": player_profiles_ready,
         "waiverNotRequired": not waiver_required,
         "futureSlotFound": candidate is not None,
-        "paymentReady": payment_ready,
+        "paymentStateKnown": all(
+            isinstance(actor.get("virtualCredits"), (int, float))
+            and isinstance(actor.get("hasPaymentMethod"), bool)
+            for actor in actors.values()
+        ),
     }
     blockers = [name for name, passed in gates.items() if not passed]
     report = {
@@ -106,10 +108,10 @@ def inspect_preview_readiness(
         "candidateSession": candidate,
         "gates": gates,
         "blockers": blockers,
-        "readyForManualMatch": not blockers,
+        "readyForBookingPreview": not blockers,
         "notes": [
             "Customer roles are sufficient for the captain booking path; no role assignment was attempted.",
-            "Membership is optional for this baseline; the observed session price is authoritative.",
+            "The session-grid rate excludes possible locking fees and tax; only booking preview is checkout-authoritative.",
             "Sofia does not need an owner role for the first captain-only match.",
         ],
     }
@@ -248,21 +250,6 @@ def _pod_booking_settings(value: Any, pod_id: str) -> Dict[str, Any]:
             "remainingFuturePrivateReservations"
         ),
     }
-
-
-def _payment_gate_ready(actors: Dict[str, Any], rate: Any) -> bool:
-    if not isinstance(rate, (int, float)):
-        return False
-    if rate <= 0:
-        return True
-    for actor_id in PLAYER_ACTORS:
-        actor = actors.get(actor_id, {})
-        if actor.get("hasPaymentMethod") is True:
-            continue
-        if float(actor.get("virtualCredits") or 0) >= float(rate):
-            continue
-        return False
-    return True
 
 
 def _available_court_count(pod: Dict[str, Any]) -> int:

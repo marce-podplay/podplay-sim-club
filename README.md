@@ -134,6 +134,8 @@ Then run:
 ```console
 ./club preview inspect
 ./club preview readiness
+./club preview booking-preview
+./club preview fund --dry-run
 ```
 
 This command performs only `GET` requests under `/apis/v2/`, refuses redirects,
@@ -144,8 +146,47 @@ passwords and tokens are never rendered or copied into simulator state.
 `preview readiness` is also GET-only. It verifies each seeded actor, distinguishes
 a real saved payment method from the always-present user link reference, reads
 membership and booking limits, and searches pod-local dates from day +2 through
-day +14 for a legal slot. Its sanitized result is saved in the ignored file
-`state/preview-readiness.json`.
+day +14 for a legal slot. The grid rate is not treated as the final checkout
+total because locking fees and tax may be added later. Its sanitized result is
+saved in the ignored file `state/preview-readiness.json`.
+
+`preview booking-preview` refreshes that gate and then sends one tightly fixed
+`type: PREVIEW` calculation for Red Captain. The server implementation returns
+before the persistent `ORDER` branch. The local client rejects `ORDER`, multiple
+items, passes, acting for another user, credit amounts above the bounded seed,
+and payload extensions. It
+records only a sanitized price/error summary in
+`state/preview-booking-evaluation.json`.
+
+If that calculation requires payment, the seed defines a bounded `$25` virtual
+credit balance for each captain. Reconcile it first with `preview fund
+--dry-run`. Applying credits requires the same exact-origin confirmation as
+identity creation:
+
+```console
+./club preview fund --apply --confirm-origin "$preview_origin"
+```
+
+The admin API records the change as a `CUSTOMER_SERVICE` virtual-credit
+transaction with the PP-7444 marker. The command only tops up a balance below
+the desired amount, never debits an above-target balance, and verifies the
+result through the actor's own read endpoint.
+
+If PodPlay still requires an active payment method after credits cover the
+total, inspect the plan and then attach Stripe's standard test Visa through the
+normal PodPlay setup-intent flow:
+
+```console
+./club preview payment-method --dry-run
+./club preview payment-method --apply \
+  --confirm-origin "$preview_origin" \
+  --stripe-env ../pingpod-web-v2/.env
+```
+
+The command reads only `STRIPE_SECRET_KEY` (or its Cypress equivalent) from the
+explicit file, refuses keys that do not start with `sk_test_`, uses the fixed
+Stripe API origin and `pm_card_visa`, never renders the key or setup secret, and
+verifies the resulting default booking payment method with each actor token.
 
 Plan the persistent Preview Club identities and selected low-activity pod:
 
@@ -163,7 +204,8 @@ The first seed creates only Sofia, Red Captain, and Blue Captain through the
 normal signup API, verifies each Firebase login and `/users/current` response,
 and stores passwords and stable UIDs only in ignored `0600` files. Alex maps to
 the existing operator admin and Riley remains file-only. Roles, memberships,
-credits, waivers, and bookings are separate later gates.
+waivers, and bookings remain separate gates; captain credits and test payment
+methods are reconciled by their own explicitly confirmed commands.
 
 Configuration may alternatively be exported using the variable names in
 `.env.example`. The application does not automatically load `.env` or another
@@ -175,10 +217,9 @@ many unrelated high-privilege credentials. The simulator will accept only the
 minimum actor credentials through ignored local configuration, and no value is
 written to world state, journals, issues, or rendered output.
 
-A PodPlay admin such as Marcelo can later bootstrap the fictional users through
-supported APIs in the approved preview. That will happen after read-only target,
-tenant, and identity inspection succeeds; user creation is not part of this
-milestone.
+A PodPlay admin such as Marcelo bootstraps the fictional users and bounded test
+credits through supported APIs in the approved preview. Stripe test methods use
+the normal customer setup-intent flow and are read back through each actor.
 
 ## Local state
 
@@ -214,10 +255,12 @@ The GET-only network adapter, narrow identity writer, and target policy enforce:
 - a second exact-origin confirmation for future preview-write mode;
 - rejection when a request or redirect crosses the approved origin.
 
-Identity writes are limited to `POST /apis/v2/users`, require the exact target
-origin to be repeated, and are followed by Firebase login and profile read-back.
+Identity, credit, and payment-method seed writes use separate narrow clients,
+require the exact target origin to be repeated, cap amounts and destinations,
+and are followed by actor-token read-back. Stripe setup refuses live secrets and
+is fixed to the test Visa token.
 
-Before booking, membership, role, credit, waiver, or settings writes are enabled,
+Before booking, membership, role, waiver, or settings writes are enabled,
 they must additionally enforce:
 
 - Bearer-token handling outside committed files;
