@@ -21,10 +21,15 @@ from podplay_sim_club.cli import main
 from podplay_sim_club.config import ClubConfig, ConfigurationError, RunMode
 from podplay_sim_club.credentials import CredentialsError, PreviewCredentials
 from podplay_sim_club.firebase_auth import FirebaseAuthenticator
-from podplay_sim_club.identity_registry import IdentityRegistry
+from podplay_sim_club.identity_registry import ActorIdentity, IdentityRegistry
 from podplay_sim_club.fake_preview import FakePreview
 from podplay_sim_club.orchestrator import Orchestrator, SimulatedCrash
 from podplay_sim_club.preview import PreviewAdapter
+from podplay_sim_club.preview_booking import PreviewBookingWriter, occurrence_key
+from podplay_sim_club.preview_participation import (
+    PreviewAcceptanceEvaluator,
+    PreviewParticipationWriter,
+)
 from podplay_sim_club.preview_evaluation import (
     PreviewBookingEvaluator,
     PreviewEvaluationError,
@@ -507,6 +512,167 @@ class PreviewConnectionTestCase(unittest.TestCase):
             )
 
             self.assertEqual("sk_test_example", load_test_stripe_secret(path))
+
+    def test_booking_writer_has_one_write_budget_and_fixed_order_shape(self):
+        policy = TargetPolicy.from_config(
+            ClubConfig(
+                mode=RunMode.PREVIEW_WRITE,
+                preview_origin=PREVIEW_ORIGIN,
+                allowed_preview_origins=(PREVIEW_ORIGIN,),
+                preview_write_confirmation=PREVIEW_ORIGIN,
+            )
+        )
+
+        class Response:
+            status = 201
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return None
+
+            def geturl(self):
+                return PREVIEW_ORIGIN + "/apis/v2/bookings"
+
+            def read(self, _limit):
+                return b'{"id":"event-1","type":"ORDER","status":"CONFIRMED"}'
+
+        requests = []
+
+        def transport(request, timeout):
+            requests.append((request, timeout))
+            return Response()
+
+        writer = PreviewBookingWriter(policy, "actor-token", transport)
+        result = writer.order("session-1", "table-1", 25)
+        body = json.loads(requests[0][0].data.decode("utf-8"))
+
+        self.assertEqual("event-1", result["id"])
+        self.assertEqual("ORDER", body["type"])
+        self.assertEqual("ONLY_OWNER", body["chargeStrategy"])
+        self.assertNotIn("owner", body)
+        with self.assertRaises(PreviewWriteError):
+            writer.order("session-1", "table-1", 25)
+
+    def test_booking_occurrence_key_is_stable_and_slot_specific(self):
+        first = occurrence_key("pod-1", "2026-09-26T12:00:00Z", "red-captain")
+        second = occurrence_key("pod-1", "2026-09-26T12:00:00Z", "red-captain")
+        other = occurrence_key("pod-1", "2026-09-26T12:30:00Z", "red-captain")
+
+        self.assertEqual(first, second)
+        self.assertNotEqual(first, other)
+
+    def test_participation_writer_uses_pending_leader_paid_invitation(self):
+        policy = TargetPolicy.from_config(
+            ClubConfig(
+                mode=RunMode.PREVIEW_WRITE,
+                preview_origin=PREVIEW_ORIGIN,
+                allowed_preview_origins=(PREVIEW_ORIGIN,),
+                preview_write_confirmation=PREVIEW_ORIGIN,
+            )
+        )
+
+        class Response:
+            status = 201
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return None
+
+            def geturl(self):
+                return PREVIEW_ORIGIN + "/apis/v2/events/event-1/invitations"
+
+            def read(self, _limit):
+                return b'{"id":"invite-1","status":"INVITATION_EXTENDED"}'
+
+        requests = []
+        writer = PreviewParticipationWriter(
+            policy, "red-token", lambda request, timeout: requests.append(request) or Response()
+        )
+        actor = ActorIdentity(
+            actor_id="blue-captain",
+            email="blue@example.test",
+            first_name="Blue",
+            last_name="Captain",
+            password="secret",
+            podplay_user_id="blue-user-1",
+        )
+        writer.invite("event-1", actor)
+        body = json.loads(requests[0].data.decode("utf-8"))
+
+        self.assertEqual("GUEST", body["type"])
+        self.assertEqual("PAID_BY_INVITER", body["chargeType"])
+        self.assertEqual(actor.podplay_user_id, body["invitee"]["userId"])
+        with self.assertRaises(PreviewWriteError):
+            writer.invite("event-1", actor)
+
+    def test_acceptance_evaluator_cannot_persist(self):
+        policy = TargetPolicy.from_config(
+            ClubConfig(
+                mode=RunMode.PREVIEW_READONLY,
+                preview_origin=PREVIEW_ORIGIN,
+                allowed_preview_origins=(PREVIEW_ORIGIN,),
+            )
+        )
+
+        class Response:
+            status = 201
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return None
+
+            def geturl(self):
+                return PREVIEW_ORIGIN + "/apis/v2/events/event-1/invitations/invite-1/acceptance"
+
+            def read(self, _limit):
+                return b'{"summary":{"total":0,"errors":[]},"invitation":{"id":"invite-1"}}'
+
+        requests = []
+        PreviewAcceptanceEvaluator(
+            policy, "blue-token", lambda request, timeout: requests.append(request) or Response()
+        ).evaluate("event-1", "invite-1")
+        body = json.loads(requests[0].data.decode("utf-8"))
+
+        self.assertEqual("PREVIEW", body["type"])
+        self.assertEqual("USE_NONE", body["passesStrategy"])
+
+    def test_participation_writer_check_in_has_empty_body(self):
+        policy = TargetPolicy.from_config(
+            ClubConfig(
+                mode=RunMode.PREVIEW_WRITE,
+                preview_origin=PREVIEW_ORIGIN,
+                allowed_preview_origins=(PREVIEW_ORIGIN,),
+                preview_write_confirmation=PREVIEW_ORIGIN,
+            )
+        )
+
+        class Response:
+            status = 201
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return None
+
+            def geturl(self):
+                return PREVIEW_ORIGIN + "/apis/v2/events/event-1/invitations/invite-1/check-in"
+
+            def read(self, _limit):
+                return b'{"id":"invite-1","status":"CHECKED_IN"}'
+
+        requests = []
+        PreviewParticipationWriter(
+            policy, "blue-token", lambda request, timeout: requests.append(request) or Response()
+        ).check_in("event-1", "invite-1")
+
+        self.assertEqual({}, json.loads(requests[0].data.decode("utf-8")))
 
 
 def base64_url(value):

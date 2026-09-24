@@ -188,6 +188,27 @@ explicit file, refuses keys that do not start with `sk_test_`, uses the fixed
 Stripe API origin and `pm_card_visa`, never renders the key or setup secret, and
 verifies the resulting default booking payment method with each actor token.
 
+After `booking-preview` reports ready, plan and explicitly create the first
+booking:
+
+```console
+./club preview book --dry-run
+./club preview book --apply --confirm-origin "$preview_origin"
+./club preview join --dry-run
+./club preview join --apply --confirm-origin "$preview_origin"
+./club preview check-in --dry-run
+./club preview check-in --apply --confirm-origin "$preview_origin"
+```
+
+`preview book` stores its occurrence plan before the one allowed `ORDER`, searches
+for a matching Red-owned event before every mutation, and reads the event back
+afterward. A retry reuses the existing event; the writer object refuses a second
+request in the same run. `preview join` then reconciles one leader-paid Blue
+invitation, runs a non-persisting acceptance preview, and accepts through Blue's
+own token. `preview check-in` reads both statuses but refuses to write before the
+saved event start time. Sanitized progress lives in the ignored file
+`state/preview-manual-match.json`.
+
 Plan the persistent Preview Club identities and selected low-activity pod:
 
 ```console
@@ -247,7 +268,7 @@ Do not place tokens in actor identities, seed files, journals, or issues.
 
 ## Safety boundary
 
-The GET-only network adapter, narrow identity writer, and target policy enforce:
+The GET-only network adapter, narrow mutation writers, and target policy enforce:
 
 - a recognized PodPlay PR-preview Cloud Run hostname;
 - an exact configured origin allowlist;
@@ -260,8 +281,9 @@ require the exact target origin to be repeated, cap amounts and destinations,
 and are followed by actor-token read-back. Stripe setup refuses live secrets and
 is fixed to the test Visa token.
 
-Before booking, membership, role, waiver, or settings writes are enabled,
-they must additionally enforce:
+Booking and participation writes enforce bounded request shapes, one-action
+writer budgets, and read-back reconciliation. Before membership, role, waiver,
+or settings writes are enabled, they must additionally enforce:
 
 - Bearer-token handling outside committed files;
 - bounded methods, endpoints, writes, retries, and timeouts;
