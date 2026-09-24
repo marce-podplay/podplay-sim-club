@@ -26,6 +26,7 @@ from podplay_sim_club.fake_preview import FakePreview
 from podplay_sim_club.orchestrator import Orchestrator, SimulatedCrash
 from podplay_sim_club.preview import PreviewAdapter
 from podplay_sim_club.preview_readonly import PreviewReadonlyClient
+from podplay_sim_club.preview_readiness import select_candidate_session, summarize_payment
 from podplay_sim_club.preview_write import PreviewIdentityWriter, PreviewWriteError
 from podplay_sim_club.server import ObservatoryServer
 from podplay_sim_club.target_policy import TargetPolicy, TargetPolicyError
@@ -353,6 +354,55 @@ class PreviewConnectionTestCase(unittest.TestCase):
         )
         with self.assertRaises(PreviewWriteError):
             PreviewIdentityWriter(policy)
+
+    def test_payment_reference_is_not_a_saved_payment_method(self):
+        result = summarize_payment(
+            {
+                "id": "actor-id",
+                "stripe": {"userId": "cus_test"},
+                "preferredCard": None,
+                "preferredBankAccount": None,
+                "paymentElement": None,
+                "virtualCredits": 0,
+            }
+        )
+
+        self.assertFalse(result["hasPaymentMethod"])
+        self.assertEqual(0.0, result["virtualCredits"])
+
+    def test_payment_element_proves_saved_payment_method(self):
+        result = summarize_payment(
+            {"paymentElement": {"id": "pm_test"}, "virtualCredits": 12.5}
+        )
+
+        self.assertTrue(result["hasPaymentMethod"])
+        self.assertEqual(12.5, result["virtualCredits"])
+
+    def test_candidate_session_uses_available_default_table_rate(self):
+        result = select_candidate_session(
+            [
+                {
+                    "id": "session-1",
+                    "status": "AVAILABLE",
+                    "tablesLeft": 1,
+                    "startTime": "2026-09-26T12:00:00.000Z",
+                    "endTime": "2026-09-26T12:30:00.000Z",
+                    "operatingDate": "2026-09-26",
+                    "periodType": "OFF_PEAK",
+                    "defaultTable": {"id": "fixed"},
+                    "availableTables": {
+                        "items": [
+                            {"id": "auto", "type": "AUTO", "rate": 10},
+                            {"id": "fixed", "type": "FIXED_TABLE", "rate": 15},
+                        ]
+                    },
+                }
+            ]
+        )
+
+        self.assertEqual("session-1", result["sessionId"])
+        self.assertEqual("fixed", result["tableId"])
+        self.assertEqual(15.0, result["rate"])
 
 
 def base64_url(value):

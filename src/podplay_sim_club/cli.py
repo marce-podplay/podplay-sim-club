@@ -14,6 +14,7 @@ from .firebase_auth import FirebaseAuthError, FirebaseAuthenticator
 from .identity_registry import IdentityRegistry, IdentityRegistryError
 from .orchestrator import Orchestrator
 from .preview_readonly import PreviewReadError, PreviewReadonlyClient, collection_items
+from .preview_readiness import inspect_preview_readiness
 from .preview_seed import apply_identity_seed, build_seed_plan
 from .preview_write import PreviewWriteError
 from .server import serve
@@ -96,6 +97,9 @@ def build_parser() -> argparse.ArgumentParser:
     preview_subcommands.add_parser(
         "inspect", help="authenticate and summarize the preview using GET requests only"
     )
+    preview_subcommands.add_parser(
+        "readiness", help="inspect actors, payment state, and one legal future slot"
+    )
     preview_seed = preview_subcommands.add_parser(
         "seed", help="plan or create the stable Preview Club identities"
     )
@@ -144,6 +148,8 @@ def main(argv: Optional[list] = None) -> int:
     if args.command == "preview":
         if args.preview_command == "inspect":
             return inspect_preview(root)
+        if args.preview_command == "readiness":
+            return inspect_readiness(root)
         if args.preview_command == "seed":
             return seed_preview(
                 root,
@@ -403,6 +409,67 @@ def seed_preview(root: Path, apply: bool, confirmation: Optional[str]) -> int:
         missing = sum(1 for actor in plan["actors"].values() if actor["status"] == "missing")
         print(f"writes planned: {missing} user signups; no roles, credits, memberships, or bookings")
     return 0
+
+
+def inspect_readiness(root: Path) -> int:
+    try:
+        credentials = PreviewCredentials.load(root)
+        policy = TargetPolicy.from_config(credentials.config)
+        admin_auth = FirebaseAuthenticator(
+            root / "secrets" / "preview-auth-cache.json"
+        ).authenticate(
+            credentials.admin_email,
+            credentials.admin_password,
+            credentials.firebase_api_key,
+        )
+        admin_client = PreviewReadonlyClient(policy, admin_auth.id_token)
+        identities = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure()
+        report = inspect_preview_readiness(
+            root,
+            policy,
+            admin_client,
+            identities,
+            credentials.firebase_api_key,
+        )
+    except (
+        CredentialsError,
+        FirebaseAuthError,
+        IdentityRegistryError,
+        PreviewReadError,
+        TargetPolicyError,
+    ) as exc:
+        print(f"ERROR preview readiness: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"PREVIEW CLUB READINESS // READ-ONLY // PR #{report['pullRequest']}")
+    location = report["location"]
+    print(
+        f"location: {location['areaName']} / {location['podName']} "
+        f"({location['podStatus']}, {location['availableCourtCount']} available court)"
+    )
+    for actor_id, actor in report["actors"].items():
+        roles = ",".join(actor["roles"]) or "customer"
+        payment = "saved" if actor["hasPaymentMethod"] else "missing"
+        print(
+            f"- {actor_id}: roles={roles}; membership={actor['membershipType']}; "
+            f"payment={payment}; credits={actor['virtualCredits']:.2f}; "
+            f"strategy={actor['booking']['strategy']}"
+        )
+    candidate = report["candidateSession"]
+    if candidate:
+        print(
+            f"candidate: {candidate['startTime']} to {candidate['endTime']} "
+            f"({candidate['periodType']}, rate={candidate['rate']:.2f})"
+        )
+    else:
+        print("candidate: none found from day +2 through day +14")
+    print(f"waiver: {'required' if report['waiverRequired'] else 'not required by tenant settings'}")
+    status = "READY" if report["readyForManualMatch"] else "BLOCKED"
+    print(f"manual match gate: {status}")
+    if report["blockers"]:
+        print("blockers: " + ", ".join(report["blockers"]))
+    print("writes: 0 remote; sanitized report: state/preview-readiness.json")
+    return 0 if report["readyForManualMatch"] else 1
 
 
 if __name__ == "__main__":

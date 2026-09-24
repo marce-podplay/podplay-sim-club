@@ -7,7 +7,7 @@ clearly marked group of simulated users inside a PR-specific copy of PingPod
 staging, not a separate tenant.
 
 The current implementation is the dependency-free **fake-world plus read-only
-preview inspection and identity-seed milestone**. Direct calls are limited to
+preview readiness milestone**. Direct calls are limited to
 the explicitly allowlisted PR-preview API and Firebase authentication. Signup
 may cause the preview application to create a Stripe test customer or send
 normal staging email; the simulator does not call those services directly.
@@ -31,6 +31,7 @@ normal staging email; the simulator does not call those services directly.
 - Firebase password/refresh authentication with a private local token cache;
 - an origin-locked, GET-only preview inspector for tenant, identity, areas, and pods.
 - an idempotent dry run and exact-confirmation signup path for three persistent actors.
+- a GET-only actor, booking-limit, payment-state, waiver, and future-slot readiness report.
 
 Actors are deterministic fixtures in this milestone. A later milestone will
 replace one actor turn at a time with a short-lived model invocation while
@@ -132,12 +133,19 @@ Then run:
 
 ```console
 ./club preview inspect
+./club preview readiness
 ```
 
 This command performs only `GET` requests under `/apis/v2/`, refuses redirects,
 caps response sizes and area fan-out, and prints a small summary. ID and refresh
 tokens are cached in ignored `secrets/preview-auth-cache.json` with mode `0600`;
 passwords and tokens are never rendered or copied into simulator state.
+
+`preview readiness` is also GET-only. It verifies each seeded actor, distinguishes
+a real saved payment method from the always-present user link reference, reads
+membership and booking limits, and searches pod-local dates from day +2 through
+day +14 for a legal slot. Its sanitized result is saved in the ignored file
+`state/preview-readiness.json`.
 
 Plan the persistent Preview Club identities and selected low-activity pod:
 
