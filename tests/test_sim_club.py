@@ -29,6 +29,7 @@ from podplay_sim_club.preview_booking import PreviewBookingWriter, occurrence_ke
 from podplay_sim_club.preview_participation import (
     PreviewAcceptanceEvaluator,
     PreviewParticipationWriter,
+    classify_match_status,
 )
 from podplay_sim_club.preview_evaluation import (
     PreviewBookingEvaluator,
@@ -673,6 +674,22 @@ class PreviewConnectionTestCase(unittest.TestCase):
         ).check_in("event-1", "invite-1")
 
         self.assertEqual({}, json.loads(requests[0].data.decode("utf-8")))
+
+    def test_match_status_waits_then_passes(self):
+        owner = {"checkIn": {"status": "NOT_CHECKED_IN"}}
+        blue = {
+            "status": "ACCEPTED",
+            "checkIn": {"status": "NOT_CHECKED_IN"},
+        }
+        start = datetime(2026, 9, 26, 12, tzinfo=timezone.utc)
+
+        self.assertEqual(
+            "WAITING_FOR_START",
+            classify_match_status(blue, owner, start, FIXED_NOW),
+        )
+        owner["checkIn"]["status"] = "CHECKED_IN"
+        blue["checkIn"]["status"] = "CHECKED_IN"
+        self.assertEqual("PASS", classify_match_status(blue, owner, start, start))
 
 
 def base64_url(value):

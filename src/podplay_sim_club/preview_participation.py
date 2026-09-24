@@ -1,6 +1,7 @@
 """Reconciled invitation and acceptance operations for one Preview Club match."""
 
 import json
+from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -241,6 +242,25 @@ def check_in_status(invitation: Dict[str, Any]) -> str:
     }:
         raise PreviewReadError("invitation check-in read-back has an unexpected shape")
     return check_in["status"]
+
+
+def classify_match_status(
+    blue_invitation: Dict[str, Any],
+    owner_invitation: Dict[str, Any],
+    start_time: datetime,
+    now: datetime,
+) -> str:
+    if blue_invitation.get("status") not in ACCEPTED_STATUSES:
+        return "BLOCKED_BLUE_NOT_ACCEPTED"
+    check_ins = {
+        check_in_status(owner_invitation),
+        check_in_status(blue_invitation),
+    }
+    if check_ins == {"CHECKED_IN"}:
+        return "PASS"
+    if now < start_time:
+        return "WAITING_FOR_START"
+    return "READY_FOR_CHECK_IN"
 
 
 def summarize_invitation(invitation: Dict[str, Any], expected_user_id: str) -> Dict[str, Any]:

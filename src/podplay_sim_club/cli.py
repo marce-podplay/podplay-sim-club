@@ -37,6 +37,7 @@ from .preview_participation import (
     PreviewAcceptanceEvaluator,
     PreviewParticipationWriter,
     check_in_status,
+    classify_match_status,
     find_actor_invitation,
     find_owner_invitation,
     summarize_acceptance,
@@ -198,6 +199,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--confirm-origin",
         help="required with --apply; must equal the exact preview origin",
     )
+    preview_subcommands.add_parser(
+        "match-status", help="read and assert the current manual-match state"
+    )
     doctor.add_argument(
         "--preview-origin",
         help="override PODPLAY_SIM_PREVIEW_ORIGIN for this check",
@@ -252,6 +256,8 @@ def main(argv: Optional[list] = None) -> int:
             return join_preview_match(root, args.apply, args.confirm_origin)
         if args.preview_command == "check-in":
             return check_in_preview_match(root, args.apply, args.confirm_origin)
+        if args.preview_command == "match-status":
+            return preview_match_status(root)
         if args.preview_command == "seed":
             return seed_preview(
                 root,
@@ -1176,6 +1182,66 @@ def check_in_preview_match(root: Path, apply: bool, confirmation: Optional[str])
     else:
         planned = sum(row["status"] != "CHECKED_IN" for row in statuses.values())
         print(f"writes planned when eligible: {planned}")
+    return 0
+
+
+def preview_match_status(root: Path) -> int:
+    match_path = root / "state" / "preview-manual-match.json"
+    storage = Storage(root)
+    try:
+        credentials = PreviewCredentials.load(root)
+        read_policy = TargetPolicy.from_config(credentials.config)
+        state = storage.load_json(match_path, {})
+        plan = state.get("plan") if isinstance(state, dict) else None
+        if (
+            not isinstance(state, dict)
+            or not isinstance(plan, dict)
+            or not isinstance(state.get("eventId"), str)
+            or not isinstance(plan.get("startTime"), str)
+        ):
+            raise PreviewReadError("manual-match checkpoint is incomplete")
+        if state.get("targetOrigin") != read_policy.target_origin:
+            raise PreviewReadError("manual-match checkpoint belongs to another origin")
+        identities = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure()
+        red = identities["red-captain"]
+        blue = identities["blue-captain"]
+        red_auth = FirebaseAuthenticator(
+            root / "secrets" / "actor-auth" / "red-captain.json"
+        ).authenticate(red.email, red.password, credentials.firebase_api_key)
+        client = PreviewReadonlyClient(read_policy, red_auth.id_token)
+        event = read_back_event(client, state["eventId"], plan)
+        owner_invitation = find_owner_invitation(client, state["eventId"])
+        blue_invitation = find_actor_invitation(
+            client, state["eventId"], blue.podplay_user_id
+        )
+        if blue_invitation is None:
+            raise PreviewReadError("Blue Captain invitation is missing")
+        start_time = datetime.fromisoformat(plan["startTime"].replace("Z", "+00:00"))
+        result = classify_match_status(
+            blue_invitation,
+            owner_invitation,
+            start_time,
+            datetime.now(timezone.utc),
+        )
+        owner_check_in = check_in_status(owner_invitation)
+        blue_check_in = check_in_status(blue_invitation)
+    except (
+        ValueError,
+        CredentialsError,
+        FirebaseAuthError,
+        IdentityRegistryError,
+        PreviewReadError,
+        TargetPolicyError,
+    ) as exc:
+        print(f"ERROR preview match status: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"PREVIEW CLUB MATCH // {result} // PR #{read_policy.pull_request_number}")
+    print(f"event: {event['eventId']} ({event['status']})")
+    print(f"slot: {event['startTime']} to {event['endTime']}")
+    print(f"Blue invitation: {blue_invitation['status']}")
+    print(f"Red check-in: {owner_check_in}; Blue check-in: {blue_check_in}")
+    print("writes: 0")
     return 0
 
 

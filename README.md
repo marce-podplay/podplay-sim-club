@@ -196,6 +196,7 @@ booking:
 ./club preview book --apply --confirm-origin "$preview_origin"
 ./club preview join --dry-run
 ./club preview join --apply --confirm-origin "$preview_origin"
+./club preview match-status
 ./club preview check-in --dry-run
 ./club preview check-in --apply --confirm-origin "$preview_origin"
 ```
@@ -205,8 +206,9 @@ for a matching Red-owned event before every mutation, and reads the event back
 afterward. A retry reuses the existing event; the writer object refuses a second
 request in the same run. `preview join` then reconciles one leader-paid Blue
 invitation, runs a non-persisting acceptance preview, and accepts through Blue's
-own token. `preview check-in` reads both statuses but refuses to write before the
-saved event start time. Sanitized progress lives in the ignored file
+own token. `preview match-status` is a zero-write assertion that reports waiting,
+ready-for-check-in, or pass. `preview check-in` reads both statuses but refuses
+to write before the saved event start time. Sanitized progress lives in the ignored file
 `state/preview-manual-match.json`.
 
 Plan the persistent Preview Club identities and selected low-activity pod:
