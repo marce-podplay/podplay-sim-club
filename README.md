@@ -1,12 +1,15 @@
 # PodPlay Sim Club
 
-PodPlay Sim Club is a persistent fictional tenant whose characters will exercise
+PodPlay Sim Club is a persistent fictional club whose characters will exercise
 an approved PodPlay PR preview, talk to one another, try release features, and
-leave inspectable evidence when something does not work.
+leave inspectable evidence when something does not work. Preview Club is a
+namespaced simulated cohort inside a PR-specific copy of PingPod staging, not a
+separate tenant.
 
 The current implementation is the dependency-free **fake-world plus read-only
-preview inspection milestone**. It never contacts Reflag, shared staging, or
-production.
+preview inspection milestone**. The inspector contacts only the explicitly
+allowlisted PR-preview API; it does not directly call shared staging, Reflag,
+Stripe, Pub/Sub, Insights Cube, or production.
 
 ## What works now
 
@@ -23,7 +26,7 @@ production.
 - a typed preview-adapter boundary around all product operations;
 - explicit `fake`, `preview-readonly`, and `preview-write` configuration modes;
 - exact-origin PR-preview allowlisting with shared-staging and production denial;
-- cross-origin request and redirect rejection ready for the future HTTP client.
+- cross-origin request and redirect rejection in the GET-only HTTP client;
 - Firebase password/refresh authentication with a private local token cache;
 - an origin-locked, GET-only preview inspector for tenant, identity, areas, and pods.
 
@@ -76,6 +79,12 @@ Simulate a fresh preview database while preserving actor journals:
 
 The second command observes the missing seed sentinel, archives the old world,
 rehydrates the fake preview, and starts a new season.
+
+A season is the lifetime of one PR-specific preview database. Code can be
+redeployed without starting a new season. Recreating the database from the
+weekly PingPod staging snapshot does start one. Firebase identities live outside
+that database and may persist across seasons; PodPlay user rows and roles must be
+read back in each season.
 
 ## Tests
 
@@ -163,12 +172,13 @@ The fake preview represents product state. `world.json` is the simulator's
 projection. The two are deliberately separate so a process can die after a
 remote commit and reconcile on restart.
 
-Credentials will eventually live below the always-ignored `secrets/` directory.
+Credentials and the local token cache live below the always-ignored `secrets/`
+directory.
 Do not place tokens in actor identities, seed files, journals, or issues.
 
 ## Safety boundary
 
-No network adapter exists yet. The target policy already enforces:
+The GET-only network adapter and target policy enforce:
 
 - a recognized PodPlay PR-preview Cloud Run hostname;
 - an exact configured origin allowlist;
@@ -176,7 +186,7 @@ No network adapter exists yet. The target policy already enforces:
 - a second exact-origin confirmation for future preview-write mode;
 - rejection when a request or redirect crosses the approved origin.
 
-Before a real adapter is enabled it must additionally enforce:
+Before any write adapter is enabled it must additionally enforce:
 
 - Bearer-token handling outside committed files;
 - bounded methods, endpoints, writes, retries, and timeouts;
