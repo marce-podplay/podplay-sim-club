@@ -5,17 +5,32 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PodPlay Sim Club // Observatory</title>
   <style>
-    :root { color-scheme: dark; --bg:#07110d; --panel:#0b1912; --line:#244c35; --dim:#71917d; --text:#d7f7df; --live:#62f68d; --warn:#f0c65b; --cold:#70b7ff; }
-    * { box-sizing: border-box; }
+    :root { color-scheme:dark; --bg:#07110d; --panel:#0b1912; --line:#244c35; --dim:#71917d; --text:#d7f7df; --live:#62f68d; --warn:#f0c65b; --cold:#70b7ff; }
+    * { box-sizing:border-box; }
+    [hidden] { display:none !important; }
     body { margin:0; padding:18px; background:var(--bg); color:var(--text); font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; }
     main { max-width:1100px; margin:0 auto; }
-    header, .row, .legend { display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap; }
+    header, .row, .legend, .switcher { display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap; }
     header { border-bottom:1px solid var(--line); padding-bottom:12px; }
     h1 { margin:0; color:var(--live); font-size:16px; font-weight:500; letter-spacing:.08em; }
     .dim { color:var(--dim); } .live { color:var(--live); } .warn { color:var(--warn); } .cold { color:var(--cold); }
+    .switcher { justify-content:flex-start; margin:14px 0; }
+    .switcher button { padding:7px 11px; border:1px solid var(--line); background:transparent; color:var(--dim); font:inherit; cursor:pointer; }
+    .switcher button[aria-selected="true"] { border-color:var(--live); background:var(--panel); color:var(--live); }
     .grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin:14px 0; }
-    section { border:1px solid var(--line); background:var(--panel); padding:12px; min-height:170px; }
+    section { border:1px solid var(--line); background:var(--panel); padding:14px; min-height:170px; }
     section h2 { margin:0 0 12px; color:var(--dim); font-size:13px; font-weight:400; letter-spacing:.06em; }
+    .preview-hero { min-height:145px; border-color:var(--live); display:grid; align-content:center; }
+    .preview-result { font-size:24px; letter-spacing:.06em; }
+    .preview-meta { margin-top:8px; color:var(--dim); }
+    .fact { padding:8px 0; border-top:1px solid var(--line); }
+    .fact:first-of-type { border-top:0; }
+    .fact strong { display:block; color:var(--text); font-weight:500; }
+    .next-action { color:var(--warn); }
+    .source-note { margin-top:12px; color:var(--dim); font-size:12px; }
+    .offline { margin-top:12px; padding:10px 12px; border:1px solid var(--warn); color:var(--warn); background:var(--panel); }
+    .preview-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    .next-panel { min-height:105px; }
     .person, .pod, .signal, .booking { padding:5px 0; }
     .person button { color:var(--text); border:0; padding:0; background:transparent; font:inherit; text-decoration:underline dotted; cursor:pointer; }
     .pod { border-top:1px solid var(--line); display:flex; justify-content:space-between; gap:8px; }
@@ -23,57 +38,149 @@
     .trace { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; }
     .booking { border-top:2px solid var(--cold); }
     .booking.current { border-color:var(--live); }
-    .preview-match { min-height:0; margin-top:14px; }
-    .preview-line { display:flex; gap:18px; flex-wrap:wrap; }
-    .source-note { margin-top:8px; color:var(--dim); font-size:12px; }
     #detail { margin-top:14px; min-height:44px; padding:10px 12px; border-left:3px solid var(--live); background:var(--panel); }
     .legend { margin-top:12px; color:var(--dim); }
-    @media(max-width:760px){ .grid{grid-template-columns:1fr;} }
+    @media(max-width:760px){ .grid,.preview-grid{grid-template-columns:1fr;} .preview-result{font-size:19px;} }
   </style>
 </head>
 <body>
 <main>
   <header>
-    <div><h1>PODPLAY SIM CLUB // OBSERVATORY</h1><span id="season" class="dim">loading</span></div>
+    <div><h1>PODPLAY SIM CLUB // OBSERVATORY</h1><span id="source" class="dim">PR PREVIEW · remote snapshot</span></div>
     <div><span id="connection" class="live">● LOCAL UI</span> <span id="clock" class="dim"></span></div>
   </header>
+  <div id="offline" class="offline" hidden>LOCAL OBSERVATORY OFFLINE · restart <code>./club serve</code>. Displayed data may be frozen.</div>
 
-  <section class="preview-match">
-    <h2>PR PREVIEW MATCH / REMOTE PRODUCT STATE</h2>
-    <div id="preview-match"><span class="dim">· no preview snapshot; run ./club preview match-status</span></div>
-  </section>
+  <nav class="switcher" aria-label="World source">
+    <button type="button" data-view="preview" aria-selected="true">PR PREVIEW</button>
+    <button type="button" data-view="fake" aria-selected="false">LOCAL FAKE</button>
+  </nav>
 
-  <div class="grid">
-    <section><h2>LOCAL FAKE CLUB / NETWORK</h2><div id="people"></div></section>
-    <section><h2>LOCAL FAKE COURT ZONE</h2><div id="pods"></div></section>
-    <section><h2>LOCAL FAKE SIGNALS</h2><div id="signals"></div></section>
+  <div id="preview-view">
+    <section class="preview-hero">
+      <h2>REMOTE PRODUCT STATE</h2>
+      <div id="preview-hero"><span class="dim">· no preview snapshot; run ./club preview match-status</span></div>
+    </section>
+    <div class="grid preview-grid">
+      <section><h2>VENUE</h2><div id="preview-venue"></div></section>
+      <section><h2>SCHEDULE</h2><div id="preview-match"></div></section>
+      <section><h2>PLAYERS</h2><div id="preview-players"></div></section>
+      <section><h2>EVIDENCE</h2><div id="preview-evidence"></div></section>
+    </div>
+    <section class="next-panel"><h2>NEXT SIGNAL</h2><div id="preview-next"></div></section>
+    <div id="preview-source" class="source-note"></div>
   </div>
 
-  <section><h2>LOCAL FAKE BOOKING TRACE</h2><div id="bookings" class="trace"></div></section>
-  <div id="detail" aria-live="polite"><span class="live">›</span> Select a character signal for one small hint.</div>
-  <div class="legend"><span>[S] owner · [A] admin · [C] CS · [R/B] captains</span><span>● active · ! attention · · absent</span></div>
+  <div id="fake-view" hidden>
+    <div class="grid">
+      <section><h2>LOCAL FAKE CLUB / NETWORK</h2><div id="people"></div></section>
+      <section><h2>LOCAL FAKE COURT ZONE</h2><div id="pods"></div></section>
+      <section><h2>LOCAL FAKE SIGNALS</h2><div id="signals"></div></section>
+    </div>
+    <section><h2>LOCAL FAKE BOOKING TRACE</h2><div id="bookings" class="trace"></div></section>
+    <div id="detail" aria-live="polite"><span class="live">›</span> Select a character signal for one small hint.</div>
+    <div class="legend"><span>[S] owner · [A] admin · [C] CS · [R/B] captains</span><span>● active · ! attention · · absent</span></div>
+  </div>
 </main>
 <script>
   const detail = document.getElementById('detail');
   const glyph = state => state === 'playing' ? '●' : state === 'idle' ? '·' : '›';
   const esc = value => String(value).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  let currentView = 'preview';
+  let currentWorld = null;
+
+  function switchView(view) {
+    currentView = view;
+    document.getElementById('preview-view').hidden = view !== 'preview';
+    document.getElementById('fake-view').hidden = view !== 'fake';
+    document.querySelectorAll('[data-view]').forEach(button => {
+      button.setAttribute('aria-selected', String(button.dataset.view === view));
+    });
+    document.getElementById('source').textContent = view === 'preview'
+      ? 'PR PREVIEW · remote snapshot'
+      : `LOCAL FAKE WORLD${currentWorld ? ` · ${currentWorld.season} · beat ${currentWorld.beat.count}` : ''}`;
+    if (currentWorld) updateClock(currentWorld);
+  }
+
+  function updateClock(world) {
+    const observed = currentView === 'preview' && world.previewMatch
+      ? world.previewMatch.observedAt
+      : world.observedAt;
+    document.getElementById('clock').textContent = observed || '';
+  }
+
+  function checkInFact(label, status) {
+    const checked = status === 'CHECKED_IN';
+    return `<div class="fact"><span class="${checked?'live':'dim'}">${checked?'●':'·'} ${esc(label)}</span><strong>${esc(status)}</strong></div>`;
+  }
+
+  function formatTime(instant, timeZone) {
+    if (!instant) return 'unknown';
+    const options = {weekday:'short', month:'short', day:'numeric', year:'numeric', hour:'numeric', minute:'2-digit', timeZoneName:'short'};
+    if (timeZone) options.timeZone = timeZone;
+    try { return new Intl.DateTimeFormat('en-US', options).format(new Date(instant)); }
+    catch (_error) { return instant; }
+  }
+
+  function snapshotAge(instant) {
+    const seconds = Math.max(0, Math.floor((Date.now() - new Date(instant).getTime()) / 1000));
+    if (seconds < 60) return `${seconds}s old`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m old`;
+    return `${Math.floor(seconds / 3600)}h old`;
+  }
+
+  function renderPreview(preview) {
+    if (!preview) {
+      document.getElementById('preview-hero').innerHTML = '<span class="dim">· no preview snapshot; run ./club preview match-status</span>';
+      document.getElementById('preview-match').innerHTML = '<span class="dim">· unknown</span>';
+      document.getElementById('preview-venue').innerHTML = '<span class="dim">· unknown</span>';
+      document.getElementById('preview-players').innerHTML = '<span class="dim">· unknown</span>';
+      document.getElementById('preview-evidence').innerHTML = '<span class="dim">· unknown</span>';
+      document.getElementById('preview-next').innerHTML = '<code>./club preview match-status</code>';
+      document.getElementById('preview-source').textContent = '';
+      return;
+    }
+    const venue = preview.venue || {};
+    const journey = preview.journey || {};
+    const resultClass = preview.result === 'PASS' ? 'live' : 'warn';
+    document.getElementById('preview-hero').innerHTML = `
+      <div class="preview-result ${resultClass}">${esc(preview.result)}</div>
+      <div class="preview-meta">PR #${esc(preview.pullRequest)} · event ${esc(preview.event.eventId)} · ${esc(preview.event.status)}</div>`;
+    document.getElementById('preview-venue').innerHTML = `
+      <div class="fact"><span class="dim">AREA</span><strong>${esc(venue.areaName || 'unknown')}</strong></div>
+      <div class="fact"><span class="dim">POD</span><strong>${esc(venue.podName || 'unknown')}</strong></div>
+      <div class="fact"><span class="dim">COURT</span><strong>${esc(venue.courtAssignment || 'unknown')}</strong></div>
+      <div class="fact"><span class="dim">VENUE TIMEZONE</span><strong>${esc(venue.timezone || 'unknown')}</strong></div>`;
+    document.getElementById('preview-match').innerHTML = `
+      <div class="fact"><span class="dim">VENUE LOCAL</span><strong>${esc(formatTime(preview.event.startTime, venue.timezone))}</strong><span class="dim">to ${esc(formatTime(preview.event.endTime, venue.timezone))}</span></div>
+      <div class="fact"><span class="dim">YOUR LOCAL TIME</span><strong>${esc(formatTime(preview.event.startTime))}</strong><span class="dim">to ${esc(formatTime(preview.event.endTime))}</span></div>
+      <div class="fact"><span class="dim">UTC</span><strong>${esc(preview.event.startTime)} → ${esc(preview.event.endTime)}</strong></div>`;
+    document.getElementById('preview-players').innerHTML = `
+      <div class="fact"><span class="live">● Red Captain</span><strong>BOOKING OWNER</strong></div>
+      <div class="fact"><span class="live">● Blue Captain</span><strong>${esc(preview.blueInvitation.status)}</strong></div>
+      ${checkInFact('Red check-in', preview.checkIns.redCaptain)}
+      ${checkInFact('Blue check-in', preview.checkIns.blueCaptain)}`;
+    const orderTotal = typeof journey.orderTotal === 'number'
+      ? `${journey.currency || ''} ${journey.orderTotal.toFixed(2)}`.trim()
+      : 'unknown';
+    document.getElementById('preview-evidence').innerHTML = `
+      <div class="fact"><span class="dim">JOURNEY PHASE</span><strong>${esc(journey.phase || 'unknown')}</strong></div>
+      <div class="fact"><span class="dim">EVENT</span><strong>${esc(preview.event.type || 'unknown')} / ${esc(preview.event.subtype || 'unknown')}</strong></div>
+      <div class="fact"><span class="dim">ORDER</span><strong>${esc(orderTotal)} · ${esc(journey.virtualCreditsUsed ?? 'unknown')} credits used</strong></div>
+      <div class="fact"><span class="dim">OCCURRENCE</span><strong>${esc(journey.occurrenceKey || 'unknown')}</strong></div>`;
+    const action = preview.result === 'PASS'
+      ? 'Match assertions passed. No action required.'
+      : preview.result === 'WAITING_FOR_START'
+        ? `Wait until ${formatTime(preview.event.startTime, venue.timezone)} (${formatTime(preview.event.startTime)} for you), then run the check-in dry run.`
+        : 'Run ./club preview check-in --dry-run and review the result.';
+    document.getElementById('preview-next').innerHTML = `<div class="fact next-action">${esc(action)}</div><div class="fact"><code>./club preview match-status</code><strong>SAFE · ZERO REMOTE WRITES</strong></div>`;
+    document.getElementById('preview-source').textContent = `Snapshot refreshed ${preview.observedAt} (${snapshotAge(preview.observedAt)}). Use match-status to refresh it; this view does not poll the preview API.`;
+  }
+
   function render(world) {
-    document.getElementById('season').textContent = `LOCAL FAKE WORLD · ${world.season} · beat ${world.beat.count}`;
-    document.getElementById('clock').textContent = world.observedAt;
-    const preview = world.previewMatch;
-    document.getElementById('preview-match').innerHTML = preview ? `
-      <div class="preview-line">
-        <span class="${preview.result==='PASS'?'live':'warn'}">${esc(preview.result)}</span>
-        <span>PR #${esc(preview.pullRequest)}</span>
-        <span>event ${esc(preview.event.eventId)} · ${esc(preview.event.status)}</span>
-      </div>
-      <div class="preview-line">
-        <span>${esc(preview.event.startTime)} → ${esc(preview.event.endTime)}</span>
-        <span>Blue ${esc(preview.blueInvitation.status)}</span>
-        <span>check-in R ${esc(preview.checkIns.redCaptain)} · B ${esc(preview.checkIns.blueCaptain)}</span>
-      </div>
-      <div class="source-note">Snapshot from ./club preview match-status at ${esc(preview.observedAt)} · not the fake world below</div>
-    ` : '<span class="dim">· no preview snapshot; run ./club preview match-status</span>';
+    currentWorld = world;
+    updateClock(world);
+    renderPreview(world.previewMatch);
     document.getElementById('people').innerHTML = Object.entries(world.people).map(([id,p]) =>
       `<div class="person"><button data-id="${esc(id)}">[${esc(p.glyph)}] ${esc(p.name)}</button> <span class="${p.state==='playing'?'live':'dim'}">${glyph(p.state)} ${esc(p.location)} / ${esc(p.state)}</span></div>`
     ).join('');
@@ -91,17 +198,26 @@
       `<div class="booking ${esc(b.state)}"><span class="${b.state==='current'?'live':'dim'}">${esc(b.occurrenceKey)}</span><br>${esc(b.podId)} · ${b.checkedIn.length}/${b.participants.length} checked in</div>`
     ).join('') || '<div class="dim">· no bookings yet</div>';
   }
+
+  document.querySelectorAll('[data-view]').forEach(button => {
+    button.onclick = () => switchView(button.dataset.view);
+  });
   async function refresh() {
     try {
       const response = await fetch('/api/world', {cache:'no-store'});
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       render(await response.json());
-      document.getElementById('connection').textContent = '● LOCAL UI';
+      document.getElementById('connection').textContent = '● OBSERVATORY ONLINE';
+      document.getElementById('connection').className = 'live';
+      document.getElementById('offline').hidden = true;
     } catch (error) {
-      document.getElementById('connection').textContent = '× DISCONNECTED';
+      document.getElementById('connection').textContent = '× LOCAL SERVER OFFLINE';
       document.getElementById('connection').className = 'warn';
+      document.getElementById('offline').hidden = false;
+      document.getElementById('source').textContent = 'FROZEN VIEW · restart ./club serve';
     }
   }
+  switchView('preview');
   refresh(); setInterval(refresh, 2000);
 </script>
 </body>

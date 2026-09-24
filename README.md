@@ -213,8 +213,9 @@ to write before the saved event start time. Sanitized progress lives in the igno
 
 Running `preview match-status` also refreshes the ignored, sanitized
 `state/preview-match-status.json` snapshot. The observatory renders that remote
-PR-preview state in a separate panel and labels the original deterministic
-simulation as `LOCAL FAKE WORLD`; the two booking traces are never merged.
+PR-preview state as its default full-screen view. The original deterministic
+simulation is available behind the `LOCAL FAKE` switch; the two booking traces
+are never merged.
 
 Plan the persistent Preview Club identities and selected low-activity pod:
 

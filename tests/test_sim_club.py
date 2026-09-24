@@ -174,7 +174,27 @@ class SimClubTestCase(unittest.TestCase):
                 "observedAt": "2026-09-24T17:00:00+00:00",
                 "pullRequest": 7200,
                 "result": "WAITING_FOR_START",
-                "event": {"eventId": "event-live", "status": "CONFIRMED"},
+                "event": {
+                    "eventId": "event-live",
+                    "status": "CONFIRMED",
+                    "type": "REGULAR",
+                    "subtype": "PRIVATE",
+                    "startTime": "2026-09-26T12:00:00.000Z",
+                    "endTime": "2026-09-26T12:30:00.000Z",
+                },
+                "venue": {
+                    "areaName": "East 95th",
+                    "podName": "Test",
+                    "timezone": "America/New_York",
+                    "courtAssignment": "Auto-assigned court",
+                },
+                "journey": {
+                    "phase": "joined",
+                    "occurrenceKey": "pp7444-test",
+                    "orderTotal": 0,
+                    "currency": "USD",
+                    "virtualCreditsUsed": 8.8,
+                },
                 "blueInvitation": {"status": "ACCEPTED"},
                 "checkIns": {
                     "redCaptain": "NOT_CHECKED_IN",
@@ -202,7 +222,9 @@ class SimClubTestCase(unittest.TestCase):
         self.assertEqual("WAITING_FOR_START", world["previewMatch"]["result"])
         self.assertIn("PODPLAY SIM CLUB // OBSERVATORY", page)
         self.assertIn("LOCAL FAKE WORLD", page)
-        self.assertIn("PR PREVIEW MATCH", page)
+        self.assertIn("REMOTE PRODUCT STATE", page)
+        self.assertIn('data-view="preview" aria-selected="true"', page)
+        self.assertIn('id="fake-view" hidden', page)
 
 
 class TargetPolicyTestCase(unittest.TestCase):

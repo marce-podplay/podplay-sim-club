@@ -1226,6 +1226,21 @@ def preview_match_status(root: Path) -> int:
         )
         owner_check_in = check_in_status(owner_invitation)
         blue_check_in = check_in_status(blue_invitation)
+        readiness = storage.load_json(
+            storage.state / "preview-readiness.json", default={}
+        )
+        location = readiness.get("location") if isinstance(readiness, dict) else None
+        candidate = (
+            readiness.get("candidateSession") if isinstance(readiness, dict) else None
+        )
+        if not isinstance(location, dict) or location.get("podId") != plan.get("podId"):
+            location = {}
+        if (
+            not isinstance(candidate, dict)
+            or candidate.get("sessionId") != plan.get("sessionId")
+        ):
+            candidate = {}
+        order = state.get("order") if isinstance(state.get("order"), dict) else {}
         storage.write_json(
             storage.state / "preview-match-status.json",
             {
@@ -1234,6 +1249,25 @@ def preview_match_status(root: Path) -> int:
                 "pullRequest": read_policy.pull_request_number,
                 "result": result,
                 "event": event,
+                "venue": {
+                    "areaName": location.get("areaName"),
+                    "podName": location.get("podName"),
+                    "timezone": location.get("timezone"),
+                    "courtAssignment": (
+                        "Auto-assigned court"
+                        if candidate.get("tableType") == "AUTO"
+                        else candidate.get("tableType")
+                    ),
+                    "periodType": candidate.get("periodType"),
+                    "tablesLeftAtSelection": candidate.get("tablesLeft"),
+                },
+                "journey": {
+                    "phase": state.get("phase"),
+                    "occurrenceKey": plan.get("occurrenceKey"),
+                    "orderTotal": order.get("total"),
+                    "currency": order.get("currency"),
+                    "virtualCreditsUsed": order.get("virtualCredits"),
+                },
                 "blueInvitation": {
                     "status": blue_invitation["status"],
                 },
@@ -1256,6 +1290,21 @@ def preview_match_status(root: Path) -> int:
 
     print(f"PREVIEW CLUB MATCH // {result} // PR #{read_policy.pull_request_number}")
     print(f"event: {event['eventId']} ({event['status']})")
+    venue = " / ".join(
+        value
+        for value in (location.get("areaName"), location.get("podName"))
+        if isinstance(value, str) and value
+    )
+    print(f"venue: {venue or plan['podId']}")
+    if location.get("timezone"):
+        print(f"venue timezone: {location['timezone']}")
+    if candidate.get("tableType"):
+        court = (
+            "auto-assigned court"
+            if candidate["tableType"] == "AUTO"
+            else candidate["tableType"]
+        )
+        print(f"court: {court}")
     print(f"slot: {event['startTime']} to {event['endTime']}")
     print(f"Blue invitation: {blue_invitation['status']}")
     print(f"Red check-in: {owner_check_in}; Blue check-in: {blue_check_in}")
