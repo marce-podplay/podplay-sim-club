@@ -173,7 +173,7 @@ class SimClubTestCase(unittest.TestCase):
                 "schemaVersion": 1,
                 "observedAt": "2026-09-24T17:00:00+00:00",
                 "pullRequest": 7200,
-                "result": "WAITING_FOR_START",
+                "result": "SCHEDULED",
                 "event": {
                     "eventId": "event-live",
                     "status": "CONFIRMED",
@@ -190,6 +190,7 @@ class SimClubTestCase(unittest.TestCase):
                 },
                 "journey": {
                     "phase": "joined",
+                    "preparedAt": "2026-09-24T17:00:00+00:00",
                     "occurrenceKey": "pp7444-test",
                     "orderTotal": 0,
                     "currency": "USD",
@@ -219,7 +220,7 @@ class SimClubTestCase(unittest.TestCase):
 
         self.assertEqual({"mode": "fake", "ok": True}, health)
         self.assertEqual("season-001", world["season"])
-        self.assertEqual("WAITING_FOR_START", world["previewMatch"]["result"])
+        self.assertEqual("SCHEDULED", world["previewMatch"]["result"])
         self.assertIn("PODPLAY SIM CLUB // OBSERVATORY", page)
         self.assertIn("LOCAL FAKE WORLD", page)
         self.assertIn("REMOTE PRODUCT STATE", page)
@@ -724,7 +725,7 @@ class PreviewConnectionTestCase(unittest.TestCase):
         start = datetime(2026, 9, 26, 12, tzinfo=timezone.utc)
 
         self.assertEqual(
-            "WAITING_FOR_START",
+            "SCHEDULED",
             classify_match_status(blue, owner, start, FIXED_NOW),
         )
         owner["checkIn"]["status"] = "CHECKED_IN"

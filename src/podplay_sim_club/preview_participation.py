@@ -259,7 +259,7 @@ def classify_match_status(
     if check_ins == {"CHECKED_IN"}:
         return "PASS"
     if now < start_time:
-        return "WAITING_FOR_START"
+        return "SCHEDULED"
     return "READY_FOR_CHECK_IN"
 
 

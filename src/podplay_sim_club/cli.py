@@ -800,6 +800,7 @@ def book_preview_match(root: Path, apply: bool, confirmation: Optional[str]) -> 
         ).authenticate(red.email, red.password, credentials.firebase_api_key)
         red_client = PreviewReadonlyClient(read_policy, red_auth.id_token)
         state = storage.load_json(match_path, {}) if apply else {}
+        prepared_at = state.get("preparedAt") if isinstance(state, dict) else None
         if (
             isinstance(state, dict)
             and state
@@ -858,6 +859,7 @@ def book_preview_match(root: Path, apply: bool, confirmation: Optional[str]) -> 
         order_summary = state.get("order") if isinstance(state, dict) else None
         event_id = matches[0].get("id") if matches else state.get("eventId") if isinstance(state, dict) else None
         if apply and not event_id:
+            prepared_at = datetime.now(timezone.utc).isoformat()
             write_config = replace(
                 credentials.config,
                 mode=RunMode.PREVIEW_WRITE,
@@ -870,6 +872,7 @@ def book_preview_match(root: Path, apply: bool, confirmation: Optional[str]) -> 
                     "schemaVersion": 1,
                     "targetOrigin": read_policy.target_origin,
                     "phase": "planned",
+                    "preparedAt": prepared_at,
                     "plan": plan,
                 },
             )
@@ -895,17 +898,28 @@ def book_preview_match(root: Path, apply: bool, confirmation: Optional[str]) -> 
             if not isinstance(event_id, str):
                 raise PreviewWriteError("booking event ID is missing after ORDER")
             event = read_back_event(red_client, event_id, plan)
-            storage.write_json(
-                match_path,
+            next_state = dict(state) if isinstance(state, dict) else {}
+            phase = (
+                next_state.get("phase")
+                if next_state.get("phase") in {"joined", "checked-in"}
+                else "booked"
+            )
+            next_state.update(
                 {
                     "schemaVersion": 1,
                     "targetOrigin": read_policy.target_origin,
-                    "phase": "booked",
+                    "phase": phase,
+                    "preparedAt": prepared_at
+                    or datetime.now(timezone.utc).isoformat(),
                     "plan": plan,
                     "eventId": event_id,
                     "order": order_summary,
                     "event": event,
-                },
+                }
+            )
+            storage.write_json(
+                match_path,
+                next_state,
             )
         else:
             event = None
@@ -1241,6 +1255,21 @@ def preview_match_status(root: Path) -> int:
         ):
             candidate = {}
         order = state.get("order") if isinstance(state.get("order"), dict) else {}
+        previous_snapshot = storage.load_json(
+            storage.state / "preview-match-status.json", default={}
+        )
+        previous_journey = (
+            previous_snapshot.get("journey")
+            if isinstance(previous_snapshot, dict)
+            else None
+        )
+        prepared_at = state.get("preparedAt")
+        if not isinstance(prepared_at, str) and isinstance(previous_journey, dict):
+            prepared_at = previous_journey.get("preparedAt")
+        if not isinstance(prepared_at, str):
+            prepared_at = datetime.fromtimestamp(
+                match_path.stat().st_mtime, timezone.utc
+            ).isoformat()
         storage.write_json(
             storage.state / "preview-match-status.json",
             {
@@ -1263,6 +1292,7 @@ def preview_match_status(root: Path) -> int:
                 },
                 "journey": {
                     "phase": state.get("phase"),
+                    "preparedAt": prepared_at,
                     "occurrenceKey": plan.get("occurrenceKey"),
                     "orderTotal": order.get("total"),
                     "currency": order.get("currency"),

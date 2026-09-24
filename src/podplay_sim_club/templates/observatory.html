@@ -165,13 +165,14 @@
       : 'unknown';
     document.getElementById('preview-evidence').innerHTML = `
       <div class="fact"><span class="dim">JOURNEY PHASE</span><strong>${esc(journey.phase || 'unknown')}</strong></div>
+      <div class="fact"><span class="dim">BOOKED + ACCEPTED</span><strong>${esc(formatTime(journey.preparedAt))}</strong></div>
       <div class="fact"><span class="dim">EVENT</span><strong>${esc(preview.event.type || 'unknown')} / ${esc(preview.event.subtype || 'unknown')}</strong></div>
       <div class="fact"><span class="dim">ORDER</span><strong>${esc(orderTotal)} · ${esc(journey.virtualCreditsUsed ?? 'unknown')} credits used</strong></div>
       <div class="fact"><span class="dim">OCCURRENCE</span><strong>${esc(journey.occurrenceKey || 'unknown')}</strong></div>`;
     const action = preview.result === 'PASS'
       ? 'Match assertions passed. No action required.'
-      : preview.result === 'WAITING_FOR_START'
-        ? `Wait until ${formatTime(preview.event.startTime, venue.timezone)} (${formatTime(preview.event.startTime)} for you), then run the check-in dry run.`
+      : preview.result === 'SCHEDULED'
+        ? `Booked and accepted on ${formatTime(journey.preparedAt)}. Play on ${formatTime(preview.event.startTime, venue.timezone)} (${formatTime(preview.event.startTime)} for you), then run the check-in dry run.`
         : 'Run ./club preview check-in --dry-run and review the result.';
     document.getElementById('preview-next').innerHTML = `<div class="fact next-action">${esc(action)}</div><div class="fact"><code>./club preview match-status</code><strong>SAFE · ZERO REMOTE WRITES</strong></div>`;
     document.getElementById('preview-source').textContent = `Snapshot refreshed ${preview.observedAt} (${snapshotAge(preview.observedAt)}). Use match-status to refresh it; this view does not poll the preview API.`;
