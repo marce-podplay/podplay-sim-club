@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Preview Club // World Signal</title>
+  <title>PodPlay Sim Club // Observatory</title>
   <style>
     :root { color-scheme: dark; --bg:#07110d; --panel:#0b1912; --line:#244c35; --dim:#71917d; --text:#d7f7df; --live:#62f68d; --warn:#f0c65b; --cold:#70b7ff; }
     * { box-sizing: border-box; }
@@ -23,6 +23,9 @@
     .trace { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; }
     .booking { border-top:2px solid var(--cold); }
     .booking.current { border-color:var(--live); }
+    .preview-match { min-height:0; margin-top:14px; }
+    .preview-line { display:flex; gap:18px; flex-wrap:wrap; }
+    .source-note { margin-top:8px; color:var(--dim); font-size:12px; }
     #detail { margin-top:14px; min-height:44px; padding:10px 12px; border-left:3px solid var(--live); background:var(--panel); }
     .legend { margin-top:12px; color:var(--dim); }
     @media(max-width:760px){ .grid{grid-template-columns:1fr;} }
@@ -31,17 +34,22 @@
 <body>
 <main>
   <header>
-    <div><h1>PREVIEW CLUB // WORLD SIGNAL</h1><span id="season" class="dim">loading</span></div>
-    <div><span id="connection" class="live">● LOCAL</span> <span id="clock" class="dim"></span></div>
+    <div><h1>PODPLAY SIM CLUB // OBSERVATORY</h1><span id="season" class="dim">loading</span></div>
+    <div><span id="connection" class="live">● LOCAL UI</span> <span id="clock" class="dim"></span></div>
   </header>
 
+  <section class="preview-match">
+    <h2>PR PREVIEW MATCH / REMOTE PRODUCT STATE</h2>
+    <div id="preview-match"><span class="dim">· no preview snapshot; run ./club preview match-status</span></div>
+  </section>
+
   <div class="grid">
-    <section><h2>CLUB / NETWORK</h2><div id="people"></div></section>
-    <section><h2>COURT ZONE</h2><div id="pods"></div></section>
-    <section><h2>LATEST SIGNALS</h2><div id="signals"></div></section>
+    <section><h2>LOCAL FAKE CLUB / NETWORK</h2><div id="people"></div></section>
+    <section><h2>LOCAL FAKE COURT ZONE</h2><div id="pods"></div></section>
+    <section><h2>LOCAL FAKE SIGNALS</h2><div id="signals"></div></section>
   </div>
 
-  <section><h2>BOOKING TRACE</h2><div id="bookings" class="trace"></div></section>
+  <section><h2>LOCAL FAKE BOOKING TRACE</h2><div id="bookings" class="trace"></div></section>
   <div id="detail" aria-live="polite"><span class="live">›</span> Select a character signal for one small hint.</div>
   <div class="legend"><span>[S] owner · [A] admin · [C] CS · [R/B] captains</span><span>● active · ! attention · · absent</span></div>
 </main>
@@ -50,8 +58,22 @@
   const glyph = state => state === 'playing' ? '●' : state === 'idle' ? '·' : '›';
   const esc = value => String(value).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   function render(world) {
-    document.getElementById('season').textContent = `${world.season} · beat ${world.beat.count}`;
+    document.getElementById('season').textContent = `LOCAL FAKE WORLD · ${world.season} · beat ${world.beat.count}`;
     document.getElementById('clock').textContent = world.observedAt;
+    const preview = world.previewMatch;
+    document.getElementById('preview-match').innerHTML = preview ? `
+      <div class="preview-line">
+        <span class="${preview.result==='PASS'?'live':'warn'}">${esc(preview.result)}</span>
+        <span>PR #${esc(preview.pullRequest)}</span>
+        <span>event ${esc(preview.event.eventId)} · ${esc(preview.event.status)}</span>
+      </div>
+      <div class="preview-line">
+        <span>${esc(preview.event.startTime)} → ${esc(preview.event.endTime)}</span>
+        <span>Blue ${esc(preview.blueInvitation.status)}</span>
+        <span>check-in R ${esc(preview.checkIns.redCaptain)} · B ${esc(preview.checkIns.blueCaptain)}</span>
+      </div>
+      <div class="source-note">Snapshot from ./club preview match-status at ${esc(preview.observedAt)} · not the fake world below</div>
+    ` : '<span class="dim">· no preview snapshot; run ./club preview match-status</span>';
     document.getElementById('people').innerHTML = Object.entries(world.people).map(([id,p]) =>
       `<div class="person"><button data-id="${esc(id)}">[${esc(p.glyph)}] ${esc(p.name)}</button> <span class="${p.state==='playing'?'live':'dim'}">${glyph(p.state)} ${esc(p.location)} / ${esc(p.state)}</span></div>`
     ).join('');
@@ -74,7 +96,7 @@
       const response = await fetch('/api/world', {cache:'no-store'});
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       render(await response.json());
-      document.getElementById('connection').textContent = '● LOCAL';
+      document.getElementById('connection').textContent = '● LOCAL UI';
     } catch (error) {
       document.getElementById('connection').textContent = '× DISCONNECTED';
       document.getElementById('connection').className = 'warn';

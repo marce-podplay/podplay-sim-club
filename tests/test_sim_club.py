@@ -167,6 +167,21 @@ class SimClubTestCase(unittest.TestCase):
     def test_observatory_serves_world_and_health(self):
         orchestrator = self.orchestrator()
         orchestrator.run_beat(turns=2, now=FIXED_NOW)
+        orchestrator.storage.write_json(
+            orchestrator.storage.state / "preview-match-status.json",
+            {
+                "schemaVersion": 1,
+                "observedAt": "2026-09-24T17:00:00+00:00",
+                "pullRequest": 7200,
+                "result": "WAITING_FOR_START",
+                "event": {"eventId": "event-live", "status": "CONFIRMED"},
+                "blueInvitation": {"status": "ACCEPTED"},
+                "checkIns": {
+                    "redCaptain": "NOT_CHECKED_IN",
+                    "blueCaptain": "NOT_CHECKED_IN",
+                },
+            },
+        )
         server = ObservatoryServer(orchestrator, host="127.0.0.1", port=0)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -184,7 +199,10 @@ class SimClubTestCase(unittest.TestCase):
 
         self.assertEqual({"mode": "fake", "ok": True}, health)
         self.assertEqual("season-001", world["season"])
-        self.assertIn("PREVIEW CLUB // WORLD SIGNAL", page)
+        self.assertEqual("WAITING_FOR_START", world["previewMatch"]["result"])
+        self.assertIn("PODPLAY SIM CLUB // OBSERVATORY", page)
+        self.assertIn("LOCAL FAKE WORLD", page)
+        self.assertIn("PR PREVIEW MATCH", page)
 
 
 class TargetPolicyTestCase(unittest.TestCase):

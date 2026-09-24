@@ -1217,14 +1217,32 @@ def preview_match_status(root: Path) -> int:
         if blue_invitation is None:
             raise PreviewReadError("Blue Captain invitation is missing")
         start_time = datetime.fromisoformat(plan["startTime"].replace("Z", "+00:00"))
+        observed_at = datetime.now(timezone.utc)
         result = classify_match_status(
             blue_invitation,
             owner_invitation,
             start_time,
-            datetime.now(timezone.utc),
+            observed_at,
         )
         owner_check_in = check_in_status(owner_invitation)
         blue_check_in = check_in_status(blue_invitation)
+        storage.write_json(
+            storage.state / "preview-match-status.json",
+            {
+                "schemaVersion": 1,
+                "observedAt": observed_at.isoformat(),
+                "pullRequest": read_policy.pull_request_number,
+                "result": result,
+                "event": event,
+                "blueInvitation": {
+                    "status": blue_invitation["status"],
+                },
+                "checkIns": {
+                    "redCaptain": owner_check_in,
+                    "blueCaptain": blue_check_in,
+                },
+            },
+        )
     except (
         ValueError,
         CredentialsError,
@@ -1241,7 +1259,7 @@ def preview_match_status(root: Path) -> int:
     print(f"slot: {event['startTime']} to {event['endTime']}")
     print(f"Blue invitation: {blue_invitation['status']}")
     print(f"Red check-in: {owner_check_in}; Blue check-in: {blue_check_in}")
-    print("writes: 0")
+    print("remote writes: 0")
     return 0
 
 

@@ -44,7 +44,13 @@ class ObservatoryServer:
                     )
                     return
                 if self.path == "/api/world":
-                    self._json(HTTPStatus.OK, orchestrator.world_view())
+                    world = orchestrator.world_view()
+                    snapshot = orchestrator.storage.load_json(
+                        orchestrator.storage.state / "preview-match-status.json",
+                        default=None,
+                    )
+                    world["previewMatch"] = snapshot if isinstance(snapshot, dict) else None
+                    self._json(HTTPStatus.OK, world)
                     return
                 if self.path == "/api/signals":
                     self._json(
