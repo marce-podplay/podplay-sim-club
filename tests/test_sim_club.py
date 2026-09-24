@@ -19,9 +19,12 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 from podplay_sim_club.actions import ActionValidator, IllegalAction
 from podplay_sim_club.cli import main
 from podplay_sim_club.config import ClubConfig, ConfigurationError, RunMode
+from podplay_sim_club.credentials import CredentialsError, PreviewCredentials
+from podplay_sim_club.firebase_auth import FirebaseAuthenticator
 from podplay_sim_club.fake_preview import FakePreview
 from podplay_sim_club.orchestrator import Orchestrator, SimulatedCrash
 from podplay_sim_club.preview import PreviewAdapter
+from podplay_sim_club.preview_readonly import PreviewReadonlyClient
 from podplay_sim_club.server import ObservatoryServer
 from podplay_sim_club.target_policy import TargetPolicy, TargetPolicyError
 from podplay_sim_club.terminal import render
@@ -249,6 +252,88 @@ class TargetPolicyTestCase(unittest.TestCase):
     def test_unknown_mode_is_rejected(self):
         with self.assertRaises(ConfigurationError):
             ClubConfig.from_environment({"PODPLAY_SIM_MODE": "production"})
+
+
+class PreviewConnectionTestCase(unittest.TestCase):
+    def test_credentials_require_private_permissions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            secrets = root / "secrets"
+            secrets.mkdir()
+            path = secrets / "preview-credentials.json"
+            path.write_text(json.dumps({}), encoding="utf-8")
+            path.chmod(0o644)
+            with self.assertRaises(CredentialsError):
+                PreviewCredentials.load(root)
+
+    def test_firebase_auth_uses_private_cache_then_reuses_it(self):
+        calls = []
+        now = 1_700_000_000
+        payload = base64_url({"exp": now + 3600})
+        token = f"header.{payload}.signature"
+
+        def request_json(url, body):
+            calls.append((url, body))
+            return {
+                "idToken": token,
+                "refreshToken": "refresh-value",
+                "email": "admin@example.test",
+            }
+
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory) / "auth.json"
+            authenticator = FirebaseAuthenticator(cache, request_json, now=lambda: now)
+            first = authenticator.authenticate("admin@example.test", "password", "api-key")
+            second = authenticator.authenticate("admin@example.test", "password", "api-key")
+
+            self.assertEqual("password", first.source)
+            self.assertEqual("cache", second.source)
+            self.assertEqual(1, len(calls))
+            self.assertEqual(0o600, cache.stat().st_mode & 0o777)
+            self.assertNotIn("password", cache.read_text(encoding="utf-8"))
+
+    def test_preview_client_allows_get_but_rejects_other_origin(self):
+        policy = TargetPolicy.from_config(
+            ClubConfig(
+                mode=RunMode.PREVIEW_READONLY,
+                preview_origin=PREVIEW_ORIGIN,
+                allowed_preview_origins=(PREVIEW_ORIGIN,),
+            )
+        )
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return None
+
+            def geturl(self):
+                return PREVIEW_ORIGIN + "/apis/v2/areas"
+
+            def read(self, _limit):
+                return b'{"items":[]}'
+
+        requests = []
+
+        def transport(request, timeout):
+            requests.append((request, timeout))
+            return Response()
+
+        client = PreviewReadonlyClient(policy, "secret-token", transport=transport)
+        result = client.get("/apis/v2/areas")
+        self.assertEqual([], result["items"])
+        self.assertEqual("GET", requests[0][0].method)
+        self.assertEqual("Bearer secret-token", requests[0][0].get_header("Authorization"))
+        with self.assertRaises(TargetPolicyError):
+            client.get("https://example.com/apis/v2/areas")
+
+
+def base64_url(value):
+    import base64
+
+    encoded = base64.urlsafe_b64encode(json.dumps(value).encode("utf-8"))
+    return encoded.decode("ascii").rstrip("=")
 
 
 if __name__ == "__main__":

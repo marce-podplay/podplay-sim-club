@@ -8,7 +8,10 @@ import time
 from typing import List, Optional, Tuple
 
 from .config import ClubConfig, ConfigurationError, RunMode
+from .credentials import CredentialsError, PreviewCredentials
+from .firebase_auth import FirebaseAuthError, FirebaseAuthenticator
 from .orchestrator import Orchestrator
+from .preview_readonly import PreviewReadError, PreviewReadonlyClient, collection_items
 from .server import serve
 from .target_policy import TargetPolicy, TargetPolicyError
 from .terminal import render
@@ -81,6 +84,14 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[mode.value for mode in RunMode],
         help="override PODPLAY_SIM_MODE for this check",
     )
+
+    preview = subparsers.add_parser(
+        "preview", help="perform bounded operations against an approved PR preview"
+    )
+    preview_subcommands = preview.add_subparsers(dest="preview_command", required=True)
+    preview_subcommands.add_parser(
+        "inspect", help="authenticate and summarize the preview using GET requests only"
+    )
     doctor.add_argument(
         "--preview-origin",
         help="override PODPLAY_SIM_PREVIEW_ORIGIN for this check",
@@ -115,6 +126,11 @@ def main(argv: Optional[list] = None) -> int:
             check=False,
         )
         return result.returncode
+
+    if args.command == "preview":
+        if args.preview_command == "inspect":
+            return inspect_preview(root)
+        raise AssertionError(f"unhandled preview command {args.preview_command}")
 
     try:
         if args.command == "doctor":
@@ -225,8 +241,10 @@ def run_doctor(root: Path, config: ClubConfig) -> int:
         checks.append(
             (
                 "preview_adapter_available",
-                False,
-                "network adapter is intentionally not implemented yet",
+                config.mode is RunMode.PREVIEW_READONLY,
+                "GET-only adapter"
+                if config.mode is RunMode.PREVIEW_READONLY
+                else "preview-write adapter is not implemented",
             )
         )
 
@@ -251,6 +269,57 @@ def run_doctor(root: Path, config: ClubConfig) -> int:
         suffix = f" ({detail})" if detail else ""
         print(f"{'PASS' if passed else 'FAIL'} {name}{suffix}")
     return 0 if all(passed for _, passed, _ in checks) else 1
+
+
+def inspect_preview(root: Path) -> int:
+    try:
+        credentials = PreviewCredentials.load(root)
+        policy = TargetPolicy.from_config(credentials.config)
+        auth = FirebaseAuthenticator(
+            root / "secrets" / "preview-auth-cache.json"
+        ).authenticate(
+            credentials.admin_email,
+            credentials.admin_password,
+            credentials.firebase_api_key,
+        )
+        client = PreviewReadonlyClient(policy, auth.id_token)
+        tenant = client.get("/apis/v2/tenants/current")
+        current_user = client.get("/apis/v2/users/current")
+        areas = collection_items(client.get("/apis/v2/areas"))
+        if len(areas) > 50:
+            raise PreviewReadError("preview contains more than the 50-area inspection limit")
+        area_rows = []
+        for area in areas:
+            if not isinstance(area, dict) or not isinstance(area.get("id"), str):
+                raise PreviewReadError("preview area response has an unexpected shape")
+            pods = collection_items(client.get(f"/apis/v2/areas/{area['id']}/pods"))
+            area_rows.append((area.get("displayName") or area.get("name") or area["id"], len(pods)))
+    except (
+        CredentialsError,
+        FirebaseAuthError,
+        PreviewReadError,
+        TargetPolicyError,
+    ) as exc:
+        print(f"ERROR preview inspection: {exc}", file=sys.stderr)
+        return 2
+
+    tenant_name = (
+        tenant.get("displayName") or tenant.get("name") or tenant.get("id")
+        if isinstance(tenant, dict)
+        else "unknown"
+    )
+    roles = current_user.get("roles", []) if isinstance(current_user, dict) else []
+    role_text = ", ".join(str(role) for role in roles) or "none"
+    print(f"PREVIEW READ-ONLY // PR #{policy.pull_request_number}")
+    print(f"target: {policy.target_origin}")
+    print(f"auth: {auth.source} ({auth.email})")
+    print(f"tenant: {tenant_name}")
+    print(f"identity roles: {role_text}")
+    print(f"areas: {len(area_rows)}")
+    for name, pod_count in area_rows:
+        print(f"- {name}: {pod_count} pods")
+    print("writes: 0")
+    return 0
 
 
 if __name__ == "__main__":

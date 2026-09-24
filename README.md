@@ -4,9 +4,9 @@ PodPlay Sim Club is a persistent fictional tenant whose characters will exercise
 an approved PodPlay PR preview, talk to one another, try release features, and
 leave inspectable evidence when something does not work.
 
-The current implementation is the dependency-free **fake-world plus target
-safety milestone**. It does not contact PodPlay, Firebase, Reflag, shared
-staging, or production.
+The current implementation is the dependency-free **fake-world plus read-only
+preview inspection milestone**. It never contacts Reflag, shared staging, or
+production.
 
 ## What works now
 
@@ -24,6 +24,8 @@ staging, or production.
 - explicit `fake`, `preview-readonly`, and `preview-write` configuration modes;
 - exact-origin PR-preview allowlisting with shared-staging and production denial;
 - cross-origin request and redirect rejection ready for the future HTTP client.
+- Firebase password/refresh authentication with a private local token cache;
+- an origin-locked, GET-only preview inspector for tenant, identity, areas, and pods.
 
 Actors are deterministic fixtures in this milestone. A later milestone will
 replace one actor turn at a time with a short-lived model invocation while
@@ -81,10 +83,9 @@ rehydrates the fake preview, and starts a new season.
 ./club test
 ```
 
-## Preview target preflight
+## Preview target preflight and inspection
 
-Fake mode remains the only executable adapter. Target configuration can already
-be validated without making a network request:
+Target configuration can be validated without making a network request:
 
 ```console
 preview_origin=https://podify-pr-5207-staging-main-service-example-uk.a.run.app
@@ -94,10 +95,38 @@ preview_origin=https://podify-pr-5207-staging-main-service-example-uk.a.run.app
   --allow-preview-origin "$preview_origin"
 ```
 
-The target-policy check will pass for a recognized, exactly allowlisted PR
-preview. The complete doctor command will still fail with
-`preview_adapter_available` until the read-only HTTP adapter is implemented.
-This is intentional. Supplying a URL cannot activate network access.
+The target-policy check passes only for a recognized, exactly allowlisted PR
+preview. Supplying a URL alone cannot activate network access.
+
+For the first read-only connection, create the ignored file
+`secrets/preview-credentials.json` with mode `0600`:
+
+```json
+{
+  "schemaVersion": 1,
+  "mode": "preview-readonly",
+  "previewOrigin": "https://podify-pr-0000-staging-main-service-example-uk.a.run.app",
+  "allowedPreviewOrigins": [
+    "https://podify-pr-0000-staging-main-service-example-uk.a.run.app"
+  ],
+  "firebaseApiKey": "the staging Firebase web API key",
+  "admin": {
+    "email": "admin@example.test",
+    "password": "local-only"
+  }
+}
+```
+
+Then run:
+
+```console
+./club preview inspect
+```
+
+This command performs only `GET` requests under `/apis/v2/`, refuses redirects,
+caps response sizes and area fan-out, and prints a small summary. ID and refresh
+tokens are cached in ignored `secrets/preview-auth-cache.json` with mode `0600`;
+passwords and tokens are never rendered or copied into simulator state.
 
 Configuration may alternatively be exported using the variable names in
 `.env.example`. The application does not automatically load `.env` or another
