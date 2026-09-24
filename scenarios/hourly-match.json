@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "hourly-match",
+  "cadence": "hourly",
+  "podId": "pod-1",
+  "teams": ["red-captain", "blue-captain"],
+  "turnBudget": 10,
+  "allowedActions": [
+    "book_match",
+    "invite_player",
+    "accept_invitation",
+    "check_in"
+  ]
+}

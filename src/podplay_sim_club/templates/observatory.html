@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Preview Club // World Signal</title>
+  <style>
+    :root { color-scheme: dark; --bg:#07110d; --panel:#0b1912; --line:#244c35; --dim:#71917d; --text:#d7f7df; --live:#62f68d; --warn:#f0c65b; --cold:#70b7ff; }
+    * { box-sizing: border-box; }
+    body { margin:0; padding:18px; background:var(--bg); color:var(--text); font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; }
+    main { max-width:1100px; margin:0 auto; }
+    header, .row, .legend { display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap; }
+    header { border-bottom:1px solid var(--line); padding-bottom:12px; }
+    h1 { margin:0; color:var(--live); font-size:16px; font-weight:500; letter-spacing:.08em; }
+    .dim { color:var(--dim); } .live { color:var(--live); } .warn { color:var(--warn); } .cold { color:var(--cold); }
+    .grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin:14px 0; }
+    section { border:1px solid var(--line); background:var(--panel); padding:12px; min-height:170px; }
+    section h2 { margin:0 0 12px; color:var(--dim); font-size:13px; font-weight:400; letter-spacing:.06em; }
+    .person, .pod, .signal, .booking { padding:5px 0; }
+    .person button { color:var(--text); border:0; padding:0; background:transparent; font:inherit; text-decoration:underline dotted; cursor:pointer; }
+    .pod { border-top:1px solid var(--line); display:flex; justify-content:space-between; gap:8px; }
+    .signal time { color:var(--dim); margin-right:8px; }
+    .trace { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; }
+    .booking { border-top:2px solid var(--cold); }
+    .booking.current { border-color:var(--live); }
+    #detail { margin-top:14px; min-height:44px; padding:10px 12px; border-left:3px solid var(--live); background:var(--panel); }
+    .legend { margin-top:12px; color:var(--dim); }
+    @media(max-width:760px){ .grid{grid-template-columns:1fr;} }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div><h1>PREVIEW CLUB // WORLD SIGNAL</h1><span id="season" class="dim">loading</span></div>
+    <div><span id="connection" class="live">● LOCAL</span> <span id="clock" class="dim"></span></div>
+  </header>
+
+  <div class="grid">
+    <section><h2>CLUB / NETWORK</h2><div id="people"></div></section>
+    <section><h2>COURT ZONE</h2><div id="pods"></div></section>
+    <section><h2>LATEST SIGNALS</h2><div id="signals"></div></section>
+  </div>
+
+  <section><h2>BOOKING TRACE</h2><div id="bookings" class="trace"></div></section>
+  <div id="detail" aria-live="polite"><span class="live">›</span> Select a character signal for one small hint.</div>
+  <div class="legend"><span>[S] owner · [A] admin · [C] CS · [R/B] captains</span><span>● active · ! attention · · absent</span></div>
+</main>
+<script>
+  const detail = document.getElementById('detail');
+  const glyph = state => state === 'playing' ? '●' : state === 'idle' ? '·' : '›';
+  const esc = value => String(value).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  function render(world) {
+    document.getElementById('season').textContent = `${world.season} · beat ${world.beat.count}`;
+    document.getElementById('clock').textContent = world.observedAt;
+    document.getElementById('people').innerHTML = Object.entries(world.people).map(([id,p]) =>
+      `<div class="person"><button data-id="${esc(id)}">[${esc(p.glyph)}] ${esc(p.name)}</button> <span class="${p.state==='playing'?'live':'dim'}">${glyph(p.state)} ${esc(p.location)} / ${esc(p.state)}</span></div>`
+    ).join('');
+    document.querySelectorAll('[data-id]').forEach(button => button.onclick = () => {
+      const p = world.people[button.dataset.id];
+      detail.innerHTML = `<span class="live">›</span> ${esc(p.name)} · ${esc(p.location)} · ${esc(p.state)} · ${p.unread} unread`;
+    });
+    document.getElementById('pods').innerHTML = Object.values(world.pods).map(p =>
+      `<div class="pod"><span>${esc(p.name)}</span><span class="${p.state==='occupied'?'live':'dim'}">${esc(p.state)}</span></div>`
+    ).join('');
+    document.getElementById('signals').innerHTML = [...world.signals].reverse().slice(0,6).map(s =>
+      `<div class="signal"><time>${esc(s.observedAt.slice(11,16))}</time><b>${esc(s.kind)}</b> ${esc(s.text)}</div>`
+    ).join('') || '<div class="dim">· no signals</div>';
+    document.getElementById('bookings').innerHTML = world.bookings.map(b =>
+      `<div class="booking ${esc(b.state)}"><span class="${b.state==='current'?'live':'dim'}">${esc(b.occurrenceKey)}</span><br>${esc(b.podId)} · ${b.checkedIn.length}/${b.participants.length} checked in</div>`
+    ).join('') || '<div class="dim">· no bookings yet</div>';
+  }
+  async function refresh() {
+    try {
+      const response = await fetch('/api/world', {cache:'no-store'});
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      render(await response.json());
+      document.getElementById('connection').textContent = '● LOCAL';
+    } catch (error) {
+      document.getElementById('connection').textContent = '× DISCONNECTED';
+      document.getElementById('connection').className = 'warn';
+    }
+  }
+  refresh(); setInterval(refresh, 2000);
+</script>
+</body>
+</html>

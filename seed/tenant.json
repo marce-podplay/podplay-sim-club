@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "fingerprint": "preview-club-v1",
+  "club": {
+    "id": "preview-club",
+    "name": "Preview Club",
+    "timezone": "America/New_York",
+    "pods": ["pod-1", "pod-2"]
+  },
+  "users": {
+    "sofia": {
+      "roles": ["ADMIN", "OWNER"],
+      "virtualCredits": 500,
+      "packages": ["preview-owner-pass"]
+    },
+    "alex": {
+      "roles": ["PODPLAY_ADMIN"],
+      "virtualCredits": 0,
+      "packages": []
+    },
+    "red-captain": {
+      "roles": ["PLAYER"],
+      "virtualCredits": 200,
+      "packages": ["preview-hourly-pass"]
+    },
+    "blue-captain": {
+      "roles": ["PLAYER"],
+      "virtualCredits": 200,
+      "packages": ["preview-hourly-pass"]
+    }
+  }
+}
