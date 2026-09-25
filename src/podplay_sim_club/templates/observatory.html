@@ -20,6 +20,10 @@
     .grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin:14px 0; }
     section { border:1px solid var(--line); background:var(--panel); padding:14px; min-height:170px; }
     section h2 { margin:0 0 12px; color:var(--dim); font-size:13px; font-weight:400; letter-spacing:.06em; }
+    .panel-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .copy-button { border:1px solid var(--line); background:transparent; color:var(--live); padding:5px 9px; font:inherit; cursor:pointer; }
+    .copy-button:hover, .copy-button:focus-visible { border-color:var(--live); background:var(--bg); outline:none; }
+    .copy-status { margin-left:8px; color:var(--live); }
     .preview-hero { min-height:145px; border-color:var(--live); display:grid; align-content:center; }
     .preview-result { font-size:24px; letter-spacing:.06em; }
     .preview-meta { margin-top:8px; color:var(--dim); }
@@ -68,7 +72,10 @@
       <section><h2>PLAYERS</h2><div id="preview-players"></div></section>
       <section><h2>EVIDENCE</h2><div id="preview-evidence"></div></section>
     </div>
-    <section class="next-panel"><h2>NEXT SIGNAL</h2><div id="preview-next"></div></section>
+    <section class="next-panel">
+      <h2 class="panel-heading"><span>NEXT SIGNAL</span><span><button id="copy-next" class="copy-button" type="button">COPY TEXT</button><span id="copy-status" class="copy-status" role="status" aria-live="polite"></span></span></h2>
+      <div id="preview-next"></div>
+    </section>
     <div id="preview-source" class="source-note"></div>
   </div>
 
@@ -89,6 +96,28 @@
   const esc = value => String(value).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   let currentView = 'preview';
   let currentWorld = null;
+
+  function setHtml(id, html) {
+    const element = document.getElementById(id);
+    if (element.innerHTML !== html) element.innerHTML = html;
+  }
+
+  async function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+    const temporary = document.createElement('textarea');
+    temporary.value = text;
+    temporary.setAttribute('readonly', '');
+    temporary.style.position = 'fixed';
+    temporary.style.opacity = '0';
+    document.body.appendChild(temporary);
+    temporary.select();
+    const copied = document.execCommand('copy');
+    temporary.remove();
+    if (!copied) throw new Error('copy failed');
+  }
 
   function switchView(view) {
     currentView = view;
@@ -132,57 +161,57 @@
 
   function renderPreview(preview, previewMatches) {
     const rows = previewMatches && Array.isArray(previewMatches.matches) ? previewMatches.matches : [];
-    document.getElementById('preview-matches').innerHTML = rows.map(match => `
+    setHtml('preview-matches', rows.map(match => `
       <div class="booking ${match.active?'current':''}">
         <span class="${match.active?'live':'dim'}">${match.active?'●':'·'} ${esc(match.startTime || 'time unknown')}</span><br>
         ${esc(match.phase || 'unknown')} · ${esc(match.eventStatus || 'event pending')}<br>
         <span class="dim">${esc(match.occurrenceKey)}</span>
-      </div>`).join('') || '<div class="dim">· no preview matches recorded</div>';
+      </div>`).join('') || '<div class="dim">· no preview matches recorded</div>');
     if (!preview) {
-      document.getElementById('preview-hero').innerHTML = '<span class="dim">· no preview snapshot; run ./club preview match-status</span>';
-      document.getElementById('preview-match').innerHTML = '<span class="dim">· unknown</span>';
-      document.getElementById('preview-venue').innerHTML = '<span class="dim">· unknown</span>';
-      document.getElementById('preview-players').innerHTML = '<span class="dim">· unknown</span>';
-      document.getElementById('preview-evidence').innerHTML = '<span class="dim">· unknown</span>';
-      document.getElementById('preview-next').innerHTML = '<code>./club preview match-status</code>';
+      setHtml('preview-hero', '<span class="dim">· no preview snapshot; run ./club preview match-status</span>');
+      setHtml('preview-match', '<span class="dim">· unknown</span>');
+      setHtml('preview-venue', '<span class="dim">· unknown</span>');
+      setHtml('preview-players', '<span class="dim">· unknown</span>');
+      setHtml('preview-evidence', '<span class="dim">· unknown</span>');
+      setHtml('preview-next', '<code>./club preview match-status</code>');
       document.getElementById('preview-source').textContent = '';
       return;
     }
     const venue = preview.venue || {};
     const journey = preview.journey || {};
     const resultClass = preview.result === 'PASS' ? 'live' : 'warn';
-    document.getElementById('preview-hero').innerHTML = `
+    setHtml('preview-hero', `
       <div class="preview-result ${resultClass}">${esc(preview.result)}</div>
-      <div class="preview-meta">PR #${esc(preview.pullRequest)} · event ${esc(preview.event.eventId)} · ${esc(preview.event.status)}</div>`;
-    document.getElementById('preview-venue').innerHTML = `
+      <div class="preview-meta">PR #${esc(preview.pullRequest)} · event ${esc(preview.event.eventId)} · ${esc(preview.event.status)}</div>`);
+    setHtml('preview-venue', `
       <div class="fact"><span class="dim">AREA</span><strong>${esc(venue.areaName || 'unknown')}</strong></div>
       <div class="fact"><span class="dim">POD</span><strong>${esc(venue.podName || 'unknown')}</strong></div>
       <div class="fact"><span class="dim">COURT</span><strong>${esc(venue.courtAssignment || 'unknown')}</strong></div>
-      <div class="fact"><span class="dim">VENUE TIMEZONE</span><strong>${esc(venue.timezone || 'unknown')}</strong></div>`;
-    document.getElementById('preview-match').innerHTML = `
+      <div class="fact"><span class="dim">VENUE TIMEZONE</span><strong>${esc(venue.timezone || 'unknown')}</strong></div>`);
+    setHtml('preview-match', `
       <div class="fact"><span class="dim">VENUE LOCAL</span><strong>${esc(formatTime(preview.event.startTime, venue.timezone))}</strong><span class="dim">to ${esc(formatTime(preview.event.endTime, venue.timezone))}</span></div>
       <div class="fact"><span class="dim">YOUR LOCAL TIME</span><strong>${esc(formatTime(preview.event.startTime))}</strong><span class="dim">to ${esc(formatTime(preview.event.endTime))}</span></div>
-      <div class="fact"><span class="dim">UTC</span><strong>${esc(preview.event.startTime)} → ${esc(preview.event.endTime)}</strong></div>`;
-    document.getElementById('preview-players').innerHTML = `
+      <div class="fact"><span class="dim">UTC</span><strong>${esc(preview.event.startTime)} → ${esc(preview.event.endTime)}</strong></div>`);
+    setHtml('preview-players', `
       <div class="fact"><span class="live">● Red Captain</span><strong>BOOKING OWNER</strong></div>
       <div class="fact"><span class="live">● Blue Captain</span><strong>${esc(preview.blueInvitation.status)}</strong></div>
       ${checkInFact('Red check-in', preview.checkIns.redCaptain)}
-      ${checkInFact('Blue check-in', preview.checkIns.blueCaptain)}`;
+      ${checkInFact('Blue check-in', preview.checkIns.blueCaptain)}`);
     const orderTotal = typeof journey.orderTotal === 'number'
       ? `${journey.currency || ''} ${journey.orderTotal.toFixed(2)}`.trim()
       : 'unknown';
-    document.getElementById('preview-evidence').innerHTML = `
+    setHtml('preview-evidence', `
       <div class="fact"><span class="dim">JOURNEY PHASE</span><strong>${esc(journey.phase || 'unknown')}</strong></div>
       <div class="fact"><span class="dim">BOOKED + ACCEPTED</span><strong>${esc(formatTime(journey.preparedAt))}</strong></div>
       <div class="fact"><span class="dim">EVENT</span><strong>${esc(preview.event.type || 'unknown')} / ${esc(preview.event.subtype || 'unknown')}</strong></div>
       <div class="fact"><span class="dim">ORDER</span><strong>${esc(orderTotal)} · ${esc(journey.virtualCreditsUsed ?? 'unknown')} credits used</strong></div>
-      <div class="fact"><span class="dim">OCCURRENCE</span><strong>${esc(journey.occurrenceKey || 'unknown')}</strong></div>`;
+      <div class="fact"><span class="dim">OCCURRENCE</span><strong>${esc(journey.occurrenceKey || 'unknown')}</strong></div>`);
     const action = preview.result === 'PASS'
       ? 'Match assertions passed. No action required.'
       : preview.result === 'SCHEDULED'
         ? `Booked and accepted on ${formatTime(journey.preparedAt)}. Play on ${formatTime(preview.event.startTime, venue.timezone)} (${formatTime(preview.event.startTime)} for you), then run the check-in dry run.`
         : 'Run ./club preview check-in --dry-run and review the result.';
-    document.getElementById('preview-next').innerHTML = `<div class="fact next-action">${esc(action)}</div><div class="fact"><code>./club preview match-status</code><strong>SAFE · ZERO REMOTE WRITES</strong></div>`;
+    setHtml('preview-next', `<div class="fact next-action">${esc(action)}</div><div class="fact"><code>./club preview match-status</code><strong>SAFE · ZERO REMOTE WRITES</strong></div>`);
     document.getElementById('preview-source').textContent = `Snapshot refreshed ${preview.observedAt} (${snapshotAge(preview.observedAt)}). Use match-status to refresh it; this view does not poll the preview API.`;
   }
 
@@ -211,6 +240,17 @@
   document.querySelectorAll('[data-view]').forEach(button => {
     button.onclick = () => switchView(button.dataset.view);
   });
+  document.getElementById('copy-next').onclick = async () => {
+    const status = document.getElementById('copy-status');
+    const text = document.getElementById('preview-next').innerText.trim();
+    try {
+      await copyText(text);
+      status.textContent = 'COPIED';
+    } catch (_error) {
+      status.textContent = 'COPY FAILED';
+    }
+    window.setTimeout(() => { status.textContent = ''; }, 1600);
+  };
   async function refresh() {
     try {
       const response = await fetch('/api/world', {cache:'no-store'});

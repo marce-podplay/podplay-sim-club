@@ -257,6 +257,9 @@ class SimClubTestCase(unittest.TestCase):
         self.assertIn("REMOTE PRODUCT STATE", page)
         self.assertIn('data-view="preview" aria-selected="true"', page)
         self.assertIn('id="fake-view" hidden', page)
+        self.assertIn('id="copy-next"', page)
+        self.assertIn("navigator.clipboard.writeText", page)
+        self.assertIn("if (element.innerHTML !== html)", page)
 
 
 class PreviewMatchLedgerTestCase(unittest.TestCase):
