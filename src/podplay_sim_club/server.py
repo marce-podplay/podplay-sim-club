@@ -63,6 +63,7 @@ class ObservatoryServer:
                             else {"activeOccurrenceKey": None, "matches": []}
                         ),
                         "messages": _recent_messages(orchestrator),
+                        "storylines": _active_storylines(orchestrator),
                     })
                     return
                 if self.path == "/health":
@@ -165,6 +166,44 @@ def _actor_directory(orchestrator: Orchestrator):
                 if isinstance(actor_id, str) and isinstance(name, str):
                     directory[actor_id] = name
     return directory
+
+
+def _active_storylines(orchestrator: Orchestrator):
+    """Expose current character agreements separately from created product events."""
+    ledger = orchestrator.storage.load_json(
+        orchestrator.storage.state / "booking-intents.json", default={}
+    )
+    if not isinstance(ledger, dict) or not isinstance(ledger.get("intents"), dict):
+        return []
+    directory = _actor_directory(orchestrator)
+    active_id = ledger.get("activeIntentId")
+    rows = []
+    for intent_id, intent in ledger["intents"].items():
+        if not isinstance(intent, dict) or intent.get("status") in {"booked", "complete", "cancelled"}:
+            continue
+        participants = intent.get("participants")
+        if not isinstance(participants, list):
+            continue
+        labels = [directory.get(actor_id, actor_id) for actor_id in participants if isinstance(actor_id, str)]
+        rows.append(
+            {
+                "id": intent_id,
+                "active": intent_id == active_id,
+                "status": intent.get("status", "unknown"),
+                "reason": intent.get("reason", "character agreement"),
+                "journey": intent.get("journey", "planning"),
+                "participants": labels,
+                "durationMinutes": (
+                    intent.get("constraints", {}).get("durationMinutes")
+                    if isinstance(intent.get("constraints"), dict)
+                    else None
+                ),
+                "nextAction": intent.get("nextAction", "await lead review"),
+                "fallbackJourney": intent.get("fallbackJourney"),
+            }
+        )
+    rows.sort(key=lambda row: (not row["active"], row["id"]))
+    return rows
 
 
 def serve(

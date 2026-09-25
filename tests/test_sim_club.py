@@ -374,6 +374,24 @@ class SimClubTestCase(unittest.TestCase):
             {"id": "signal-1", "kind": "invite_sent", "from": "red-captain", "to": ["blue-captain"], "observedAt": "2026-09-25T12:00:00Z"},
         )
         orchestrator.storage.write_json(
+            orchestrator.storage.state / "booking-intents.json",
+            {
+                "schemaVersion": 1,
+                "activeIntentId": "intent:team-challenge:andy-vs-kyo",
+                "intents": {
+                    "intent:team-challenge:andy-vs-kyo": {
+                        "id": "intent:team-challenge:andy-vs-kyo",
+                        "status": "agreed",
+                        "reason": "team_rivalry_doubles",
+                        "journey": "customer_team_signup",
+                        "participants": ["red-captain", "blue-captain", "kyo-captain", "benimaru"],
+                        "constraints": {"durationMinutes": 60},
+                        "nextAction": "seed_japan_team_then_plan_team_signup",
+                    }
+                },
+            },
+        )
+        orchestrator.storage.write_json(
             orchestrator.storage.state / "preview-matches.json",
             {
                 "schemaVersion": 2,
@@ -415,12 +433,17 @@ class SimClubTestCase(unittest.TestCase):
         self.assertEqual(1, len(preview["previewMatches"]["matches"]))
         self.assertEqual("EVT-EVENTLIV", preview["previewMatches"]["matches"][0]["eventCode"])
         self.assertEqual("Andy Bogard", preview["previewMatches"]["matches"][0]["participants"][0]["label"])
+        self.assertEqual(
+            ["Andy Bogard", "Terry Bogard", "Kyo Kusanagi", "Benimaru Nikaido"],
+            preview["storylines"][0]["participants"],
+        )
         self.assertIn("invite_sent", [message["kind"] for message in preview["messages"]])
         self.assertEqual("Andy Bogard", next(message for message in preview["messages"] if message["kind"] == "invite_sent")["fromLabel"])
         self.assertIn("PODPLAY SIM CLUB // OBSERVATORY", page)
         self.assertIn("REMOTE PRODUCT STATE", page)
         self.assertIn("CLUB MESSAGE STREAM", page)
         self.assertIn("BOOKING / EVENT DETAIL", page)
+        self.assertIn("CURRENT STORYLINES", page)
         self.assertIn('id="copy-next"', page)
         self.assertIn("navigator.clipboard.writeText", page)
         self.assertIn("if (element.innerHTML !== html)", page)
