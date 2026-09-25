@@ -150,6 +150,13 @@ membership and booking limits, and searches for the nearest legal slot at least
 total because locking fees and tax may be added later. Its sanitized result is
 saved in the ignored file `state/preview-readiness.json`.
 
+Nearest-slot selection is a temporary operator-controlled bootstrap path. The
+long-running simulation is intended to create bookings only after changing
+character needs produce a proposal, conversation, and agreement. Scenario
+inputs can make that interaction happen quickly by shaping need pressure and
+overlapping availability, while the lead continues to enforce real preview
+time and product constraints.
+
 `preview booking-preview` refreshes that gate and then sends one tightly fixed
 `type: PREVIEW` calculation for Red Captain. The server implementation returns
 before the persistent `ORDER` branch. The local client rejects `ORDER`, multiple
