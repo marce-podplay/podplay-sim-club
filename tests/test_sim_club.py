@@ -464,6 +464,41 @@ class PreviewConnectionTestCase(unittest.TestCase):
         self.assertEqual("fixed", result["tableId"])
         self.assertEqual(15.0, result["rate"])
 
+    def test_candidate_session_chooses_nearest_after_safety_lead(self):
+        sessions = [
+            {
+                "id": "later",
+                "status": "AVAILABLE",
+                "tablesLeft": 1,
+                "startTime": "2026-09-24T18:00:00Z",
+                "endTime": "2026-09-24T18:30:00Z",
+                "availableTables": {"items": [{"id": "later-table", "rate": 0}]},
+            },
+            {
+                "id": "too-soon",
+                "status": "AVAILABLE",
+                "tablesLeft": 1,
+                "startTime": "2026-09-24T17:10:00Z",
+                "endTime": "2026-09-24T17:40:00Z",
+                "availableTables": {"items": [{"id": "soon-table", "rate": 0}]},
+            },
+            {
+                "id": "nearest",
+                "status": "AVAILABLE",
+                "tablesLeft": 1,
+                "startTime": "2026-09-24T17:40:00Z",
+                "endTime": "2026-09-24T18:10:00Z",
+                "availableTables": {"items": [{"id": "near-table", "rate": 0}]},
+            },
+        ]
+
+        result = select_candidate_session(
+            sessions,
+            not_before=datetime(2026, 9, 24, 17, 30, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual("nearest", result["sessionId"])
+
     def test_booking_evaluator_sends_only_fixed_preview_payload(self):
         policy = TargetPolicy.from_config(
             ClubConfig(

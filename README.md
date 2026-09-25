@@ -145,8 +145,8 @@ passwords and tokens are never rendered or copied into simulator state.
 
 `preview readiness` is also GET-only. It verifies each seeded actor, distinguishes
 a real saved payment method from the always-present user link reference, reads
-membership and booking limits, and searches pod-local dates from day +2 through
-day +14 for a legal slot. The grid rate is not treated as the final checkout
+membership and booking limits, and searches for the nearest legal slot at least
+30 minutes from now, through day +14. The grid rate is not treated as the final checkout
 total because locking fees and tax may be added later. Its sanitized result is
 saved in the ignored file `state/preview-readiness.json`.
 

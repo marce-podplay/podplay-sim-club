@@ -570,7 +570,7 @@ def inspect_readiness(root: Path) -> int:
             f"({candidate['periodType']}, rate={candidate['rate']:.2f})"
         )
     else:
-        print("candidate: none found from day +2 through day +14")
+        print("candidate: none found from now +30m through day +14")
     print(f"waiver: {'required' if report['waiverRequired'] else 'not required by tenant settings'}")
     status = "READY" if report["readyForBookingPreview"] else "BLOCKED"
     print(f"booking preview gate: {status}")
@@ -1240,6 +1240,15 @@ def preview_match_status(root: Path) -> int:
         )
         owner_check_in = check_in_status(owner_invitation)
         blue_check_in = check_in_status(blue_invitation)
+        previous_snapshot = storage.load_json(
+            storage.state / "preview-match-status.json", default={}
+        )
+        previous_venue = (
+            previous_snapshot.get("venue")
+            if isinstance(previous_snapshot, dict)
+            and isinstance(previous_snapshot.get("venue"), dict)
+            else {}
+        )
         readiness = storage.load_json(
             storage.state / "preview-readiness.json", default={}
         )
@@ -1255,9 +1264,6 @@ def preview_match_status(root: Path) -> int:
         ):
             candidate = {}
         order = state.get("order") if isinstance(state.get("order"), dict) else {}
-        previous_snapshot = storage.load_json(
-            storage.state / "preview-match-status.json", default={}
-        )
         previous_journey = (
             previous_snapshot.get("journey")
             if isinstance(previous_snapshot, dict)
@@ -1270,6 +1276,17 @@ def preview_match_status(root: Path) -> int:
             prepared_at = datetime.fromtimestamp(
                 match_path.stat().st_mtime, timezone.utc
             ).isoformat()
+        court_assignment = (
+            "Auto-assigned court"
+            if candidate.get("tableType") == "AUTO"
+            else candidate.get("tableType")
+            or previous_venue.get("courtAssignment")
+            or (
+                "Auto-assigned court"
+                if "@auto@" in str(plan.get("tableId") or "")
+                else None
+            )
+        )
         storage.write_json(
             storage.state / "preview-match-status.json",
             {
@@ -1282,13 +1299,12 @@ def preview_match_status(root: Path) -> int:
                     "areaName": location.get("areaName"),
                     "podName": location.get("podName"),
                     "timezone": location.get("timezone"),
-                    "courtAssignment": (
-                        "Auto-assigned court"
-                        if candidate.get("tableType") == "AUTO"
-                        else candidate.get("tableType")
-                    ),
-                    "periodType": candidate.get("periodType"),
-                    "tablesLeftAtSelection": candidate.get("tablesLeft"),
+                    "courtAssignment": court_assignment,
+                    "periodType": candidate.get("periodType")
+                    or previous_venue.get("periodType"),
+                    "tablesLeftAtSelection": candidate.get("tablesLeft")
+                    if candidate
+                    else previous_venue.get("tablesLeftAtSelection"),
                 },
                 "journey": {
                     "phase": state.get("phase"),
@@ -1328,13 +1344,8 @@ def preview_match_status(root: Path) -> int:
     print(f"venue: {venue or plan['podId']}")
     if location.get("timezone"):
         print(f"venue timezone: {location['timezone']}")
-    if candidate.get("tableType"):
-        court = (
-            "auto-assigned court"
-            if candidate["tableType"] == "AUTO"
-            else candidate["tableType"]
-        )
-        print(f"court: {court}")
+    if court_assignment:
+        print(f"court: {court_assignment.lower()}")
     print(f"slot: {event['startTime']} to {event['endTime']}")
     print(f"Blue invitation: {blue_invitation['status']}")
     print(f"Red check-in: {owner_check_in}; Blue check-in: {blue_check_in}")

@@ -106,6 +106,12 @@ def inspect_preview_readiness(
         "waiverRequired": waiver_required,
         "actors": actors,
         "candidateSession": candidate,
+        "candidateSelection": {
+            "strategy": "NEAREST_FUTURE",
+            "safetyLeadMinutes": 30,
+            "firstDayOffset": 0,
+            "lastDayOffset": 14,
+        },
         "gates": gates,
         "blockers": blockers,
         "readyForBookingPreview": not blockers,
@@ -141,24 +147,30 @@ def find_candidate_session(
     pod_id: str,
     timezone_name: str,
     now: datetime,
-    first_day_offset: int = 2,
+    first_day_offset: int = 0,
     last_day_offset: int = 14,
+    safety_lead_minutes: int = 30,
 ) -> Optional[Dict[str, Any]]:
     try:
         local_now = _utc(now).astimezone(ZoneInfo(timezone_name))
     except ZoneInfoNotFoundError as exc:
         raise PreviewReadError(f"pod timezone is not recognized: {timezone_name}") from exc
+    not_before = _utc(now) + timedelta(minutes=safety_lead_minutes)
     for offset in range(first_day_offset, last_day_offset + 1):
         operating_date = (local_now.date() + timedelta(days=offset)).isoformat()
         query = urlencode({"podId": pod_id, "operatingDate": operating_date})
         sessions = collection_items(client.get(f"/apis/v2/sessions?{query}"))
-        candidate = select_candidate_session(sessions)
+        candidate = select_candidate_session(sessions, not_before=not_before)
         if candidate is not None:
             return candidate
     return None
 
 
-def select_candidate_session(sessions: list) -> Optional[Dict[str, Any]]:
+def select_candidate_session(
+    sessions: list,
+    not_before: Optional[datetime] = None,
+) -> Optional[Dict[str, Any]]:
+    candidates = []
     for session in sessions:
         if (
             not isinstance(session, dict)
@@ -166,6 +178,15 @@ def select_candidate_session(sessions: list) -> Optional[Dict[str, Any]]:
             or not isinstance(session.get("tablesLeft"), int)
             or session["tablesLeft"] < 1
         ):
+            continue
+        start_time = session.get("startTime")
+        if not isinstance(start_time, str):
+            continue
+        try:
+            start_instant = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if not_before is not None and _utc(start_instant) < _utc(not_before):
             continue
         available_tables = session.get("availableTables")
         table_items = (
@@ -186,7 +207,7 @@ def select_candidate_session(sessions: list) -> Optional[Dict[str, Any]]:
             (table for table in valid_tables if table.get("id") == default_id),
             valid_tables[0],
         )
-        return {
+        candidates.append((start_instant, {
             "sessionId": session.get("id"),
             "operatingDate": session.get("operatingDate"),
             "startTime": session.get("startTime"),
@@ -196,8 +217,11 @@ def select_candidate_session(sessions: list) -> Optional[Dict[str, Any]]:
             "tableId": selected_table.get("id"),
             "tableType": selected_table.get("type"),
             "rate": float(selected_table["rate"]),
-        }
-    return None
+        }))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: _utc(item[0]))
+    return candidates[0][1]
 
 
 def _actor_readiness(
