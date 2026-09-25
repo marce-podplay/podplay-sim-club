@@ -152,11 +152,13 @@ It reads each player's signup first, writes only a missing signup, then reads it
 back. It refuses to run before both the owner event and the promotion exist.
 
 `characters/roster.json` separates stable technical actor IDs from personas.
-The first named pair is Andy Bogard (`red-captain`) and Terry Bogard
-(`blue-captain`); Joe Higashi is defined as their future third teammate without
-creating a product identity yet. Team links express affinity, not a forced
-booking: a pickleball scenario can choose a compatible pair, while a future
-three-player sport can use all three.
+Andy Bogard (`red-captain`) is the current captain and Terry Bogard
+(`blue-captain`) his current compatible teammate. Joe Higashi is their future
+third teammate without a product identity yet. The Japan, Art of Fighting,
+Women Fighters, and Korea teams are also ready as dormant rosters. A captain
+chooses one teammate for a doubles booking; the third team member may appear as
+a guest. Team links express preference rather than a forced booking, and the
+same roster can later support a three-player sport.
 
 A season is the lifetime of one PR-specific preview database. Code can be
 redeployed without starting a new season. Recreating the database from the

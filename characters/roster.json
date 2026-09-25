@@ -1,19 +1,63 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "teams": [
     {
       "id": "bogard-higashi",
       "name": "Bogard-Higashi",
+      "captainId": "andy-bogard",
       "members": ["andy-bogard", "terry-bogard", "joe-higashi"],
-      "sports": {"pickleball": {"preferredTeamSize": 2}, "future_three_player": {"preferredTeamSize": 3}}
+      "sports": {"pickleball": {"preferredTeamSize": 2, "captainInvitesOneTeammate": true, "thirdMemberMayAttendAsGuest": true}, "future_three_player": {"preferredTeamSize": 3}}
+    },
+    {
+      "id": "japan-team",
+      "name": "Japan Team",
+      "captainId": "kyo-kusanagi",
+      "members": ["kyo-kusanagi", "benimaru-nikaido", "goro-daimon"],
+      "sports": {"pickleball": {"preferredTeamSize": 2, "captainInvitesOneTeammate": true, "thirdMemberMayAttendAsGuest": true}, "future_three_player": {"preferredTeamSize": 3}}
+    },
+    {
+      "id": "art-of-fighting",
+      "name": "Art of Fighting Team",
+      "country": "Italy",
+      "captainId": "ryo-sakazaki",
+      "members": ["ryo-sakazaki", "robert-garcia", "takuma-sakazaki"],
+      "sports": {"pickleball": {"preferredTeamSize": 2, "captainInvitesOneTeammate": true, "thirdMemberMayAttendAsGuest": true}}
+    },
+    {
+      "id": "women-fighters",
+      "name": "Women Fighters Team",
+      "country": "Brazil",
+      "captainId": "king",
+      "members": ["king", "mai-shiranui", "yuri-sakazaki"],
+      "sports": {"pickleball": {"preferredTeamSize": 2, "captainInvitesOneTeammate": true, "thirdMemberMayAttendAsGuest": true}}
+    },
+    {
+      "id": "korea-team",
+      "name": "Korea Team",
+      "country": "Korea",
+      "captainId": "kim-kaphwan",
+      "members": ["kim-kaphwan", "chang-koehan", "choi-bounge"],
+      "sports": {"pickleball": {"preferredTeamSize": 2, "captainInvitesOneTeammate": true, "thirdMemberMayAttendAsGuest": true}}
     }
   ],
   "characters": [
     {"id": "sofia-alvarez", "actorId": "sofia", "name": "Sofia Alvarez", "role": "club_owner"},
     {"id": "alex-morgan", "actorId": "alex", "name": "Alex Morgan", "role": "podplay_admin"},
     {"id": "riley-chen", "actorId": "riley", "name": "Riley Chen", "role": "customer_success"},
-    {"id": "andy-bogard", "actorId": "red-captain", "name": "Andy Bogard", "role": "player", "teamIds": ["bogard-higashi"], "affinities": ["terry-bogard", "joe-higashi"]},
+    {"id": "andy-bogard", "actorId": "red-captain", "name": "Andy Bogard", "role": "player", "teamIds": ["bogard-higashi"], "affinities": ["terry-bogard", "joe-higashi"], "captainOf": ["bogard-higashi"]},
     {"id": "terry-bogard", "actorId": "blue-captain", "name": "Terry Bogard", "role": "player", "teamIds": ["bogard-higashi"], "affinities": ["andy-bogard", "joe-higashi"]},
-    {"id": "joe-higashi", "name": "Joe Higashi", "role": "future_player", "teamIds": ["bogard-higashi"], "affinities": ["andy-bogard", "terry-bogard"]}
+    {"id": "joe-higashi", "name": "Joe Higashi", "role": "future_player", "teamIds": ["bogard-higashi"], "affinities": ["andy-bogard", "terry-bogard"]},
+    {"id": "kyo-kusanagi", "name": "Kyo Kusanagi", "role": "future_player", "teamIds": ["japan-team"], "affinities": ["benimaru-nikaido", "goro-daimon"], "captainOf": ["japan-team"]},
+    {"id": "benimaru-nikaido", "name": "Benimaru Nikaido", "role": "future_player", "teamIds": ["japan-team"], "affinities": ["kyo-kusanagi", "goro-daimon"]},
+    {"id": "goro-daimon", "name": "Goro Daimon", "role": "future_player", "teamIds": ["japan-team"], "affinities": ["kyo-kusanagi", "benimaru-nikaido"]},
+    {"id": "ryo-sakazaki", "name": "Ryo Sakazaki", "role": "future_player", "teamIds": ["art-of-fighting"], "affinities": ["robert-garcia", "takuma-sakazaki"], "captainOf": ["art-of-fighting"]},
+    {"id": "robert-garcia", "name": "Robert Garcia", "role": "future_player", "teamIds": ["art-of-fighting"], "affinities": ["ryo-sakazaki", "takuma-sakazaki"]},
+    {"id": "takuma-sakazaki", "name": "Takuma Sakazaki", "role": "future_player", "teamIds": ["art-of-fighting"], "affinities": ["ryo-sakazaki", "robert-garcia"]},
+    {"id": "king", "name": "King", "role": "future_player", "teamIds": ["women-fighters"], "affinities": ["mai-shiranui", "yuri-sakazaki"], "captainOf": ["women-fighters"]},
+    {"id": "mai-shiranui", "name": "Mai Shiranui", "role": "future_player", "teamIds": ["women-fighters"], "affinities": ["king", "yuri-sakazaki"]},
+    {"id": "yuri-sakazaki", "name": "Yuri Sakazaki", "role": "future_player", "teamIds": ["women-fighters"], "affinities": ["king", "mai-shiranui"]},
+    {"id": "kim-kaphwan", "name": "Kim Kaphwan", "role": "future_player", "teamIds": ["korea-team"], "affinities": ["chang-koehan", "choi-bounge"], "captainOf": ["korea-team"]},
+    {"id": "chang-koehan", "name": "Chang Koehan", "role": "future_player", "teamIds": ["korea-team"], "affinities": ["kim-kaphwan", "choi-bounge"]},
+    {"id": "choi-bounge", "name": "Choi Bounge", "role": "future_player", "teamIds": ["korea-team"], "affinities": ["kim-kaphwan", "chang-koehan"]}
   ]
 }

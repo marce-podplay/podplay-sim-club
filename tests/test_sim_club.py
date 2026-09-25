@@ -77,6 +77,20 @@ class SimClubTestCase(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
+    def test_named_roster_keeps_team_captains_and_pickleball_guest_rules_consistent(self):
+        roster = json.loads((REPO_ROOT / "characters" / "roster.json").read_text())
+        characters = {character["id"]: character for character in roster["characters"]}
+
+        self.assertEqual(2, roster["schemaVersion"])
+        for team in roster["teams"]:
+            self.assertIn(team["captainId"], team["members"])
+            self.assertTrue(all(member in characters for member in team["members"]))
+            pickleball = team["sports"]["pickleball"]
+            self.assertEqual(2, pickleball["preferredTeamSize"])
+            self.assertTrue(pickleball["captainInvitesOneTeammate"])
+            self.assertTrue(pickleball["thirdMemberMayAttendAsGuest"])
+        self.assertEqual("kyo-kusanagi", next(team for team in roster["teams"] if team["id"] == "japan-team")["captainId"])
+
     def orchestrator(self):
         return Orchestrator(self.root)
 
