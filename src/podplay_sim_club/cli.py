@@ -900,6 +900,15 @@ def _sync_world_intent_status(storage: Storage, intent: dict) -> None:
                     for key in ("occurrenceKey", "startTime", "endTime", "blocker")
                     if preview_plan.get(key) is not None
                 }
+            if intent.get("reason") == "owner_priority_announcement":
+                campaign_id = str(intent["id"])[len("intent:") :]
+                for campaign in world.get("campaigns", []):
+                    if isinstance(campaign, dict) and campaign.get("id") == campaign_id:
+                        campaign["status"] = intent.get("status")
+                        booking = intent.get("booking")
+                        if isinstance(booking, dict):
+                            campaign["eventId"] = booking.get("eventId")
+                            campaign["occurrenceKey"] = booking.get("occurrenceKey")
             storage.write_json(storage.world_path, world)
             return
 

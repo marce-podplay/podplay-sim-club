@@ -728,6 +728,13 @@ class Orchestrator:
             )
         world.setdefault("bookingIntents", [])
         world.setdefault("campaigns", [])
+        intent_ledger = load_intent_ledger(self.storage)
+        for campaign in world["campaigns"]:
+            if not isinstance(campaign, dict) or not isinstance(campaign.get("id"), str):
+                continue
+            intent = intent_ledger["intents"].get(f"intent:{campaign['id']}")
+            if isinstance(intent, dict) and isinstance(intent.get("status"), str):
+                campaign["status"] = intent["status"]
         world.setdefault("scenarios", {}).setdefault(
             "needs-match", {"interactions": {}}
         )

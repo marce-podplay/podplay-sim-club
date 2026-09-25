@@ -17,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from podplay_sim_club.actions import ActionValidator, IllegalAction
-from podplay_sim_club.booking_intents import load_intent_ledger
+from podplay_sim_club.booking_intents import load_intent_ledger, save_intent
 from podplay_sim_club.cli import main
 from podplay_sim_club.config import ClubConfig, ConfigurationError, RunMode
 from podplay_sim_club.credentials import CredentialsError, PreviewCredentials
@@ -145,6 +145,11 @@ class SimClubTestCase(unittest.TestCase):
         self.assertEqual("owner_priority_announcement", intent["reason"])
         self.assertEqual(["00:00-24:00"], intent["constraints"]["localWindows"])
         self.assertEqual(1, len(resumed["world"]["campaigns"]))
+        intent["status"] = "booked"
+        save_intent(orchestrator.storage, load_intent_ledger(orchestrator.storage), intent)
+        self.assertEqual(
+            "booked", orchestrator.world_view(FIXED_NOW)["campaigns"][0]["status"]
+        )
         self.assertIn("OWNER CAMPAIGNS", render_needs(resumed["world"]))
 
     def test_orchestrator_uses_the_preview_adapter_boundary(self):
