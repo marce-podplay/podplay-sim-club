@@ -48,6 +48,7 @@ from .preview_payment import (
     wait_for_payment_method,
 )
 from .preview_owner_event import PreviewOwnerEventWriter
+from .preview_event_signup import PreviewEventSignupWriter, find_event_signup
 from .preview_participation import (
     ACCEPTED_STATUSES,
     PreviewAcceptanceEvaluator,
@@ -235,6 +236,14 @@ def build_parser() -> argparse.ArgumentParser:
     preview_open_play_mode.add_argument("--apply", action="store_true")
     preview_open_play.add_argument("--confirm-origin", help="required with --apply; must equal the exact preview origin")
     preview_open_play.add_argument("--intent", help="owner Open Play intent ID; defaults to the active intent")
+    preview_signup = preview_subcommands.add_parser(
+        "signup-open-play", help="reconcile the two named player self-signups after an owner Open Play is promoted"
+    )
+    preview_signup_mode = preview_signup.add_mutually_exclusive_group(required=True)
+    preview_signup_mode.add_argument("--dry-run", action="store_true")
+    preview_signup_mode.add_argument("--apply", action="store_true")
+    preview_signup.add_argument("--confirm-origin", help="required with --apply; must equal the exact preview origin")
+    preview_signup.add_argument("--intent", help="owner Open Play intent ID; defaults to the active intent")
     preview_book.add_argument(
         "--intent",
         help="execute this preview_ready character intent instead of an operator-created plan",
@@ -332,6 +341,8 @@ def main(argv: Optional[list] = None) -> int:
             )
         if args.preview_command == "create-open-play":
             return create_preview_open_play(root, args.apply, args.confirm_origin, args.intent)
+        if args.preview_command == "signup-open-play":
+            return signup_preview_open_play(root, args.apply, args.confirm_origin, args.intent)
         if args.preview_command == "join":
             return join_preview_match(
                 root, args.apply, args.confirm_origin, args.occurrence
@@ -983,6 +994,66 @@ def create_preview_open_play(
     except (BookingIntentError, CredentialsError, FirebaseAuthError, IdentityRegistryError,
             PreviewReadError, PreviewWriteError, TargetPolicyError, ValueError) as exc:
         print(f"ERROR preview Open Play: {exc}", file=sys.stderr)
+        return 2
+
+
+def signup_preview_open_play(
+    root: Path, apply: bool, confirmation: Optional[str], intent_id: Optional[str]
+) -> int:
+    """Let named players self-sign-up only after the owner event is promoted."""
+    storage = Storage(root)
+    try:
+        ledger = load_intent_ledger(storage)
+        selected_id, intent = select_intent(ledger, intent_id)
+        event = intent.get("event")
+        if intent.get("journey") != "owner_open_play" or intent.get("status") not in {"event_created", "players_registered"}:
+            raise PreviewWriteError("Open Play must be created before player signup")
+        if not isinstance(event, dict) or not isinstance(event.get("eventId"), str):
+            raise PreviewWriteError("Open Play event record is missing")
+        promotion_key = f"actor-runtime:season-001:{selected_id.rsplit(':', 1)[-1]}"
+        messages = storage.read_jsonl(storage.channel_path("club"))
+        if not any(row.get("occurrenceKey") == promotion_key and row.get("kind") == "runtime_announcement" for row in messages):
+            raise PreviewWriteError("Open Play must be promoted before player signup")
+        credentials = PreviewCredentials.load(root)
+        read_policy = TargetPolicy.from_config(credentials.config)
+        identities = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure()
+        player_rows = []
+        writes = 0
+        for actor_id in intent.get("participants", []):
+            identity = identities.get(actor_id)
+            if identity is None or not identity.podplay_user_id:
+                raise PreviewWriteError(f"player identity is incomplete: {actor_id}")
+            auth = FirebaseAuthenticator(root / "secrets" / "actor-auth" / f"{actor_id}.json").authenticate(
+                identity.email, identity.password, credentials.firebase_api_key
+            )
+            client = PreviewReadonlyClient(read_policy, auth.id_token)
+            signup = find_event_signup(client, event["eventId"], identity.podplay_user_id)
+            action = "already_registered" if signup else "would_register"
+            if apply and not signup:
+                write_policy = TargetPolicy.from_config(replace(
+                    credentials.config, mode=RunMode.PREVIEW_WRITE,
+                    preview_write_confirmation=confirmation,
+                ))
+                PreviewEventSignupWriter(write_policy, auth.id_token).signup(event["eventId"], identity.podplay_user_id)
+                signup = find_event_signup(client, event["eventId"], identity.podplay_user_id)
+                if not isinstance(signup, dict):
+                    raise PreviewWriteError(f"signup read-back failed for {actor_id}")
+                action, writes = "registered", writes + 1
+            player_rows.append({"actorId": actor_id, "action": action, "signupId": signup.get("id") if isinstance(signup, dict) else None})
+        if apply and all(row["action"] in {"registered", "already_registered"} for row in player_rows):
+            intent["status"] = "players_registered"
+            intent["signups"] = player_rows
+            intent["remoteWrites"] = int(intent.get("remoteWrites", 0)) + writes
+            save_intent(storage, ledger, intent)
+            _sync_world_intent_status(storage, intent)
+        print(f"PREVIEW CLUB OPEN PLAY SIGNUP // {'APPLIED' if apply else 'DRY RUN'} // PR #{read_policy.pull_request_number}")
+        print(f"intent: {selected_id}; event: {event['eventId']}; writes: {writes}")
+        for row in player_rows:
+            print(f"- {row['actorId']}: {row['action']}")
+        return 0
+    except (BookingIntentError, CredentialsError, FirebaseAuthError, IdentityRegistryError,
+            PreviewReadError, PreviewWriteError, TargetPolicyError, ValueError) as exc:
+        print(f"ERROR preview Open Play signup: {exc}", file=sys.stderr)
         return 2
 
 

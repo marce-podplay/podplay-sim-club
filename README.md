@@ -140,6 +140,24 @@ The apply command uses the exact-origin write gate, creates one free listed
 published Open Play, and reads it back before changing the intent to
 `event_created`. A later Sofia turn sends the promotion.
 
+After that promotion, the named players use their own Firebase identities and
+the ordinary event-signup endpoint—not an admin attendee shortcut:
+
+```console
+./club preview signup-open-play --dry-run --intent intent:actor-runtime:season-001:free-hour-001
+./club preview signup-open-play --apply --confirm-origin "$PODPLAY_SIM_PREVIEW_ORIGIN" --intent intent:actor-runtime:season-001:free-hour-001
+```
+
+It reads each player's signup first, writes only a missing signup, then reads it
+back. It refuses to run before both the owner event and the promotion exist.
+
+`characters/roster.json` separates stable technical actor IDs from personas.
+The first named pair is Andy Bogard (`red-captain`) and Terry Bogard
+(`blue-captain`); Joe Higashi is defined as their future third teammate without
+creating a product identity yet. Team links express affinity, not a forced
+booking: a pickleball scenario can choose a compatible pair, while a future
+three-player sport can use all three.
+
 A season is the lifetime of one PR-specific preview database. Code can be
 redeployed without starting a new season. Recreating the database from the
 weekly PingPod staging snapshot does start one. Firebase identities live outside
@@ -194,6 +212,7 @@ Then run:
 ./club preview booking-preview
 ./club preview plan-intent
 ./club preview create-open-play --dry-run
+./club preview signup-open-play --dry-run
 ./club preview fund --dry-run
 ```
 

@@ -79,6 +79,10 @@ def _take_turn(storage: Storage, world: Dict[str, Any], campaign: Dict[str, Any]
         return {"actorId": actor_id, "action": "intent", "detail": "recorded a 60-minute owner Open Play intent", "observedAt": observed_at}
     if actor_id == campaign["owner"] and intent_id in ledger["intents"] and ledger["intents"][intent_id].get("status") == "event_created" and "runtime_announcement" not in kinds:
         return _message(storage, key, observed_at, actor_id, campaign["participants"], campaign["message"], "runtime_announcement", "promoted the published Open Play")
+    if actor_id == "red-captain" and "runtime_announcement" in kinds and "runtime_andy_signup" not in kinds:
+        return _message(storage, key, observed_at, actor_id, [campaign["owner"]], "Andy sees the published Open Play and is ready to self-sign up.", "runtime_andy_signup", "requested self-signup")
+    if actor_id == "blue-captain" and "runtime_announcement" in kinds and "runtime_terry_signup" not in kinds:
+        return _message(storage, key, observed_at, actor_id, [campaign["owner"]], "Terry sees the published Open Play and is ready to self-sign up.", "runtime_terry_signup", "requested self-signup")
     return {"actorId": actor_id, "action": "pass", "detail": "no new relevant information", "observedAt": observed_at}
 
 

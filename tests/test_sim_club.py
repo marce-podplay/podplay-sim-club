@@ -29,6 +29,7 @@ from podplay_sim_club.orchestrator import Orchestrator, SimulatedCrash
 from podplay_sim_club.preview import PreviewAdapter
 from podplay_sim_club.preview_booking import PreviewBookingWriter, occurrence_key
 from podplay_sim_club.preview_owner_event import PreviewOwnerEventWriter
+from podplay_sim_club.preview_event_signup import PreviewEventSignupWriter
 from podplay_sim_club.preview_match_ledger import (
     load_match_ledger,
     sanitized_match_index,
@@ -171,6 +172,12 @@ class SimClubTestCase(unittest.TestCase):
         self.assertEqual("owner_open_play", intent["journey"])
         self.assertTrue(intent["constraints"]["freeToParticipants"])
         self.assertTrue((self.root / "state" / "actors" / "sofia" / "memory.md").is_file())
+        intent["status"] = "event_created"
+        save_intent(Storage(self.root), ledger, intent)
+        promoted = run_tick(self.root, max_turns=3, now=FIXED_NOW)
+        self.assertEqual(["message", "message", "message"], [turn["action"] for turn in promoted["turns"]])
+        messages = Storage(self.root).read_jsonl(Storage(self.root).channel_path("club"))
+        self.assertTrue({"runtime_announcement", "runtime_andy_signup", "runtime_terry_signup"}.issubset({message["kind"] for message in messages}))
 
     def test_blocked_intent_plan_records_a_durable_issue(self):
         from podplay_sim_club.cli import _record_intent_blocker
@@ -932,6 +939,25 @@ class PreviewConnectionTestCase(unittest.TestCase):
         self.assertEqual("OPEN_PLAY", body["eventSubtype"])
         self.assertEqual("PUBLISHED", body["eventStatus"])
         self.assertEqual(2, len(body["items"]))
+
+    def test_event_signup_writer_uses_the_customer_self_signup_contract(self):
+        policy = TargetPolicy.from_config(ClubConfig(mode=RunMode.PREVIEW_WRITE, preview_origin=PREVIEW_ORIGIN, allowed_preview_origins=(PREVIEW_ORIGIN,), preview_write_confirmation=PREVIEW_ORIGIN))
+
+        class Response:
+            status = 201
+            def __enter__(self): return self
+            def __exit__(self, *args): return None
+            def geturl(self): return PREVIEW_ORIGIN + "/apis/v2/events/event-1/signups"
+            def read(self, _limit): return b'{"id":"signup-1"}'
+
+        requests = []
+        PreviewEventSignupWriter(policy, "actor-token", lambda request, _timeout: requests.append(request) or Response()).signup("event-1", "user-1")
+        body = json.loads(requests[0].data.decode("utf-8"))
+
+        self.assertEqual("ORDER", body["type"])
+        self.assertEqual("USER_BOOKED", body["mode"])
+        self.assertEqual({"id": "user-1"}, body["owner"])
+        self.assertEqual("FREE", body["paymentMethod"])
 
     def test_booking_occurrence_key_is_stable_and_slot_specific(self):
         first = occurrence_key("pod-1", "2026-09-26T12:00:00Z", "red-captain")

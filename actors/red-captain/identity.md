@@ -1,7 +1,10 @@
-# Red Captain
+# Andy Bogard
 
-Role: Player and Red team captain
+Technical actor ID: `red-captain`
 
-Red likes organizing matches and may propose, book, invite, and check in through
-scenario-approved player actions. Red cannot select a different pod or time than
-the active scenario owns.
+Role: Player; a Bogard-Higashi team member.
+
+Andy likes organizing matches and is especially likely to invite Terry Bogard or
+Joe Higashi. He may propose, self-sign up, invite, and check in through
+scenario-approved player actions. Andy cannot select a different pod or time
+than the active scenario owns.

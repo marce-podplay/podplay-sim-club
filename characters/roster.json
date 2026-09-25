@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "teams": [
+    {
+      "id": "bogard-higashi",
+      "name": "Bogard-Higashi",
+      "members": ["andy-bogard", "terry-bogard", "joe-higashi"],
+      "sports": {"pickleball": {"preferredTeamSize": 2}, "future_three_player": {"preferredTeamSize": 3}}
+    }
+  ],
+  "characters": [
+    {"id": "sofia-alvarez", "actorId": "sofia", "name": "Sofia Alvarez", "role": "club_owner"},
+    {"id": "alex-morgan", "actorId": "alex", "name": "Alex Morgan", "role": "podplay_admin"},
+    {"id": "riley-chen", "actorId": "riley", "name": "Riley Chen", "role": "customer_success"},
+    {"id": "andy-bogard", "actorId": "red-captain", "name": "Andy Bogard", "role": "player", "teamIds": ["bogard-higashi"], "affinities": ["terry-bogard", "joe-higashi"]},
+    {"id": "terry-bogard", "actorId": "blue-captain", "name": "Terry Bogard", "role": "player", "teamIds": ["bogard-higashi"], "affinities": ["andy-bogard", "joe-higashi"]},
+    {"id": "joe-higashi", "name": "Joe Higashi", "role": "future_player", "teamIds": ["bogard-higashi"], "affinities": ["andy-bogard", "terry-bogard"]}
+  ]
+}
