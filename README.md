@@ -57,13 +57,25 @@ Start the local webpage:
 
 Then open <http://127.0.0.1:8787>.
 
-To let the same local process run a beat every 30 minutes:
+To let the same local process run the bounded actor runtime every 30 minutes:
 
 ```console
 ./club serve --beat-every 30m --turns 10
 ```
 
-The scheduler is disabled unless `--beat-every` is provided.
+The scheduler is disabled unless `--beat-every` is provided. It runs local
+actor turns only: actors read their compact memory and shared channel, persist a
+message/intent/pass, and make **zero preview writes**. Start with a manual tick
+if you want immediate activity, then leave the observatory running:
+
+```console
+./club runtime tick --max-turns 10
+./club serve --beat-every 30m --turns 10
+```
+
+The observatory polls its local files every two seconds and includes a bounded
+chronological Club Message Stream. This is the simulator's parallel channel;
+product email remains outside its control.
 
 ## Deterministic demonstrations
 

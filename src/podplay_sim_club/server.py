@@ -7,6 +7,7 @@ from pathlib import Path
 import threading
 from typing import Optional
 
+from .actor_runtime import run_tick as run_actor_tick
 from .orchestrator import Orchestrator
 from .preview_match_ledger import sanitized_match_index
 
@@ -61,6 +62,7 @@ class ObservatoryServer:
                             and isinstance(ledger.get("matches"), dict)
                             else {"activeOccurrenceKey": None, "matches": []}
                         ),
+                        "messages": _recent_messages(orchestrator),
                     })
                     return
                 if self.path == "/health":
@@ -112,9 +114,24 @@ class ObservatoryServer:
         assert self.beat_every_seconds is not None
         while not self._stop.wait(self.beat_every_seconds):
             try:
-                self.orchestrator.run_beat(turns=self.turns_per_beat)
+                result = run_actor_tick(
+                    self.orchestrator.storage.root,
+                    max_turns=self.turns_per_beat,
+                )
+                print(
+                    f"actor tick {result['tick']}: "
+                    f"{len(result['turns'])} turns; remote writes 0"
+                )
             except Exception as exc:  # scheduler stays alive; evidence remains in files
-                print(f"scheduler beat failed: {type(exc).__name__}: {exc}")
+                print(f"actor scheduler failed: {type(exc).__name__}: {exc}")
+
+
+def _recent_messages(orchestrator: Orchestrator):
+    """Return the shared actor channel in chronological, bounded order."""
+    rows = orchestrator.storage.read_jsonl(orchestrator.storage.channel_path("club"))
+    messages = [row for row in rows if isinstance(row, dict)]
+    messages.sort(key=lambda row: (str(row.get("observedAt") or ""), str(row.get("id") or "")))
+    return messages[-80:]
 
 
 def serve(
@@ -133,7 +150,7 @@ def serve(
     )
     print(f"Preview Club observatory: http://{host}:{port}")
     if beat_every_seconds is None:
-        print("Scheduler: disabled")
+        print("Actor scheduler: disabled")
     else:
-        print(f"Scheduler: every {beat_every_seconds:g}s, {turns_per_beat} turns")
+        print(f"Actor scheduler: every {beat_every_seconds:g}s, {turns_per_beat} turns")
     app.serve_forever()

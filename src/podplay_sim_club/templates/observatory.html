@@ -5,26 +5,26 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PodPlay Sim Club // Observatory</title>
   <style>
-    :root { color-scheme:dark; --bg:#07110d; --panel:#0b1912; --line:#244c35; --dim:#71917d; --text:#d7f7df; --live:#62f68d; --warn:#f0c65b; --cold:#70b7ff; }
+    :root { color-scheme:dark; --bg:#141537; --panel:#20214f; --panel-deep:#191a42; --line:#5950a5; --dim:#bcb9dc; --text:#fff7d1; --live:#78e3d4; --warn:#ffc44d; --cold:#80a2ff; --coral:#f47a68; --pink:#e94e86; }
     * { box-sizing:border-box; }
     [hidden] { display:none !important; }
-    body { margin:0; padding:18px; background:var(--bg); color:var(--text); font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; }
+    body { margin:0; padding:18px; background:linear-gradient(180deg,#34306f 0 4px,var(--bg) 4px 100%); color:var(--text); font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; }
     main { max-width:1100px; margin:0 auto; }
     header, .row, .legend, .switcher { display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap; }
-    header { border-bottom:1px solid var(--line); padding-bottom:12px; }
+    header { border-bottom:2px solid var(--coral); padding:8px 0 12px; background:linear-gradient(90deg,transparent 0 12px,var(--pink) 12px 24px,transparent 24px 36px); }
     h1 { margin:0; color:var(--live); font-size:16px; font-weight:500; letter-spacing:.08em; }
     .dim { color:var(--dim); } .live { color:var(--live); } .warn { color:var(--warn); } .cold { color:var(--cold); }
     .switcher { justify-content:flex-start; margin:14px 0; }
     .switcher button { padding:7px 11px; border:1px solid var(--line); background:transparent; color:var(--dim); font:inherit; cursor:pointer; }
     .switcher button[aria-selected="true"] { border-color:var(--live); background:var(--panel); color:var(--live); }
     .grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin:14px 0; }
-    section { border:1px solid var(--line); background:var(--panel); padding:14px; min-height:170px; }
+    section { border:2px solid var(--line); background:linear-gradient(135deg,var(--panel) 0 92%,var(--panel-deep) 92%); padding:14px; min-height:170px; box-shadow:4px 4px 0 #0a0b23; }
     section h2 { margin:0 0 12px; color:var(--dim); font-size:13px; font-weight:400; letter-spacing:.06em; }
     .panel-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
     .copy-button { border:1px solid var(--line); background:transparent; color:var(--live); padding:5px 9px; font:inherit; cursor:pointer; }
     .copy-button:hover, .copy-button:focus-visible { border-color:var(--live); background:var(--bg); outline:none; }
     .copy-status { margin-left:8px; color:var(--live); }
-    .preview-hero { min-height:145px; border-color:var(--live); display:grid; align-content:center; }
+    .preview-hero { min-height:145px; border-color:var(--coral); display:grid; align-content:center; }
     .preview-result { font-size:24px; letter-spacing:.06em; }
     .preview-meta { margin-top:8px; color:var(--dim); }
     .fact { padding:8px 0; border-top:1px solid var(--line); }
@@ -32,7 +32,7 @@
     .fact strong { display:block; color:var(--text); font-weight:500; }
     .next-action { color:var(--warn); }
     .source-note { margin-top:12px; color:var(--dim); font-size:12px; }
-    .offline { margin-top:12px; padding:10px 12px; border:1px solid var(--warn); color:var(--warn); background:var(--panel); }
+    .offline { margin-top:12px; padding:10px 12px; border:2px solid var(--warn); color:var(--warn); background:var(--panel); }
     .preview-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
     .next-panel { min-height:105px; }
     .person, .pod, .signal, .booking { padding:5px 0; }
@@ -40,10 +40,17 @@
     .pod { border-top:1px solid var(--line); display:flex; justify-content:space-between; gap:8px; }
     .signal time { color:var(--dim); margin-right:8px; }
     .trace { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; }
-    .booking { border-top:2px solid var(--cold); }
+    .booking { border-top:3px solid var(--cold); }
     .booking.current { border-color:var(--live); }
     #detail { margin-top:14px; min-height:44px; padding:10px 12px; border-left:3px solid var(--live); background:var(--panel); }
     .legend { margin-top:12px; color:var(--dim); }
+    .stream { min-height:250px; margin-top:14px; }
+    .stream-list { max-height:360px; overflow:auto; border-top:1px solid var(--line); }
+    .stream-item { display:grid; grid-template-columns:110px 150px 1fr; gap:10px; padding:10px 4px; border-bottom:1px solid var(--line); }
+    .stream-item:last-child { border-bottom:0; }
+    .stream-kind { color:var(--warn); } .stream-from { color:var(--live); }
+    .stream-link { color:var(--cold); word-break:break-all; }
+    .stream-empty { padding:14px 0; color:var(--dim); }
     @media(max-width:760px){ .grid,.preview-grid{grid-template-columns:1fr;} .preview-result{font-size:19px;} }
   </style>
 </head>
@@ -72,6 +79,10 @@
       <div id="preview-next"></div>
     </section>
     <div id="preview-source" class="source-note"></div>
+    <section class="stream">
+      <h2 class="panel-heading"><span>CLUB MESSAGE STREAM</span><span id="stream-count" class="dim">0 signals</span></h2>
+      <div id="message-stream" class="stream-list"><div class="stream-empty">· actor messages will appear here after a runtime tick</div></div>
+    </section>
   </div>
 
 </main>
@@ -176,10 +187,36 @@
     document.getElementById('preview-source').textContent = `Snapshot refreshed ${preview.observedAt} (${snapshotAge(preview.observedAt)}). Use match-status to refresh it; this view does not poll the preview API.`;
   }
 
+  function signalText(message) {
+    if (typeof message.text === 'string' && message.text) return message.text;
+    const payload = message.payload;
+    if (payload && payload.kind === 'invite_sent' && payload.product) {
+      return `Product invitation ${payload.product.invitationId} read back as ${payload.product.invitationStatus}.`;
+    }
+    return 'Structured product signal.';
+  }
+
+  function renderStream(messages) {
+    const rows = Array.isArray(messages) ? messages : [];
+    document.getElementById('stream-count').textContent = `${rows.length} signal${rows.length === 1 ? '' : 's'}`;
+    const html = rows.map(message => {
+      const payload = message.payload || {};
+      const link = payload.inviteLink && payload.inviteLink.status === 'available' ? payload.inviteLink.url : '';
+      const recipients = Array.isArray(message.to) ? message.to.join(', ') : '';
+      return `<div class="stream-item">
+        <span class="dim">${esc(message.observedAt || 'time unknown')}</span>
+        <span><strong class="stream-kind">${esc(message.kind || 'signal')}</strong><br><span class="stream-from">${esc(message.from || 'system')}</span>${recipients ? ` <span class="dim">→ ${esc(recipients)}</span>` : ''}</span>
+        <span>${esc(signalText(message))}${link ? `<br><a class="stream-link" href="${esc(link)}" target="_blank" rel="noreferrer">${esc(link)}</a>` : ''}</span>
+      </div>`;
+    }).join('');
+    setHtml('message-stream', html || '<div class="stream-empty">· actor messages will appear here after a runtime tick</div>');
+  }
+
   function render(previewState) {
     const preview = previewState.previewMatch;
     document.getElementById('clock').textContent = preview ? preview.observedAt || '' : '';
     renderPreview(preview, previewState.previewMatches);
+    renderStream(previewState.messages);
   }
 
   document.getElementById('copy-next').onclick = async () => {

@@ -369,6 +369,10 @@ class SimClubTestCase(unittest.TestCase):
                 },
             },
         )
+        orchestrator.storage.append_jsonl(
+            orchestrator.storage.channel_path("club"),
+            {"id": "signal-1", "kind": "invite_sent", "from": "red-captain", "to": ["blue-captain"], "observedAt": "2026-09-25T12:00:00Z"},
+        )
         orchestrator.storage.write_json(
             orchestrator.storage.state / "preview-matches.json",
             {
@@ -409,8 +413,10 @@ class SimClubTestCase(unittest.TestCase):
         self.assertEqual("SCHEDULED", preview["previewMatch"]["result"])
         self.assertEqual("pp7444-test", preview["previewMatches"]["activeOccurrenceKey"])
         self.assertEqual(1, len(preview["previewMatches"]["matches"]))
+        self.assertIn("invite_sent", [message["kind"] for message in preview["messages"]])
         self.assertIn("PODPLAY SIM CLUB // OBSERVATORY", page)
         self.assertIn("REMOTE PRODUCT STATE", page)
+        self.assertIn("CLUB MESSAGE STREAM", page)
         self.assertIn('id="copy-next"', page)
         self.assertIn("navigator.clipboard.writeText", page)
         self.assertIn("if (element.innerHTML !== html)", page)
