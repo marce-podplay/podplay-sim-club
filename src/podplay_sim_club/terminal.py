@@ -83,3 +83,50 @@ def render(view: Dict[str, Any]) -> str:
     if view["attention"]:
         attention = ["", "ATTENTION"] + [f"! {item}" for item in view["attention"]]
     return "\n".join(header + body + signals + bookings + attention)
+
+
+def render_needs(view: Dict[str, Any]) -> str:
+    needs = view.get("needs", {})
+    intents = view.get("bookingIntents", [])
+    lines = [
+        f"PREVIEW CLUB // NEEDS SIGNAL   {view['observedAt']}",
+        f"{view['season']}   beat {view['beat']['count']}   "
+        f"last turns {view['beat']['lastTurnCount']}",
+        "",
+        "NEEDS",
+    ]
+    for actor_id in ("red-captain", "blue-captain"):
+        need = needs.get(actor_id, {})
+        pressure = int(need.get("desireToPlay", 0))
+        threshold = int(need.get("threshold", 0))
+        state = "READY" if pressure >= threshold else "quiet"
+        lines.append(f"- {actor_id}: desire-to-play {pressure}/{threshold}  {state}")
+
+    lines.extend(["", "LATEST NEED SIGNALS"])
+    need_signals = [
+        signal
+        for signal in view.get("signals", [])
+        if signal.get("kind")
+        in {
+            "RED_NEED_RISES",
+            "RED_PROPOSES_FROM_NEED",
+            "BLUE_AGREES_FROM_AVAILABILITY",
+            "LEAD_RECORDS_BOOKING_INTENT",
+        }
+    ]
+    for signal in need_signals[-5:]:
+        lines.append(
+            f"{signal['observedAt'][11:16]} {signal['kind']:<34} {signal['text']}"
+        )
+    if not need_signals:
+        lines.append("· no need-driven turns yet")
+
+    lines.extend(["", "BOOKING INTENTS"])
+    if not intents:
+        lines.append("· no agreements ready for preview planning")
+    for intent in intents:
+        lines.append(
+            f"● {intent['id']}  {intent['status']}  "
+            f"{','.join(intent['participants'])}"
+        )
+    return "\n".join(lines)

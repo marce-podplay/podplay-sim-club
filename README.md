@@ -15,6 +15,7 @@ normal staging email; the simulator does not call those services directly.
 ## What works now
 
 - deterministic hourly-match state machine;
+- deterministic need → proposal → agreement → booking-intent state machine;
 - separate fake-preview product state and simulator memory;
 - idempotent booking, invitation, acceptance, and check-in operations;
 - crash injection support for commit-before-checkpoint testing;
@@ -83,6 +84,19 @@ Simulate a fresh preview database while preserving actor journals:
 The second command observes the missing seed sentinel, archives the old world,
 rehydrates the fake preview, and starts a new season.
 
+Run the first needs-driven interaction:
+
+```console
+./club needs run --turns 4
+./club needs status
+```
+
+The scenario parameters live in `scenarios/needs-match.json`. Red's
+desire-to-play pressure crosses its configured threshold, Red proposes a match,
+Blue checks the configured overlapping availability, and the lead records one
+durable intent in ignored local state. Repeating the command does not duplicate
+messages or intents, and this local interaction performs no product write.
+
 A season is the lifetime of one PR-specific preview database. Code can be
 redeployed without starting a new season. Recreating the database from the
 weekly PingPod staging snapshot does start one. Firebase identities live outside
@@ -135,6 +149,7 @@ Then run:
 ./club preview inspect
 ./club preview readiness
 ./club preview booking-preview
+./club preview plan-intent
 ./club preview fund --dry-run
 ```
 
@@ -164,6 +179,13 @@ items, passes, acting for another user, credit amounts above the bounded seed,
 and payload extensions. It
 records only a sanitized price/error summary in
 `state/preview-booking-evaluation.json`.
+
+`preview plan-intent` starts from the active character agreement rather than an
+operator-created booking request. It filters real availability by the agreed
+duration and venue-local time window, performs the same non-persisting booking
+calculation, and stores the resulting slot on the durable intent. It never
+creates a booking; remote execution remains behind the separate explicit write
+gate.
 
 If that calculation requires payment, the seed defines a bounded `$25` virtual
 credit balance for each captain. Reconcile it first with `preview fund

@@ -2,7 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -150,6 +150,7 @@ def find_candidate_session(
     first_day_offset: int = 0,
     last_day_offset: int = 14,
     safety_lead_minutes: int = 30,
+    allowed_local_windows: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     try:
         local_now = _utc(now).astimezone(ZoneInfo(timezone_name))
@@ -160,7 +161,12 @@ def find_candidate_session(
         operating_date = (local_now.date() + timedelta(days=offset)).isoformat()
         query = urlencode({"podId": pod_id, "operatingDate": operating_date})
         sessions = collection_items(client.get(f"/apis/v2/sessions?{query}"))
-        candidate = select_candidate_session(sessions, not_before=not_before)
+        candidate = select_candidate_session(
+            sessions,
+            not_before=not_before,
+            timezone_name=timezone_name,
+            allowed_local_windows=allowed_local_windows,
+        )
         if candidate is not None:
             return candidate
     return None
@@ -169,7 +175,21 @@ def find_candidate_session(
 def select_candidate_session(
     sessions: list,
     not_before: Optional[datetime] = None,
+    timezone_name: Optional[str] = None,
+    allowed_local_windows: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
+    local_zone = None
+    windows: List[Tuple[int, int]] = []
+    if allowed_local_windows:
+        if not timezone_name:
+            raise PreviewReadError("timezone is required for local availability windows")
+        try:
+            local_zone = ZoneInfo(timezone_name)
+        except ZoneInfoNotFoundError as exc:
+            raise PreviewReadError(
+                f"pod timezone is not recognized: {timezone_name}"
+            ) from exc
+        windows = [_parse_local_window(value) for value in allowed_local_windows]
     candidates = []
     for session in sessions:
         if (
@@ -187,6 +207,20 @@ def select_candidate_session(
         except ValueError:
             continue
         if not_before is not None and _utc(start_instant) < _utc(not_before):
+            continue
+        end_time = session.get("endTime")
+        try:
+            end_instant = (
+                datetime.fromisoformat(end_time.replace("Z", "+00:00"))
+                if isinstance(end_time, str)
+                else None
+            )
+        except ValueError:
+            end_instant = None
+        if windows and (
+            end_instant is None
+            or not _inside_local_window(start_instant, end_instant, local_zone, windows)
+        ):
             continue
         available_tables = session.get("availableTables")
         table_items = (
@@ -222,6 +256,38 @@ def select_candidate_session(
         return None
     candidates.sort(key=lambda item: _utc(item[0]))
     return candidates[0][1]
+
+
+def _parse_local_window(value: str) -> Tuple[int, int]:
+    try:
+        start, end = value.split("-", 1)
+        start_hour, start_minute = (int(part) for part in start.split(":"))
+        end_hour, end_minute = (int(part) for part in end.split(":"))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise PreviewReadError(f"invalid local availability window: {value!r}") from exc
+    start_total = start_hour * 60 + start_minute
+    end_total = end_hour * 60 + end_minute
+    if not (0 <= start_total < end_total <= 24 * 60):
+        raise PreviewReadError(f"invalid local availability window: {value!r}")
+    return start_total, end_total
+
+
+def _inside_local_window(
+    start: datetime,
+    end: datetime,
+    local_zone: ZoneInfo,
+    windows: List[Tuple[int, int]],
+) -> bool:
+    local_start = _utc(start).astimezone(local_zone)
+    local_end = _utc(end).astimezone(local_zone)
+    if local_start.date() != local_end.date():
+        return False
+    start_minute = local_start.hour * 60 + local_start.minute
+    end_minute = local_end.hour * 60 + local_end.minute
+    return any(
+        window_start <= start_minute and end_minute <= window_end
+        for window_start, window_end in windows
+    )
 
 
 def _actor_readiness(

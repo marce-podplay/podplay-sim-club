@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "id": "needs-match",
+  "interactionId": "red-blue-001",
+  "initiator": "red-captain",
+  "candidate": "blue-captain",
+  "need": "desireToPlay",
+  "needs": {
+    "red-captain": {
+      "initialPressure": 70,
+      "threshold": 80,
+      "driftPerBeat": 15
+    },
+    "blue-captain": {
+      "initialPressure": 45,
+      "threshold": 80,
+      "driftPerBeat": 5
+    }
+  },
+  "availability": {
+    "red-captain": {
+      "daysAhead": [0, 14],
+      "localWindows": ["08:00-12:00"],
+      "durationMinutes": 30
+    },
+    "blue-captain": {
+      "daysAhead": [0, 14],
+      "localWindows": ["08:00-12:00"],
+      "durationMinutes": 30
+    }
+  }
+}

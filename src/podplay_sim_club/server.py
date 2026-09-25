@@ -7,6 +7,7 @@ from pathlib import Path
 import threading
 from typing import Optional
 
+from .booking_intents import sanitized_intents
 from .orchestrator import Orchestrator
 from .preview_match_ledger import sanitized_match_index
 
@@ -60,6 +61,16 @@ class ObservatoryServer:
                         if isinstance(ledger, dict)
                         and isinstance(ledger.get("matches"), dict)
                         else {"activeOccurrenceKey": None, "matches": []}
+                    )
+                    intent_ledger = orchestrator.storage.load_json(
+                        orchestrator.storage.state / "booking-intents.json",
+                        default=None,
+                    )
+                    world["bookingIntentLedger"] = (
+                        sanitized_intents(intent_ledger)
+                        if isinstance(intent_ledger, dict)
+                        and isinstance(intent_ledger.get("intents"), dict)
+                        else {"activeIntentId": None, "intents": []}
                     )
                     self._json(HTTPStatus.OK, world)
                     return

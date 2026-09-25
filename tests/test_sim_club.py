@@ -17,6 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from podplay_sim_club.actions import ActionValidator, IllegalAction
+from podplay_sim_club.booking_intents import load_intent_ledger
 from podplay_sim_club.cli import main
 from podplay_sim_club.config import ClubConfig, ConfigurationError, RunMode
 from podplay_sim_club.credentials import CredentialsError, PreviewCredentials
@@ -54,7 +55,7 @@ from podplay_sim_club.preview_write import (
 from podplay_sim_club.server import ObservatoryServer
 from podplay_sim_club.storage import Storage
 from podplay_sim_club.target_policy import TargetPolicy, TargetPolicyError
-from podplay_sim_club.terminal import render
+from podplay_sim_club.terminal import render, render_needs
 
 
 FIXED_NOW = datetime(2026, 9, 23, 15, 5, tzinfo=timezone.utc)
@@ -91,6 +92,37 @@ class SimClubTestCase(unittest.TestCase):
             ["blue-captain", "red-captain"],
             sorted(preview["bookings"][0]["checkedIn"]),
         )
+
+    def test_need_drives_conversation_and_durable_booking_intent(self):
+        orchestrator = self.orchestrator()
+
+        first = orchestrator.run_needs_beat(turns=2, now=FIXED_NOW)
+        resumed = orchestrator.run_needs_beat(turns=2, now=FIXED_NOW)
+        replay = orchestrator.run_needs_beat(turns=4, now=FIXED_NOW)
+
+        self.assertEqual("running", first["status"])
+        self.assertEqual("complete", resumed["status"])
+        self.assertEqual(0, replay["turnsExecuted"])
+        messages = orchestrator.storage.read_jsonl(
+            orchestrator.storage.channel_path("club")
+        )
+        self.assertEqual(
+            ["need_driven_proposal", "availability_agreement"],
+            [message["kind"] for message in messages],
+        )
+        ledger = load_intent_ledger(orchestrator.storage)
+        self.assertEqual(1, len(ledger["intents"]))
+        intent = next(iter(ledger["intents"].values()))
+        self.assertEqual("agreed", intent["status"])
+        self.assertEqual(0, intent["remoteWrites"])
+        self.assertEqual(
+            ["red-captain", "blue-captain"], intent["participants"]
+        )
+        preview = json.loads((self.root / "state" / "fake-preview.json").read_text())
+        self.assertEqual([], preview["bookings"])
+        frame = render_needs(resumed["world"])
+        self.assertIn("desire-to-play 85/80  READY", frame)
+        self.assertIn("BOOKING INTENTS", frame)
 
     def test_orchestrator_uses_the_preview_adapter_boundary(self):
         created = []
@@ -260,6 +292,9 @@ class SimClubTestCase(unittest.TestCase):
         self.assertIn('id="copy-next"', page)
         self.assertIn("navigator.clipboard.writeText", page)
         self.assertIn("if (element.innerHTML !== html)", page)
+        self.assertIn("CHARACTER NEEDS", page)
+        self.assertIn("BOOKING INTENTS", page)
+        self.assertIn("bookingIntentLedger", world)
 
 
 class PreviewMatchLedgerTestCase(unittest.TestCase):
@@ -598,6 +633,34 @@ class PreviewConnectionTestCase(unittest.TestCase):
         )
 
         self.assertEqual("nearest", result["sessionId"])
+
+    def test_candidate_session_honors_agreed_venue_local_window(self):
+        sessions = [
+            {
+                "id": "earlier-evening",
+                "status": "AVAILABLE",
+                "tablesLeft": 1,
+                "startTime": "2026-09-28T21:00:00Z",
+                "endTime": "2026-09-28T21:30:00Z",
+                "availableTables": {"items": [{"id": "evening-table", "rate": 0}]},
+            },
+            {
+                "id": "next-morning",
+                "status": "AVAILABLE",
+                "tablesLeft": 1,
+                "startTime": "2026-09-29T13:00:00Z",
+                "endTime": "2026-09-29T13:30:00Z",
+                "availableTables": {"items": [{"id": "morning-table", "rate": 0}]},
+            },
+        ]
+
+        result = select_candidate_session(
+            sessions,
+            timezone_name="America/New_York",
+            allowed_local_windows=["08:00-12:00"],
+        )
+
+        self.assertEqual("next-morning", result["sessionId"])
 
     def test_booking_evaluator_sends_only_fixed_preview_payload(self):
         policy = TargetPolicy.from_config(

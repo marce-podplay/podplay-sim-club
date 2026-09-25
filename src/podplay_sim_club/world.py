@@ -45,9 +45,14 @@ def new_world(
             "pod-2": {"name": "POD-2", "state": "empty", "bookingId": None},
         },
         "bookings": [],
+        "needs": {},
+        "bookingIntents": [],
         "signals": [],
         "attention": [],
-        "scenarios": {"hourly-match": {"occurrences": {}}},
+        "scenarios": {
+            "hourly-match": {"occurrences": {}},
+            "needs-match": {"interactions": {}},
+        },
     }
 
 
@@ -66,6 +71,8 @@ def project_world(world: Dict[str, Any]) -> Dict[str, Any]:
         "people": deepcopy(world["actors"]),
         "pods": deepcopy(world["pods"]),
         "bookings": deepcopy(world["bookings"][-12:]),
+        "needs": deepcopy(world.get("needs", {})),
+        "bookingIntents": deepcopy(world.get("bookingIntents", [])[-12:]),
         "signals": deepcopy(world["signals"][-12:]),
         "attention": deepcopy(world["attention"]),
     }

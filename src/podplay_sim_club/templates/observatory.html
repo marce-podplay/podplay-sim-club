@@ -80,6 +80,10 @@
   </div>
 
   <div id="fake-view" hidden>
+    <div class="grid preview-grid">
+      <section><h2>CHARACTER NEEDS</h2><div id="needs"></div></section>
+      <section><h2>BOOKING INTENTS</h2><div id="intents"></div></section>
+    </div>
     <div class="grid">
       <section><h2>LOCAL FAKE CLUB / NETWORK</h2><div id="people"></div></section>
       <section><h2>LOCAL FAKE COURT ZONE</h2><div id="pods"></div></section>
@@ -219,6 +223,16 @@
     currentWorld = world;
     updateClock(world);
     renderPreview(world.previewMatch, world.previewMatches);
+    document.getElementById('needs').innerHTML = Object.entries(world.needs || {}).map(([id, need]) => {
+      const ready = Number(need.desireToPlay) >= Number(need.threshold);
+      return `<div class="fact"><span class="${ready?'live':'dim'}">${ready?'●':'·'} ${esc(id)}</span><strong>desire-to-play ${esc(need.desireToPlay)}/${esc(need.threshold)} · ${ready?'READY':'quiet'}</strong></div>`;
+    }).join('') || '<div class="dim">· no needs recorded</div>';
+    const intentRows = world.bookingIntentLedger && Array.isArray(world.bookingIntentLedger.intents)
+      ? world.bookingIntentLedger.intents : [];
+    document.getElementById('intents').innerHTML = intentRows.map(intent => `
+      <div class="fact"><span class="${intent.active?'live':'dim'}">${intent.active?'●':'·'} ${esc(intent.status || 'unknown')}</span>
+      <strong>${esc((intent.participants || []).join(' ⇄ '))}</strong><span class="dim">${esc(intent.id)}</span></div>`
+    ).join('') || '<div class="dim">· no character agreement yet</div>';
     document.getElementById('people').innerHTML = Object.entries(world.people).map(([id,p]) =>
       `<div class="person"><button data-id="${esc(id)}">[${esc(p.glyph)}] ${esc(p.name)}</button> <span class="${p.state==='playing'?'live':'dim'}">${glyph(p.state)} ${esc(p.location)} / ${esc(p.state)}</span></div>`
     ).join('');

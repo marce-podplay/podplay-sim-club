@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from .actions import ActionValidator
+from .booking_intents import load_intent_ledger, save_intent
 from .fake_preview import FakePreview
 from .preview import PreviewAdapter
 from .storage import Storage
@@ -22,6 +23,13 @@ STEPS = (
     "red_checks_in",
     "blue_checks_in",
     "assert_match",
+)
+
+NEED_STEPS = (
+    "red_need_rises",
+    "red_proposes_from_need",
+    "blue_agrees_from_availability",
+    "lead_records_booking_intent",
 )
 
 
@@ -42,8 +50,14 @@ class Orchestrator:
         self.scenario = self.storage.load_json(
             self.root / "scenarios" / "hourly-match.json"
         )
-        if self.seed is None or self.scenario is None:
-            raise RuntimeError("seed/tenant.json and scenarios/hourly-match.json are required")
+        self.needs_scenario = self.storage.load_json(
+            self.root / "scenarios" / "needs-match.json"
+        )
+        if self.seed is None or self.scenario is None or self.needs_scenario is None:
+            raise RuntimeError(
+                "seed/tenant.json, scenarios/hourly-match.json, and "
+                "scenarios/needs-match.json are required"
+            )
         self._preview_factory = preview_factory or FakePreview
         self.validator = ActionValidator(
             pod_id=self.scenario["podId"],
@@ -60,6 +74,7 @@ class Orchestrator:
             if preview.is_fresh():
                 preview.rehydrate()
             world = new_world(1, observed_at, preview_mode=preview.mode)
+            self._ensure_needs_state(world)
             add_signal(
                 world,
                 self._signal(observed_at, "SEED", "Preview Club opened from seed"),
@@ -73,6 +88,7 @@ class Orchestrator:
             next_number = int(world["season"]["number"]) + 1
             preview.rehydrate()
             world = new_world(next_number, observed_at, preview_mode=preview.mode)
+            self._ensure_needs_state(world)
             message = (
                 f"Preview database refreshed after {previous_season}; product state was "
                 "reseeded and personal journals were preserved."
@@ -90,6 +106,7 @@ class Orchestrator:
                 },
             )
             self.storage.write_json(self.storage.world_path, world)
+        self._ensure_needs_state(world)
         return world
 
     def reset_fake_preview(self) -> None:
@@ -165,6 +182,62 @@ class Orchestrator:
                 "turnsExecuted": executed,
                 "status": occurrence["status"],
                 "step": occurrence["step"],
+                "world": project_world(world),
+            }
+
+    def run_needs_beat(
+        self, turns: int = 4, now: Optional[datetime] = None
+    ) -> Dict[str, Any]:
+        """Advance one deterministic need -> agreement -> intent interaction."""
+
+        if turns < 1:
+            raise ValueError("turns must be at least 1")
+        instant = now or parse_instant(None)
+        observed_at = isoformat(instant)
+
+        with self.storage.writer_lock():
+            world = self.ensure_world(instant)
+            self._ensure_needs_state(world)
+            world["clock"].update(
+                {"observedAt": observed_at, "simulationTime": observed_at}
+            )
+            interaction_key = (
+                f"needs-match:{world['season']['id']}:"
+                f"{self.needs_scenario['interactionId']}"
+            )
+            interactions = world["scenarios"]["needs-match"]["interactions"]
+            interaction = interactions.setdefault(
+                interaction_key,
+                {
+                    "key": interaction_key,
+                    "step": 0,
+                    "status": "running",
+                    "participants": ["red-captain", "blue-captain"],
+                    "createdAt": observed_at,
+                },
+            )
+
+            executed = 0
+            while executed < turns and interaction["status"] == "running":
+                step_index = int(interaction["step"])
+                step_name = NEED_STEPS[step_index]
+                self._execute_need_step(
+                    world, interaction, step_name, observed_at
+                )
+                interaction["step"] = step_index + 1
+                executed += 1
+                self.storage.write_json(self.storage.world_path, world)
+
+            world["beat"]["count"] = int(world["beat"]["count"]) + 1
+            world["beat"]["lastTurnCount"] = executed
+            world["beat"]["lastOccurrenceKey"] = interaction_key
+            self.storage.write_json(self.storage.world_path, world)
+            return {
+                "interactionKey": interaction_key,
+                "turnsExecuted": executed,
+                "status": interaction["status"],
+                "step": interaction["step"],
+                "intentId": interaction.get("intentId"),
                 "world": project_world(world),
             }
 
@@ -318,6 +391,151 @@ class Orchestrator:
         if actor_id != "lead":
             self._append_unique(self.storage.actor_journal_path(actor_id), event)
         add_signal(world, self._signal(observed_at, step.upper(), detail))
+
+    def _execute_need_step(
+        self,
+        world: Dict[str, Any],
+        interaction: Dict[str, Any],
+        step: str,
+        observed_at: str,
+    ) -> None:
+        key = interaction["key"]
+        actor_id = "lead"
+
+        if step == "red_need_rises":
+            actor_id = "red-captain"
+            need = world["needs"][actor_id]
+            before = int(need["desireToPlay"])
+            need["desireToPlay"] = min(100, before + int(need["driftPerBeat"]))
+            detail = (
+                f"Red desire-to-play rose from {before} to "
+                f"{need['desireToPlay']} (threshold {need['threshold']})."
+            )
+            world["actors"][actor_id]["state"] = "motivated"
+
+        elif step == "red_proposes_from_need":
+            actor_id = "red-captain"
+            need = world["needs"][actor_id]
+            if int(need["desireToPlay"]) < int(need["threshold"]):
+                raise RuntimeError("Red's desire to play has not crossed its threshold")
+            text = (
+                "I feel like playing. Blue, are you free for a 30-minute "
+                "morning match in the next two weeks?"
+            )
+            self._message(
+                key,
+                observed_at,
+                actor_id,
+                ["blue-captain"],
+                text,
+                "need_driven_proposal",
+            )
+            interaction["proposalMessageId"] = (
+                f"{key}:message:need_driven_proposal:{actor_id}"
+            )
+            world["actors"][actor_id]["state"] = "waiting_for_reply"
+            world["actors"]["blue-captain"]["state"] = "considering"
+            detail = "Red asked Blue for a match because desire-to-play crossed its threshold."
+
+        elif step == "blue_agrees_from_availability":
+            actor_id = "blue-captain"
+            availability = self._needs_availability()
+            overlap = set(availability["red-captain"]["localWindows"]) & set(
+                availability["blue-captain"]["localWindows"]
+            )
+            if not overlap:
+                raise RuntimeError("captains have no overlapping availability")
+            text = (
+                "Yes. I can play a 30-minute morning match in that window. "
+                "Please find us the nearest valid slot."
+            )
+            self._message(
+                key,
+                observed_at,
+                actor_id,
+                ["red-captain"],
+                text,
+                "availability_agreement",
+            )
+            interaction["agreementMessageId"] = (
+                f"{key}:message:availability_agreement:{actor_id}"
+            )
+            interaction["agreedWindow"] = sorted(overlap)[0]
+            world["actors"][actor_id]["state"] = "agreed"
+            world["actors"]["red-captain"]["state"] = "agreed"
+            detail = "Blue found overlapping availability and agreed to the match."
+
+        elif step == "lead_records_booking_intent":
+            intent_id = f"intent:{key}"
+            intent = {
+                "schemaVersion": 1,
+                "id": intent_id,
+                "status": "agreed",
+                "reason": "red_desire_to_play",
+                "createdAt": observed_at,
+                "participants": ["red-captain", "blue-captain"],
+                "requestedBy": "red-captain",
+                "constraints": {
+                    "durationMinutes": 30,
+                    "daysAhead": [0, 14],
+                    "localWindows": [interaction["agreedWindow"]],
+                    "slotPolicy": "nearest_valid_low_contention",
+                },
+                "evidence": {
+                    "proposalMessageId": interaction["proposalMessageId"],
+                    "agreementMessageId": interaction["agreementMessageId"],
+                    "need": deepcopy(world["needs"]["red-captain"]),
+                },
+                "remoteWrites": 0,
+            }
+            ledger = load_intent_ledger(self.storage)
+            save_intent(self.storage, ledger, intent)
+            interaction["intentId"] = intent_id
+            interaction["status"] = "complete"
+            summary = {
+                "id": intent_id,
+                "status": "agreed",
+                "reason": intent["reason"],
+                "participants": deepcopy(intent["participants"]),
+                "createdAt": observed_at,
+            }
+            world["bookingIntents"] = [
+                row for row in world["bookingIntents"] if row.get("id") != intent_id
+            ] + [summary]
+            detail = f"Lead recorded booking intent {intent_id}; no product write occurred."
+
+        event = {
+            "id": f"{key}:{step}",
+            "scenario": "needs-match",
+            "interactionKey": key,
+            "step": step,
+            "actorId": actor_id,
+            "detail": detail,
+            "observedAt": observed_at,
+        }
+        self._append_unique(self.storage.run_path(key, "events.jsonl"), event)
+        if actor_id != "lead":
+            self._append_unique(self.storage.actor_journal_path(actor_id), event)
+        add_signal(world, self._signal(observed_at, step.upper(), detail))
+
+    def _ensure_needs_state(self, world: Dict[str, Any]) -> None:
+        needs = world.setdefault("needs", {})
+        for actor_id, definition in self.needs_scenario["needs"].items():
+            needs.setdefault(
+                actor_id,
+                {
+                    "desireToPlay": definition["initialPressure"],
+                    "threshold": definition["threshold"],
+                    "driftPerBeat": definition["driftPerBeat"],
+                },
+            )
+        world.setdefault("bookingIntents", [])
+        world.setdefault("scenarios", {}).setdefault(
+            "needs-match", {"interactions": {}}
+        )
+
+    def _needs_availability(self) -> Dict[str, Any]:
+        return deepcopy(self.needs_scenario["availability"])
 
     def _message(
         self,
