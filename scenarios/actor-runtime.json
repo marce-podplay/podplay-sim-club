@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "actor-runtime",
+  "actors": ["sofia", "red-captain", "blue-captain", "alex", "riley", "lead"],
+  "freeHourCampaign": {
+    "campaignId": "free-hour-001",
+    "owner": "sofia",
+    "participants": ["red-captain", "blue-captain"],
+    "durationMinutes": 60,
+    "daysAhead": [0, 14],
+    "localWindows": ["00:00-24:00"],
+    "message": "Preview Club open play: a free one-hour session for the first two captains who agree.",
+    "slotPolicy": "nearest_valid_low_contention",
+    "freeToParticipants": true
+  }
+}

@@ -61,6 +61,23 @@ class Storage:
             handle.flush()
             os.fsync(handle.fileno())
 
+    def write_text(self, path: Path, value: str) -> None:
+        """Atomically replace a small, durable actor-memory note."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(value)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(str(temporary), str(path))
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+
     def read_jsonl(self, path: Path) -> List[JsonObject]:
         if not path.exists():
             return []

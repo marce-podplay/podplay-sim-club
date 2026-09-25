@@ -15,6 +15,7 @@ from .booking_intents import (
     save_intent,
     select_intent,
 )
+from .actor_runtime import run_tick as run_actor_tick
 from .config import ClubConfig, ConfigurationError, RunMode
 from .credentials import CredentialsError, PreviewCredentials
 from .firebase_auth import FirebaseAuthError, FirebaseAuthenticator
@@ -131,6 +132,16 @@ def build_parser() -> argparse.ArgumentParser:
     needs_promote.add_argument("--turns", type=int, default=4)
     needs_promote.add_argument("--now", help="override fake preview time with an ISO instant")
     needs_subcommands.add_parser("status", help="show needs and booking intents")
+
+    runtime = subparsers.add_parser(
+        "runtime", help="run bounded, durable actor turns without preview writes"
+    )
+    runtime_subcommands = runtime.add_subparsers(dest="runtime_command", required=True)
+    runtime_tick = runtime_subcommands.add_parser(
+        "tick", help="run queued actor turns and save compact actor memories"
+    )
+    runtime_tick.add_argument("--max-turns", type=int, default=10)
+    runtime_tick.add_argument("--now", help="override runtime clock with an ISO instant")
 
     serve_parser = subparsers.add_parser("serve", help="serve the local observatory")
     serve_parser.add_argument("--host", default="127.0.0.1")
@@ -416,6 +427,20 @@ def main(argv: Optional[list] = None) -> int:
             print(render_needs(result["world"]))
             return 0
         raise AssertionError(f"unhandled needs command {args.needs_command}")
+
+    if args.command == "runtime":
+        if args.runtime_command == "tick":
+            result = run_actor_tick(
+                root, max_turns=args.max_turns, now=parse_instant(args.now)
+            )
+            print(
+                f"PREVIEW CLUB ACTOR RUNTIME // tick {result['tick']} // "
+                f"{len(result['turns'])} turns // remote writes 0"
+            )
+            for turn in result["turns"]:
+                print(f"- {turn['actorId']}: {turn['action']} — {turn['detail']}")
+            return 0
+        raise AssertionError(f"unhandled runtime command {args.runtime_command}")
 
     if args.command == "serve":
         serve(
@@ -761,8 +786,9 @@ def plan_preview_intent(
                 f"booking intent cannot be planned from status {intent.get('status')!r}"
             )
         constraints = intent.get("constraints")
-        if not isinstance(constraints, dict) or constraints.get("durationMinutes") != 30:
-            raise BookingIntentError("preview planning currently requires a 30-minute intent")
+        duration = constraints.get("durationMinutes") if isinstance(constraints, dict) else None
+        if not isinstance(duration, int) or duration not in {30, 60}:
+            raise BookingIntentError("preview planning requires a 30- or 60-minute intent")
 
         credentials = PreviewCredentials.load(root)
         policy = TargetPolicy.from_config(credentials.config)
@@ -796,6 +822,7 @@ def plan_preview_intent(
             first_day_offset=int(constraints["daysAhead"][0]),
             last_day_offset=int(constraints["daysAhead"][1]),
             allowed_local_windows=constraints["localWindows"],
+            required_duration_minutes=duration,
         )
         if not isinstance(candidate, dict):
             intent["status"] = "preview_blocked"
@@ -808,6 +835,7 @@ def plan_preview_intent(
             intent["remoteWrites"] = 0
             save_intent(storage, ledger, intent)
             _sync_world_intent_status(storage, intent)
+            _record_intent_blocker(storage, intent, policy.pull_request_number)
             raise BookingIntentError(
                 "no legal preview slot matches the agreed local availability"
             )
@@ -911,6 +939,31 @@ def _sync_world_intent_status(storage: Storage, intent: dict) -> None:
                             campaign["occurrenceKey"] = booking.get("occurrenceKey")
             storage.write_json(storage.world_path, world)
             return
+
+
+def _record_intent_blocker(storage: Storage, intent: dict, pull_request: int) -> None:
+    """Persist one deduplicated, secret-free issue for a planned journey."""
+    intent_id = intent.get("id")
+    preview_plan = intent.get("previewPlan")
+    if not isinstance(intent_id, str) or not isinstance(preview_plan, dict):
+        return
+    issue_id = f"intent-blocked-{intent_id.replace(':', '-')}"
+    storage.write_json(
+        storage.state / "issues" / "open" / f"{issue_id}.json",
+        {
+            "id": issue_id,
+            "code": "no_matching_preview_session",
+            "status": "open",
+            "detector": "preview_intent_planner",
+            "pullRequest": pull_request,
+            "intentId": intent_id,
+            "reason": intent.get("reason"),
+            "constraints": intent.get("constraints"),
+            "blocker": preview_plan.get("blocker"),
+            "observedAt": preview_plan.get("observedAt"),
+            "remoteWrites": 0,
+        },
+    )
 
 
 def fund_preview(root: Path, apply: bool, confirmation: Optional[str]) -> int:

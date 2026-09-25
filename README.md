@@ -105,6 +105,27 @@ that a real discount or product event exists; those need a supported PodPlay
 promotion or event adapter. It is a controlled way to create early demand and
 exercise the ordinary booking path.
 
+Run a bounded actor-runtime tick when you want durable, low-cost character
+coordination without allowing any preview mutations:
+
+```console
+./club runtime tick --max-turns 10
+```
+
+Each turn rotates through Sofia, the captains, admin, CS, and lead. Actors write
+compact files under ignored `state/actors/<actor>/memory.md` plus shared club
+messages. A turn with no new information becomes a recorded `pass`, not an
+unbounded conversation. The first scenario proposes a free, contiguous
+one-hour session. Planning it remains separate and read-only:
+
+```console
+./club preview plan-intent --intent intent:actor-runtime:season-001:free-hour-001
+```
+
+If the preview cannot supply a matching 60-minute slot, the intent becomes
+`preview_blocked` and a secret-free issue is saved under `state/issues/open/`.
+It never silently downgrades to two unrelated 30-minute bookings.
+
 A season is the lifetime of one PR-specific preview database. Code can be
 redeployed without starting a new season. Recreating the database from the
 weekly PingPod staging snapshot does start one. Firebase identities live outside

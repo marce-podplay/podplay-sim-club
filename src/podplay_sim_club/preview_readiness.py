@@ -151,6 +151,7 @@ def find_candidate_session(
     last_day_offset: int = 14,
     safety_lead_minutes: int = 30,
     allowed_local_windows: Optional[List[str]] = None,
+    required_duration_minutes: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     try:
         local_now = _utc(now).astimezone(ZoneInfo(timezone_name))
@@ -166,6 +167,7 @@ def find_candidate_session(
             not_before=not_before,
             timezone_name=timezone_name,
             allowed_local_windows=allowed_local_windows,
+            required_duration_minutes=required_duration_minutes,
         )
         if candidate is not None:
             return candidate
@@ -177,6 +179,7 @@ def select_candidate_session(
     not_before: Optional[datetime] = None,
     timezone_name: Optional[str] = None,
     allowed_local_windows: Optional[List[str]] = None,
+    required_duration_minutes: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     local_zone = None
     windows: List[Tuple[int, int]] = []
@@ -217,6 +220,12 @@ def select_candidate_session(
             )
         except ValueError:
             end_instant = None
+        if required_duration_minutes is not None and (
+            end_instant is None
+            or int((end_instant - start_instant).total_seconds() / 60)
+            != required_duration_minutes
+        ):
+            continue
         if windows and (
             end_instant is None
             or not _inside_local_window(start_instant, end_instant, local_zone, windows)

@@ -17,6 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from podplay_sim_club.actions import ActionValidator, IllegalAction
+from podplay_sim_club.actor_runtime import run_tick
 from podplay_sim_club.booking_intents import load_intent_ledger, save_intent
 from podplay_sim_club.cli import main
 from podplay_sim_club.config import ClubConfig, ConfigurationError, RunMode
@@ -151,6 +152,40 @@ class SimClubTestCase(unittest.TestCase):
             "booked", orchestrator.world_view(FIXED_NOW)["campaigns"][0]["status"]
         )
         self.assertIn("OWNER CAMPAIGNS", render_needs(resumed["world"]))
+
+    def test_actor_runtime_records_a_free_hour_intent_and_then_passes(self):
+        first = run_tick(self.root, max_turns=6, now=FIXED_NOW)
+        replay = run_tick(self.root, max_turns=6, now=FIXED_NOW)
+
+        self.assertEqual(0, first["remoteWrites"])
+        self.assertEqual(
+            ["sofia", "red-captain", "blue-captain", "alex", "riley", "lead"],
+            [turn["actorId"] for turn in first["turns"]],
+        )
+        self.assertEqual("intent", first["turns"][-1]["action"])
+        self.assertTrue(all(turn["action"] == "pass" for turn in replay["turns"]))
+        ledger = load_intent_ledger(Storage(self.root))
+        intent = ledger["intents"]["intent:actor-runtime:season-001:free-hour-001"]
+        self.assertEqual(60, intent["constraints"]["durationMinutes"])
+        self.assertTrue(intent["constraints"]["freeToParticipants"])
+        self.assertTrue((self.root / "state" / "actors" / "sofia" / "memory.md").is_file())
+
+    def test_blocked_intent_plan_records_a_durable_issue(self):
+        from podplay_sim_club.cli import _record_intent_blocker
+
+        storage = Storage(self.root)
+        intent = {
+            "id": "intent:actor-runtime:season-001:free-hour-001",
+            "reason": "owner_free_hour_announcement",
+            "constraints": {"durationMinutes": 60},
+            "previewPlan": {"blocker": "no_slot_matches_character_availability", "observedAt": "2026-09-25T12:00:00Z"},
+        }
+
+        _record_intent_blocker(storage, intent, 7200)
+
+        issue = storage.load_json(storage.state / "issues" / "open" / "intent-blocked-intent-actor-runtime-season-001-free-hour-001.json")
+        self.assertEqual("no_matching_preview_session", issue["code"])
+        self.assertEqual(0, issue["remoteWrites"])
 
     def test_orchestrator_uses_the_preview_adapter_boundary(self):
         created = []
@@ -685,6 +720,24 @@ class PreviewConnectionTestCase(unittest.TestCase):
         )
 
         self.assertEqual("next-morning", result["sessionId"])
+
+    def test_candidate_session_can_require_one_contiguous_hour(self):
+        sessions = [
+            {
+                "id": "half-hour", "status": "AVAILABLE", "tablesLeft": 1,
+                "startTime": "2026-09-28T21:00:00Z", "endTime": "2026-09-28T21:30:00Z",
+                "availableTables": {"items": [{"id": "half-table", "rate": 0}]},
+            },
+            {
+                "id": "hour", "status": "AVAILABLE", "tablesLeft": 1,
+                "startTime": "2026-09-28T22:00:00Z", "endTime": "2026-09-28T23:00:00Z",
+                "availableTables": {"items": [{"id": "hour-table", "rate": 0}]},
+            },
+        ]
+
+        result = select_candidate_session(sessions, required_duration_minutes=60)
+
+        self.assertEqual("hour", result["sessionId"])
 
     def test_booking_evaluator_sends_only_fixed_preview_payload(self):
         policy = TargetPolicy.from_config(
