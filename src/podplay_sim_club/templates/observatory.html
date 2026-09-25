@@ -39,8 +39,6 @@
     .next-action { color:var(--warn); }
     .source-note { margin-top:12px; color:var(--dim); font-size:12px; }
     .offline { margin-top:12px; padding:10px 12px; border:2px solid var(--warn); color:var(--warn); background:var(--panel); }
-    .preview-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
-    .next-panel { min-height:105px; }
     .person, .pod, .signal, .booking { padding:5px 0; }
     .person button { color:var(--text); border:0; padding:0; background:transparent; font:inherit; text-decoration:underline dotted; cursor:pointer; }
     .pod { border-top:1px solid var(--line); display:flex; justify-content:space-between; gap:8px; }
@@ -50,7 +48,17 @@
     .booking.current { border-color:var(--live); }
     #detail { margin-top:14px; min-height:44px; padding:10px 12px; border-left:3px solid var(--live); background:var(--panel); }
     .legend { margin-top:12px; color:var(--dim); }
-    .stream { min-height:250px; margin-top:14px; }
+    .workspace { display:grid; grid-template-columns:minmax(245px,.75fr) minmax(430px,1.45fr) minmax(300px,1fr); gap:12px; margin-top:14px; align-items:start; }
+    .workspace > section { margin:0; }
+    .event-list, .selected-event { min-height:520px; }
+    .message-drawer { min-height:520px; }
+    .drawer-toggle { border:1px solid var(--line); background:transparent; color:var(--live); padding:5px 8px; font:inherit; cursor:pointer; }
+    .workspace.drawer-collapsed { grid-template-columns:minmax(245px,.75fr) minmax(430px,1.45fr) 54px; }
+    .workspace.drawer-collapsed .drawer-content { display:none; }
+    .workspace.drawer-collapsed .message-drawer { min-height:60px; padding:10px; }
+    .workspace.drawer-collapsed .message-drawer h2 { writing-mode:vertical-rl; margin:0; }
+    .workspace.drawer-collapsed .drawer-toggle { padding:4px; }
+    .stream { min-height:0; }
     .stream-list { max-height:360px; overflow:auto; border-top:1px solid var(--line); }
     .stream-item { display:grid; grid-template-columns:110px 145px 180px 1fr; gap:10px; padding:10px 4px; border-bottom:1px solid var(--line); }
     .stream-item:last-child { border-bottom:0; }
@@ -61,10 +69,11 @@
     .booking button:hover .booking-label, .booking button:focus-visible .booking-label { color:var(--warn); text-decoration:underline; outline:none; }
     .booking-label { color:var(--text); font-weight:600; }
     .reference { color:var(--cold); }
-    .match-detail { margin-top:14px; min-height:0; }
+    .match-detail { min-height:0; }
     .detail-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
     .person-row { padding:8px 0; border-top:1px solid var(--line); }
-    @media(max-width:760px){ .grid,.preview-grid,.detail-grid{grid-template-columns:1fr;} .preview-result{font-size:19px;} .stream-item{grid-template-columns:1fr; gap:3px;} }
+    @media(max-width:980px){ .workspace,.workspace.drawer-collapsed{grid-template-columns:1fr;} .workspace.drawer-collapsed .message-drawer h2{writing-mode:initial;} .workspace.drawer-collapsed .drawer-content{display:block;} .workspace.drawer-collapsed .message-drawer{min-height:0;padding:14px;} }
+    @media(max-width:760px){ .grid,.detail-grid{grid-template-columns:1fr;} .preview-result{font-size:19px;} .stream-item{grid-template-columns:1fr; gap:3px;} }
   </style>
 </head>
 <body>
@@ -84,23 +93,15 @@
       <h2>CURRENT STORYLINES <span class="dim">· character agreements, not necessarily product bookings</span></h2>
       <div id="storylines" class="story-grid"><div class="dim">· no active character agreement</div></div>
     </section>
-    <section><h2>PREVIEW MATCH LEDGER</h2><div id="preview-matches" class="trace"></div></section>
-    <section id="match-detail" class="match-detail" hidden><h2>BOOKING / EVENT DETAIL</h2><div id="match-detail-body"></div></section>
-    <div class="grid preview-grid">
-      <section><h2>VENUE</h2><div id="preview-venue"></div></section>
-      <section><h2>SCHEDULE</h2><div id="preview-match"></div></section>
-      <section><h2>PLAYERS</h2><div id="preview-players"></div></section>
-      <section><h2>EVIDENCE</h2><div id="preview-evidence"></div></section>
+    <div id="workspace" class="workspace">
+      <section class="event-list"><h2>EVENTS / BOOKINGS</h2><div id="preview-matches" class="trace"></div></section>
+      <section id="match-detail" class="selected-event match-detail"><h2>SELECTED EVENT / BOOKING</h2><div id="match-detail-body"><div class="dim">· select an event from the list</div></div></section>
+      <section class="message-drawer">
+        <h2 class="panel-heading"><span>MESSAGES <span class="dim">· shared channel</span></span><button id="toggle-stream" class="drawer-toggle" type="button" aria-expanded="true">HIDE</button></h2>
+        <div class="drawer-content"><div id="stream-count" class="dim">0 signals</div><div id="message-stream" class="stream-list"><div class="stream-empty">· actor messages will appear here after a runtime tick</div></div></div>
+      </section>
     </div>
-    <section class="next-panel">
-      <h2 class="panel-heading"><span>NEXT SIGNAL</span><span><button id="copy-next" class="copy-button" type="button">COPY TEXT</button><span id="copy-status" class="copy-status" role="status" aria-live="polite"></span></span></h2>
-      <div id="preview-next"></div>
-    </section>
     <div id="preview-source" class="source-note"></div>
-    <section class="stream">
-      <h2 class="panel-heading"><span>CLUB MESSAGE STREAM <span class="dim">· shared channel; TO means mentioned</span></span><span id="stream-count" class="dim">0 signals</span></h2>
-      <div id="message-stream" class="stream-list"><div class="stream-empty">· actor messages will appear here after a runtime tick</div></div>
-    </section>
   </div>
 
 </main>
@@ -163,73 +164,40 @@
     if (rows.length && (typeof window.selectedMatch !== 'number' || !rows[window.selectedMatch])) {
       window.selectedMatch = Math.max(0, rows.findIndex(match => match.active));
     }
-    renderMatchDetail(rows[window.selectedMatch]);
+    renderMatchDetail(rows[window.selectedMatch], window.previewSnapshot);
     if (!preview) {
       setHtml('preview-hero', '<span class="dim">· no preview snapshot; run ./club preview match-status</span>');
-      setHtml('preview-match', '<span class="dim">· unknown</span>');
-      setHtml('preview-venue', '<span class="dim">· unknown</span>');
-      setHtml('preview-players', '<span class="dim">· unknown</span>');
-      setHtml('preview-evidence', '<span class="dim">· unknown</span>');
-      setHtml('preview-next', '<code>./club preview match-status</code>');
       document.getElementById('preview-source').textContent = '';
       return;
     }
-    const venue = preview.venue || {};
-    const journey = preview.journey || {};
     const resultClass = preview.result === 'PASS' ? 'live' : 'warn';
     setHtml('preview-hero', `
       <div class="preview-result ${resultClass}">${esc(preview.result)}</div>
-      <div class="preview-meta">PR #${esc(preview.pullRequest)} · event ${esc(preview.event.eventId)} · ${esc(preview.event.status)}</div>`);
-    setHtml('preview-venue', `
-      <div class="fact"><span class="dim">AREA</span><strong>${esc(venue.areaName || 'unknown')}</strong></div>
-      <div class="fact"><span class="dim">POD</span><strong>${esc(venue.podName || 'unknown')}</strong></div>
-      <div class="fact"><span class="dim">COURT</span><strong>${esc(venue.courtAssignment || 'unknown')}</strong></div>
-      <div class="fact"><span class="dim">VENUE TIMEZONE</span><strong>${esc(venue.timezone || 'unknown')}</strong></div>`);
-    setHtml('preview-match', `
-      <div class="fact"><span class="dim">VENUE LOCAL</span><strong>${esc(formatTime(preview.event.startTime, venue.timezone))}</strong><span class="dim">to ${esc(formatTime(preview.event.endTime, venue.timezone))}</span></div>
-      <div class="fact"><span class="dim">YOUR LOCAL TIME</span><strong>${esc(formatTime(preview.event.startTime))}</strong><span class="dim">to ${esc(formatTime(preview.event.endTime))}</span></div>
-      <div class="fact"><span class="dim">UTC</span><strong>${esc(preview.event.startTime)} → ${esc(preview.event.endTime)}</strong></div>`);
-    setHtml('preview-players', `
-      <div class="fact"><span class="live">● Red Captain</span><strong>BOOKING OWNER</strong></div>
-      <div class="fact"><span class="live">● Blue Captain</span><strong>${esc(preview.blueInvitation.status)}</strong></div>
-      ${checkInFact('Red check-in', preview.checkIns.redCaptain)}
-      ${checkInFact('Blue check-in', preview.checkIns.blueCaptain)}`);
-    const orderTotal = typeof journey.orderTotal === 'number'
-      ? `${journey.currency || ''} ${journey.orderTotal.toFixed(2)}`.trim()
-      : 'unknown';
-    setHtml('preview-evidence', `
-      <div class="fact"><span class="dim">JOURNEY PHASE</span><strong>${esc(journey.phase || 'unknown')}</strong></div>
-      <div class="fact"><span class="dim">BOOKED + ACCEPTED</span><strong>${esc(formatTime(journey.preparedAt))}</strong></div>
-      <div class="fact"><span class="dim">EVENT</span><strong>${esc(preview.event.type || 'unknown')} / ${esc(preview.event.subtype || 'unknown')}</strong></div>
-      <div class="fact"><span class="dim">ORDER</span><strong>${esc(orderTotal)} · ${esc(journey.virtualCreditsUsed ?? 'unknown')} credits used</strong></div>
-      <div class="fact"><span class="dim">OCCURRENCE</span><strong>${esc(journey.occurrenceKey || 'unknown')}</strong></div>`);
-    const action = preview.result === 'PASS'
-      ? 'Match assertions passed. No action required.'
-      : preview.result === 'SCHEDULED'
-        ? `Booked and accepted on ${formatTime(journey.preparedAt)}. Play on ${formatTime(preview.event.startTime, venue.timezone)} (${formatTime(preview.event.startTime)} for you), then run the check-in dry run.`
-        : 'Run ./club preview check-in --dry-run and review the result.';
-    setHtml('preview-next', `<div class="fact next-action">${esc(action)}</div><div class="fact"><code>./club preview match-status</code><strong>SAFE · ZERO REMOTE WRITES</strong></div>`);
+      <div class="preview-meta">PR #${esc(preview.pullRequest)} · active product event ${esc(preview.event.eventId)} · ${esc(preview.event.status)} · select any event below for its own participants</div>`);
     document.getElementById('preview-source').textContent = `Snapshot refreshed ${preview.observedAt} (${snapshotAge(preview.observedAt)}). Use match-status to refresh it; this view does not poll the preview API.`;
   }
 
   function showMatch(index) {
     window.selectedMatch = index;
-    renderMatchDetail((window.matchRows || [])[index]);
+    renderMatchDetail((window.matchRows || [])[index], window.previewSnapshot);
   }
 
-  function renderMatchDetail(match) {
+  function renderMatchDetail(match, preview) {
     const panel = document.getElementById('match-detail');
     if (!match) { panel.hidden = true; return; }
     panel.hidden = false;
     const people = Array.isArray(match.participants) ? match.participants : [];
+    const currentSnapshot = preview && preview.event && preview.event.eventId === match.eventId ? preview : null;
+    const venue = currentSnapshot && currentSnapshot.venue ? currentSnapshot.venue : {};
     setHtml('match-detail-body', `<div class="detail-grid">
       <div>
         <div class="fact"><span class="dim">BOOKING</span><strong>${esc(match.label || 'Preview booking')}</strong></div>
         <div class="fact"><span class="dim">REFERENCE</span><strong class="reference">${esc(match.eventCode || 'pending')}</strong></div>
         <div class="fact"><span class="dim">EVENT ID</span><strong>${esc(match.eventId || 'not created')}</strong></div>
-        <div class="fact"><span class="dim">SLOT</span><strong>${esc(formatTime(match.startTime))}</strong><span class="dim">to ${esc(formatTime(match.endTime))}</span></div>
+        <div class="fact"><span class="dim">SLOT</span><strong>${esc(formatTime(match.startTime, venue.timezone))}</strong><span class="dim">to ${esc(formatTime(match.endTime, venue.timezone))}</span></div>
+        <div class="fact"><span class="dim">LOCATION</span><strong>${esc(venue.areaName || 'refresh status for venue')}</strong><span class="dim">${venue.podName ? ` / ${esc(venue.podName)}` : ''}</span></div>
       </div>
-      <div><span class="dim">ASSIGNED PLAYERS</span>${people.map(person => `<div class="person-row"><strong>${esc(person.label)}</strong> <span class="dim">(${esc(person.role)})</span><br><span class="reference">${esc(person.actorId)}</span> · invite ${esc(person.invitationStatus || 'owner')} · check-in ${esc(person.attendance || 'not refreshed')}</div>`).join('')}</div>
+      <div><span class="dim">ASSIGNED PLAYERS FOR THIS EVENT</span>${people.map(person => `<div class="person-row"><strong>${esc(person.label)}</strong> <span class="dim">(${esc(person.role)})</span><br><span class="reference">${esc(person.actorId)}</span> · invite ${esc(person.invitationStatus || 'owner')} · check-in ${esc(person.attendance || 'not refreshed')}</div>`).join('')}</div>
     </div>`);
   }
 
@@ -277,22 +245,19 @@
 
   function render(previewState) {
     const preview = previewState.previewMatch;
+    window.previewSnapshot = preview;
     document.getElementById('clock').textContent = preview ? preview.observedAt || '' : '';
     renderPreview(preview, previewState.previewMatches);
     renderStream(previewState.messages);
     renderStorylines(previewState.storylines);
   }
 
-  document.getElementById('copy-next').onclick = async () => {
-    const status = document.getElementById('copy-status');
-    const text = document.getElementById('preview-next').innerText.trim();
-    try {
-      await copyText(text);
-      status.textContent = 'COPIED';
-    } catch (_error) {
-      status.textContent = 'COPY FAILED';
-    }
-    window.setTimeout(() => { status.textContent = ''; }, 1600);
+  document.getElementById('toggle-stream').onclick = () => {
+    const workspace = document.getElementById('workspace');
+    const collapsed = workspace.classList.toggle('drawer-collapsed');
+    const button = document.getElementById('toggle-stream');
+    button.textContent = collapsed ? 'SHOW' : 'HIDE';
+    button.setAttribute('aria-expanded', String(!collapsed));
   };
   async function refresh() {
     try {
