@@ -17,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from podplay_sim_club.actions import ActionValidator, IllegalAction
-from podplay_sim_club.booking_intents import load_intent_ledger
+from podplay_sim_club.booking_intents import load_intent_ledger, save_intent
 from podplay_sim_club.cli import main
 from podplay_sim_club.config import ClubConfig, ConfigurationError, RunMode
 from podplay_sim_club.credentials import CredentialsError, PreviewCredentials
@@ -123,6 +123,34 @@ class SimClubTestCase(unittest.TestCase):
         frame = render_needs(resumed["world"])
         self.assertIn("desire-to-play 85/80  READY", frame)
         self.assertIn("BOOKING INTENTS", frame)
+
+    def test_owner_promotion_creates_a_flexible_near_term_intent(self):
+        orchestrator = self.orchestrator()
+
+        first = orchestrator.run_promotion_beat(turns=3, now=FIXED_NOW)
+        resumed = orchestrator.run_promotion_beat(turns=3, now=FIXED_NOW)
+        replay = orchestrator.run_promotion_beat(turns=4, now=FIXED_NOW)
+
+        self.assertEqual("running", first["status"])
+        self.assertEqual("complete", resumed["status"])
+        self.assertEqual(0, replay["turnsExecuted"])
+        messages = orchestrator.storage.read_jsonl(
+            orchestrator.storage.channel_path("club")
+        )
+        self.assertEqual(
+            ["owner_announcement", "promotion_response", "promotion_response"],
+            [message["kind"] for message in messages],
+        )
+        intent = next(iter(load_intent_ledger(orchestrator.storage)["intents"].values()))
+        self.assertEqual("owner_priority_announcement", intent["reason"])
+        self.assertEqual(["00:00-24:00"], intent["constraints"]["localWindows"])
+        self.assertEqual(1, len(resumed["world"]["campaigns"]))
+        intent["status"] = "booked"
+        save_intent(orchestrator.storage, load_intent_ledger(orchestrator.storage), intent)
+        self.assertEqual(
+            "booked", orchestrator.world_view(FIXED_NOW)["campaigns"][0]["status"]
+        )
+        self.assertIn("OWNER CAMPAIGNS", render_needs(resumed["world"]))
 
     def test_orchestrator_uses_the_preview_adapter_boundary(self):
         created = []

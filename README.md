@@ -89,6 +89,7 @@ Run the first needs-driven interaction:
 ```console
 ./club needs run --turns 4
 ./club needs status
+./club needs promote --turns 4
 ```
 
 The scenario parameters live in `scenarios/needs-match.json`. Red's
@@ -96,6 +97,13 @@ desire-to-play pressure crosses its configured threshold, Red proposes a match,
 Blue checks the configured overlapping availability, and the lead records one
 durable intent in ignored local state. Repeating the command does not duplicate
 messages or intents, and this local interaction performs no product write.
+
+`needs promote` gives Sofia a distinct influence tool: she announces a Preview
+Club priority session, Red and Blue respond, and the lead records a second
+intent with flexible availability for the nearest legal slot. It does not claim
+that a real discount or product event exists; those need a supported PodPlay
+promotion or event adapter. It is a controlled way to create early demand and
+exercise the ordinary booking path.
 
 A season is the lifetime of one PR-specific preview database. Code can be
 redeployed without starting a new season. Recreating the database from the
@@ -186,6 +194,18 @@ duration and venue-local time window, performs the same non-persisting booking
 calculation, and stores the resulting slot on the durable intent. It never
 creates a booking; remote execution remains behind the separate explicit write
 gate.
+
+To execute a ready character intent, revalidate it and use the normal explicit
+write confirmation:
+
+```console
+./club preview book --dry-run --intent "intent:needs-match:season-001:red-blue-001"
+./club preview book --apply --intent "intent:needs-match:season-001:red-blue-001" \
+  --confirm-origin "$preview_origin"
+```
+
+The applied match is recorded in both the occurrence ledger and the intent,
+then can be joined and checked in with the existing occurrence-targeted commands.
 
 If that calculation requires payment, the seed defines a bounded `$25` virtual
 credit balance for each captain. Reconcile it first with `preview fund

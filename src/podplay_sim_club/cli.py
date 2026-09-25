@@ -125,6 +125,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     needs_run.add_argument("--turns", type=int, default=4)
     needs_run.add_argument("--now", help="override fake preview time with an ISO instant")
+    needs_promote = needs_subcommands.add_parser(
+        "promote", help="let Sofia announce a priority session and collect responses"
+    )
+    needs_promote.add_argument("--turns", type=int, default=4)
+    needs_promote.add_argument("--now", help="override fake preview time with an ISO instant")
     needs_subcommands.add_parser("status", help="show needs and booking intents")
 
     serve_parser = subparsers.add_parser("serve", help="serve the local observatory")
@@ -209,6 +214,10 @@ def build_parser() -> argparse.ArgumentParser:
     preview_book.add_argument(
         "--confirm-origin",
         help="required with --apply; must equal the exact preview origin",
+    )
+    preview_book.add_argument(
+        "--intent",
+        help="execute this preview_ready character intent instead of an operator-created plan",
     )
     preview_join = preview_subcommands.add_parser(
         "join", help="invite and reconcile Blue Captain into the selected match"
@@ -298,7 +307,9 @@ def main(argv: Optional[list] = None) -> int:
                 root, args.apply, args.confirm_origin, args.stripe_env
             )
         if args.preview_command == "book":
-            return book_preview_match(root, args.apply, args.confirm_origin)
+            return book_preview_match(
+                root, args.apply, args.confirm_origin, args.intent
+            )
         if args.preview_command == "join":
             return join_preview_match(
                 root, args.apply, args.confirm_origin, args.occurrence
@@ -392,6 +403,18 @@ def main(argv: Optional[list] = None) -> int:
         if args.needs_command == "status":
             print(render_needs(orchestrator.world_view()))
             return 0
+        if args.needs_command == "promote":
+            result = orchestrator.run_promotion_beat(
+                turns=args.turns,
+                now=parse_instant(args.now) if args.now else None,
+            )
+            print(
+                f"{result['interactionKey']}: {result['status']} "
+                f"({result['turnsExecuted']} turns this beat)"
+            )
+            print()
+            print(render_needs(result["world"]))
+            return 0
         raise AssertionError(f"unhandled needs command {args.needs_command}")
 
     if args.command == "serve":
@@ -463,7 +486,8 @@ def run_doctor(root: Path, config: ClubConfig) -> int:
             (
                 "scenario_exists",
                 (root / "scenarios" / "hourly-match.json").is_file()
-                and (root / "scenarios" / "needs-match.json").is_file(),
+                and (root / "scenarios" / "needs-match.json").is_file()
+                and (root / "scenarios" / "owner-promotion.json").is_file(),
                 "",
             ),
             (
@@ -723,7 +747,9 @@ def evaluate_booking_preview(root: Path) -> int:
     return 0 if evaluation["readyForOrder"] else 1
 
 
-def plan_preview_intent(root: Path, intent_id: Optional[str]) -> int:
+def plan_preview_intent(
+    root: Path, intent_id: Optional[str], announce: bool = True
+) -> int:
     """Map a character agreement to a preview candidate without persisting it."""
 
     storage = Storage(root)
@@ -814,6 +840,7 @@ def plan_preview_intent(root: Path, intent_id: Optional[str]) -> int:
             "tableId": candidate["tableId"],
             "startTime": candidate["startTime"],
             "endTime": candidate["endTime"],
+            "virtualCredits": requested_credits,
             "evaluation": evaluation,
         }
         intent["remoteWrites"] = 0
@@ -832,20 +859,27 @@ def plan_preview_intent(root: Path, intent_id: Optional[str]) -> int:
         print(f"ERROR preview intent plan: {exc}", file=sys.stderr)
         return 2
 
-    print(
-        f"PREVIEW BOOKING INTENT // {intent['status'].upper()} // "
-        f"PR #{policy.pull_request_number}"
-    )
-    print(f"intent: {selected_id}")
-    print(f"reason: {intent['reason']}; participants: {', '.join(intent['participants'])}")
-    print(f"location: {report['location']['areaName']} / {report['location']['podName']}")
-    print(f"slot: {candidate['startTime']} to {candidate['endTime']}")
-    print(
-        f"calculation: {evaluation['status']}; total={evaluation['total']:.2f} "
-        f"{evaluation['currency'] or ''}; "
-        f"errors={','.join(evaluation['errorCodes']) or 'none'}"
-    )
-    print("remote writes: 0; durable intent updated")
+    if announce:
+        print(
+            f"PREVIEW BOOKING INTENT // {intent['status'].upper()} // "
+            f"PR #{policy.pull_request_number}"
+        )
+        print(f"intent: {selected_id}")
+        print(
+            f"reason: {intent['reason']}; participants: "
+            f"{', '.join(intent['participants'])}"
+        )
+        print(
+            f"location: {report['location']['areaName']} / "
+            f"{report['location']['podName']}"
+        )
+        print(f"slot: {candidate['startTime']} to {candidate['endTime']}")
+        print(
+            f"calculation: {evaluation['status']}; total={evaluation['total']:.2f} "
+            f"{evaluation['currency'] or ''}; "
+            f"errors={','.join(evaluation['errorCodes']) or 'none'}"
+        )
+        print("remote writes: 0; durable intent updated")
     return 0 if evaluation["readyForOrder"] else 1
 
 
@@ -866,6 +900,15 @@ def _sync_world_intent_status(storage: Storage, intent: dict) -> None:
                     for key in ("occurrenceKey", "startTime", "endTime", "blocker")
                     if preview_plan.get(key) is not None
                 }
+            if intent.get("reason") == "owner_priority_announcement":
+                campaign_id = str(intent["id"])[len("intent:") :]
+                for campaign in world.get("campaigns", []):
+                    if isinstance(campaign, dict) and campaign.get("id") == campaign_id:
+                        campaign["status"] = intent.get("status")
+                        booking = intent.get("booking")
+                        if isinstance(booking, dict):
+                            campaign["eventId"] = booking.get("eventId")
+                            campaign["occurrenceKey"] = booking.get("occurrenceKey")
             storage.write_json(storage.world_path, world)
             return
 
@@ -1008,9 +1051,24 @@ def seed_payment_methods(
     return 0
 
 
-def book_preview_match(root: Path, apply: bool, confirmation: Optional[str]) -> int:
+def book_preview_match(
+    root: Path,
+    apply: bool,
+    confirmation: Optional[str],
+    intent_id: Optional[str] = None,
+) -> int:
     storage = Storage(root)
     try:
+        selected_intent_id = None
+        selected_intent = None
+        intent_ledger = None
+        if intent_id:
+            if plan_preview_intent(root, intent_id, announce=False) != 0:
+                raise PreviewWriteError("character intent is not ready for booking")
+            intent_ledger = load_intent_ledger(storage)
+            selected_intent_id, selected_intent = select_intent(intent_ledger, intent_id)
+            if selected_intent.get("status") != "preview_ready":
+                raise PreviewWriteError("character intent is not preview_ready")
         credentials = PreviewCredentials.load(root)
         read_policy = TargetPolicy.from_config(credentials.config)
         ledger = load_match_ledger(storage, read_policy.target_origin)
@@ -1020,43 +1078,72 @@ def book_preview_match(root: Path, apply: bool, confirmation: Optional[str]) -> 
             root / "secrets" / "actor-auth" / "red-captain.json"
         ).authenticate(red.email, red.password, credentials.firebase_api_key)
         red_client = PreviewReadonlyClient(read_policy, red_auth.id_token)
-        admin_auth = FirebaseAuthenticator(
-            root / "secrets" / "preview-auth-cache.json"
-        ).authenticate(
-            credentials.admin_email,
-            credentials.admin_password,
-            credentials.firebase_api_key,
-        )
-        report = inspect_preview_readiness(
-            root,
-            read_policy,
-            PreviewReadonlyClient(read_policy, admin_auth.id_token),
-            identities,
-            credentials.firebase_api_key,
-        )
-        candidate = report.get("candidateSession")
-        if not report.get("readyForBookingPreview") or not isinstance(candidate, dict):
-            raise PreviewWriteError("booking readiness gate is blocked")
-        credits = min(float(report["actors"]["red-captain"]["virtualCredits"]), 25.0)
-        preview = summarize_booking_preview(
-            PreviewBookingEvaluator(read_policy, red_auth.id_token).evaluate(
-                candidate["sessionId"], candidate["tableId"], credits
+        if selected_intent is not None:
+            preview_plan = selected_intent.get("previewPlan")
+            if (
+                not isinstance(preview_plan, dict)
+                or preview_plan.get("targetOrigin") != read_policy.target_origin
+            ):
+                raise PreviewWriteError("character intent was planned for another origin")
+            required = (
+                "occurrenceKey",
+                "podId",
+                "sessionId",
+                "tableId",
+                "startTime",
+                "endTime",
+                "virtualCredits",
             )
-        )
-        if not preview["readyForOrder"]:
-            raise PreviewWriteError("booking preview is not ready for ORDER")
-        plan = {
-            "occurrenceKey": occurrence_key(
-                report["location"]["podId"], candidate["startTime"], "red-captain"
-            ),
-            "podId": report["location"]["podId"],
-            "ownerUserId": red.podplay_user_id,
-            "sessionId": candidate["sessionId"],
-            "tableId": candidate["tableId"],
-            "startTime": candidate["startTime"],
-            "endTime": candidate["endTime"],
-            "virtualCredits": credits,
-        }
+            if any(not isinstance(preview_plan.get(key), (str, int, float)) for key in required):
+                raise PreviewWriteError("character intent preview plan is incomplete")
+            plan = {
+                "occurrenceKey": preview_plan["occurrenceKey"],
+                "podId": preview_plan["podId"],
+                "ownerUserId": red.podplay_user_id,
+                "sessionId": preview_plan["sessionId"],
+                "tableId": preview_plan["tableId"],
+                "startTime": preview_plan["startTime"],
+                "endTime": preview_plan["endTime"],
+                "virtualCredits": float(preview_plan["virtualCredits"]),
+            }
+        else:
+            admin_auth = FirebaseAuthenticator(
+                root / "secrets" / "preview-auth-cache.json"
+            ).authenticate(
+                credentials.admin_email,
+                credentials.admin_password,
+                credentials.firebase_api_key,
+            )
+            report = inspect_preview_readiness(
+                root,
+                read_policy,
+                PreviewReadonlyClient(read_policy, admin_auth.id_token),
+                identities,
+                credentials.firebase_api_key,
+            )
+            candidate = report.get("candidateSession")
+            if not report.get("readyForBookingPreview") or not isinstance(candidate, dict):
+                raise PreviewWriteError("booking readiness gate is blocked")
+            credits = min(float(report["actors"]["red-captain"]["virtualCredits"]), 25.0)
+            preview = summarize_booking_preview(
+                PreviewBookingEvaluator(read_policy, red_auth.id_token).evaluate(
+                    candidate["sessionId"], candidate["tableId"], credits
+                )
+            )
+            if not preview["readyForOrder"]:
+                raise PreviewWriteError("booking preview is not ready for ORDER")
+            plan = {
+                "occurrenceKey": occurrence_key(
+                    report["location"]["podId"], candidate["startTime"], "red-captain"
+                ),
+                "podId": report["location"]["podId"],
+                "ownerUserId": red.podplay_user_id,
+                "sessionId": candidate["sessionId"],
+                "tableId": candidate["tableId"],
+                "startTime": candidate["startTime"],
+                "endTime": candidate["endTime"],
+                "virtualCredits": credits,
+            }
         existing_state = ledger["matches"].get(plan["occurrenceKey"], {})
         state = dict(existing_state) if isinstance(existing_state, dict) else {}
         prepared_at = state.get("preparedAt") if isinstance(state, dict) else None
@@ -1130,12 +1217,27 @@ def book_preview_match(root: Path, apply: bool, confirmation: Optional[str]) -> 
                     "eventId": event_id,
                     "order": order_summary,
                     "event": event,
+                    "intentId": selected_intent_id,
                 }
             )
             save_match(storage, ledger, next_state)
+            if selected_intent is not None and intent_ledger is not None:
+                selected_intent.update(
+                    {
+                        "status": "booked",
+                        "booking": {
+                            "eventId": event_id,
+                            "occurrenceKey": plan["occurrenceKey"],
+                            "bookedAt": datetime.now(timezone.utc).isoformat(),
+                        },
+                    }
+                )
+                save_intent(storage, intent_ledger, selected_intent)
+                _sync_world_intent_status(storage, selected_intent)
         else:
             event = None
     except (
+        BookingIntentError,
         CredentialsError,
         FirebaseAuthError,
         IdentityRegistryError,
@@ -1154,6 +1256,8 @@ def book_preview_match(root: Path, apply: bool, confirmation: Optional[str]) -> 
     )
     print(f"occurrence: {plan['occurrenceKey']}")
     print(f"slot: {plan['startTime']} to {plan['endTime']}")
+    if selected_intent_id:
+        print(f"intent: {selected_intent_id}")
     if apply:
         print(f"event: {event_id} ({event['status']}, read back)")
         print(f"writes: {writes}; phase: booked")
