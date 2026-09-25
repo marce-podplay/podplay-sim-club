@@ -28,6 +28,7 @@ from podplay_sim_club.fake_preview import FakePreview
 from podplay_sim_club.orchestrator import Orchestrator, SimulatedCrash
 from podplay_sim_club.preview import PreviewAdapter
 from podplay_sim_club.preview_booking import PreviewBookingWriter, occurrence_key
+from podplay_sim_club.preview_owner_event import PreviewOwnerEventWriter
 from podplay_sim_club.preview_match_ledger import (
     load_match_ledger,
     sanitized_match_index,
@@ -45,7 +46,7 @@ from podplay_sim_club.preview_evaluation import (
     PreviewEvaluationError,
     summarize_booking_preview,
 )
-from podplay_sim_club.preview_readonly import PreviewReadonlyClient
+from podplay_sim_club.preview_readonly import PreviewReadError, PreviewReadonlyClient
 from podplay_sim_club.preview_readiness import select_candidate_session, summarize_payment
 from podplay_sim_club.preview_payment import load_test_stripe_secret
 from podplay_sim_club.preview_write import (
@@ -167,6 +168,7 @@ class SimClubTestCase(unittest.TestCase):
         ledger = load_intent_ledger(Storage(self.root))
         intent = ledger["intents"]["intent:actor-runtime:season-001:free-hour-001"]
         self.assertEqual(60, intent["constraints"]["durationMinutes"])
+        self.assertEqual("owner_open_play", intent["journey"])
         self.assertTrue(intent["constraints"]["freeToParticipants"])
         self.assertTrue((self.root / "state" / "actors" / "sofia" / "memory.md").is_file())
 
@@ -871,6 +873,65 @@ class PreviewConnectionTestCase(unittest.TestCase):
         self.assertNotIn("owner", body)
         with self.assertRaises(PreviewWriteError):
             writer.order("session-1", "table-1", 25)
+
+    def test_candidate_groups_contiguous_half_hour_slots_for_longer_durations(self):
+        sessions = [
+            {
+                "id": f"session-{index}", "status": "AVAILABLE", "tablesLeft": 1,
+                "startTime": f"2026-09-26T{10 + index // 2:02d}:{'30' if index % 2 else '00'}:00Z",
+                "endTime": f"2026-09-26T{10 + (index + 1) // 2:02d}:{'00' if index % 2 else '30'}:00Z",
+                "availableTables": {"items": [{"id": f"table-{index}", "rate": 10}]},
+                "defaultTable": {"id": f"table-{index}"},
+            }
+            for index in range(3)
+        ]
+        candidate = select_candidate_session(sessions, required_duration_minutes=90)
+
+        self.assertEqual("2026-09-26T10:00:00Z", candidate["startTime"])
+        self.assertEqual("2026-09-26T11:30:00Z", candidate["endTime"])
+        self.assertEqual(90, candidate["durationMinutes"])
+        self.assertEqual(["session-0", "session-1", "session-2"], [item["sessionId"] for item in candidate["items"]])
+        with self.assertRaises(PreviewReadError):
+            select_candidate_session(sessions, required_duration_minutes=45)
+
+    def test_booking_writer_can_send_a_contiguous_multi_slot_order(self):
+        policy = TargetPolicy.from_config(ClubConfig(mode=RunMode.PREVIEW_WRITE, preview_origin=PREVIEW_ORIGIN, allowed_preview_origins=(PREVIEW_ORIGIN,), preview_write_confirmation=PREVIEW_ORIGIN))
+
+        class Response:
+            status = 201
+            def __enter__(self): return self
+            def __exit__(self, *args): return None
+            def geturl(self): return PREVIEW_ORIGIN + "/apis/v2/bookings"
+            def read(self, _limit): return b'{"id":"event-1","type":"ORDER","status":"CONFIRMED"}'
+
+        requests = []
+        writer = PreviewBookingWriter(policy, "actor-token", lambda request, _timeout: requests.append(request) or Response())
+        writer.order("session-1", "table-1", 0, [{"sessionId": "session-2", "tableId": "table-2"}])
+
+        self.assertEqual(2, len(json.loads(requests[0].data.decode("utf-8"))["items"]))
+
+    def test_owner_open_play_writer_is_published_free_event_with_bounded_items(self):
+        policy = TargetPolicy.from_config(ClubConfig(mode=RunMode.PREVIEW_WRITE, preview_origin=PREVIEW_ORIGIN, allowed_preview_origins=(PREVIEW_ORIGIN,), preview_write_confirmation=PREVIEW_ORIGIN))
+
+        class Response:
+            status = 201
+            def __enter__(self): return self
+            def __exit__(self, *args): return None
+            def geturl(self): return PREVIEW_ORIGIN + "/apis/v2/bookings"
+            def read(self, _limit): return b'{"id":"event-1"}'
+
+        requests = []
+        writer = PreviewOwnerEventWriter(policy, "admin-token", lambda request, _timeout: requests.append(request) or Response())
+        writer.create_open_play(
+            [{"sessionId": "session-1", "tableId": "table-1"}, {"sessionId": "session-2", "tableId": "table-2"}],
+            "Preview Club Open Play free-hour-001",
+        )
+        body = json.loads(requests[0].data.decode("utf-8"))
+
+        self.assertEqual("EVENT", body["type"])
+        self.assertEqual("OPEN_PLAY", body["eventSubtype"])
+        self.assertEqual("PUBLISHED", body["eventStatus"])
+        self.assertEqual(2, len(body["items"]))
 
     def test_booking_occurrence_key_is_stable_and_slot_specific(self):
         first = occurrence_key("pod-1", "2026-09-26T12:00:00Z", "red-captain")

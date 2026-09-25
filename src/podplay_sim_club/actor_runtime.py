@@ -57,8 +57,8 @@ def _take_turn(storage: Storage, world: Dict[str, Any], campaign: Dict[str, Any]
     intent_id = f"intent:{key}"
     ledger = load_intent_ledger(storage)
 
-    if actor_id == campaign["owner"] and "runtime_announcement" not in kinds:
-        return _message(storage, key, observed_at, actor_id, campaign["participants"], campaign["message"], "runtime_announcement", "announced a free one-hour session")
+    if actor_id == campaign["owner"] and "runtime_event_request" not in kinds:
+        return _message(storage, key, observed_at, actor_id, ["lead"], "Please create the free Open Play first; promotion waits for its published event record.", "runtime_event_request", "requested the owner Open Play")
     if actor_id == "red-captain" and "runtime_red_acceptance" not in kinds:
         return _message(storage, key, observed_at, actor_id, [campaign["owner"]], "Red is in if the area, pod, and zero-price outcome are visible before check-in.", "runtime_red_acceptance", "accepted with visibility requirements")
     if actor_id == "blue-captain" and "runtime_blue_acceptance" not in kinds:
@@ -67,16 +67,18 @@ def _take_turn(storage: Storage, world: Dict[str, Any], campaign: Dict[str, Any]
         return _message(storage, key, observed_at, actor_id, [campaign["owner"]], "Before booking, expose exact area, pod, local start time, and whether a 60-minute session exists.", "runtime_location_review", "requested location and duration evidence")
     if actor_id == "riley" and "runtime_support_watch" not in kinds:
         return _message(storage, key, observed_at, actor_id, [campaign["owner"]], "If the preview cannot offer one contiguous free hour, record the constraint once; do not retry blindly.", "runtime_support_watch", "set support observation rule")
-    if actor_id == "lead" and intent_id not in ledger["intents"] and {"runtime_announcement", "runtime_red_acceptance", "runtime_blue_acceptance"}.issubset(kinds):
+    if actor_id == "lead" and intent_id not in ledger["intents"] and {"runtime_event_request", "runtime_red_acceptance", "runtime_blue_acceptance"}.issubset(kinds):
         intent = {
-            "schemaVersion": 1, "id": intent_id, "status": "agreed", "reason": "owner_free_hour_announcement", "createdAt": observed_at,
+            "schemaVersion": 1, "id": intent_id, "status": "agreed", "reason": "owner_open_play", "journey": campaign.get("journey", "owner_open_play"), "createdAt": observed_at,
             "participants": deepcopy(campaign["participants"]), "requestedBy": campaign["owner"],
             "constraints": {"durationMinutes": campaign["durationMinutes"], "daysAhead": deepcopy(campaign["daysAhead"]), "localWindows": deepcopy(campaign["localWindows"]), "slotPolicy": campaign["slotPolicy"], "freeToParticipants": campaign["freeToParticipants"]},
             "evidence": {"runtimeOccurrenceKey": key}, "remoteWrites": 0,
         }
         save_intent(storage, ledger, intent)
         world.setdefault("bookingIntents", []).append({"id": intent_id, "status": "agreed", "reason": intent["reason"], "participants": deepcopy(intent["participants"]), "createdAt": observed_at})
-        return {"actorId": actor_id, "action": "intent", "detail": "recorded a 60-minute free-session intent", "observedAt": observed_at}
+        return {"actorId": actor_id, "action": "intent", "detail": "recorded a 60-minute owner Open Play intent", "observedAt": observed_at}
+    if actor_id == campaign["owner"] and intent_id in ledger["intents"] and ledger["intents"][intent_id].get("status") == "event_created" and "runtime_announcement" not in kinds:
+        return _message(storage, key, observed_at, actor_id, campaign["participants"], campaign["message"], "runtime_announcement", "promoted the published Open Play")
     return {"actorId": actor_id, "action": "pass", "detail": "no new relevant information", "observedAt": observed_at}
 
 

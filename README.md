@@ -112,19 +112,33 @@ coordination without allowing any preview mutations:
 ./club runtime tick --max-turns 10
 ```
 
-Each turn rotates through Sofia, the captains, admin, CS, and lead. Actors write
-compact files under ignored `state/actors/<actor>/memory.md` plus shared club
-messages. A turn with no new information becomes a recorded `pass`, not an
-unbounded conversation. The first scenario proposes a free, contiguous
-one-hour session. Planning it remains separate and read-only:
+Each turn rotates through Sofia, the captains, admin, CS, and lead. In the Open
+Play journey, Sofia requests the event first and promotes it only after a
+published event record exists. Actors write compact files under ignored
+`state/actors/<actor>/memory.md` plus shared club messages. A turn with no new
+information becomes a recorded `pass`, not an unbounded conversation. The first
+scenario proposes a free, contiguous one-hour Open Play. Durations are positive
+30-minute increments (30, 60, 90, ...); longer selections are adjacent grid
+items, not unrelated bookings. Planning remains separate and read-only:
 
 ```console
 ./club preview plan-intent --intent intent:actor-runtime:season-001:free-hour-001
 ```
 
-If the preview cannot supply a matching 60-minute slot, the intent becomes
+If the preview cannot supply a matching contiguous duration, the intent becomes
 `preview_blocked` and a secret-free issue is saved under `state/issues/open/`.
-It never silently downgrades to two unrelated 30-minute bookings.
+It never silently downgrades to unrelated 30-minute bookings.
+
+For an `owner_open_play` intent, create the event before the promotion:
+
+```console
+./club preview create-open-play --dry-run --intent intent:actor-runtime:season-001:free-hour-001
+./club preview create-open-play --apply --confirm-origin "$PODPLAY_SIM_PREVIEW_ORIGIN" --intent intent:actor-runtime:season-001:free-hour-001
+```
+
+The apply command uses the exact-origin write gate, creates one free listed
+published Open Play, and reads it back before changing the intent to
+`event_created`. A later Sofia turn sends the promotion.
 
 A season is the lifetime of one PR-specific preview database. Code can be
 redeployed without starting a new season. Recreating the database from the
@@ -179,6 +193,7 @@ Then run:
 ./club preview readiness
 ./club preview booking-preview
 ./club preview plan-intent
+./club preview create-open-play --dry-run
 ./club preview fund --dry-run
 ```
 

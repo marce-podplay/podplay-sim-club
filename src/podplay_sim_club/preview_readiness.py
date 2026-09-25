@@ -181,6 +181,8 @@ def select_candidate_session(
     allowed_local_windows: Optional[List[str]] = None,
     required_duration_minutes: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
+    if required_duration_minutes is not None:
+        _validate_half_hour_duration(required_duration_minutes)
     local_zone = None
     windows: List[Tuple[int, int]] = []
     if allowed_local_windows:
@@ -220,16 +222,7 @@ def select_candidate_session(
             )
         except ValueError:
             end_instant = None
-        if required_duration_minutes is not None and (
-            end_instant is None
-            or int((end_instant - start_instant).total_seconds() / 60)
-            != required_duration_minutes
-        ):
-            continue
-        if windows and (
-            end_instant is None
-            or not _inside_local_window(start_instant, end_instant, local_zone, windows)
-        ):
+        if end_instant is None or end_instant <= start_instant:
             continue
         available_tables = session.get("availableTables")
         table_items = (
@@ -250,7 +243,7 @@ def select_candidate_session(
             (table for table in valid_tables if table.get("id") == default_id),
             valid_tables[0],
         )
-        candidates.append((start_instant, {
+        item = {
             "sessionId": session.get("id"),
             "operatingDate": session.get("operatingDate"),
             "startTime": session.get("startTime"),
@@ -260,11 +253,72 @@ def select_candidate_session(
             "tableId": selected_table.get("id"),
             "tableType": selected_table.get("type"),
             "rate": float(selected_table["rate"]),
-        }))
+        }
+        candidates.append((start_instant, item))
     if not candidates:
         return None
     candidates.sort(key=lambda item: _utc(item[0]))
-    return candidates[0][1]
+    if required_duration_minutes is None:
+        for _, candidate in candidates:
+            start = _parse_session_time(candidate["startTime"])
+            end = _parse_session_time(candidate["endTime"])
+            if not windows or _inside_local_window(start, end, local_zone, windows):
+                return _candidate_from_slots([candidate])
+        return None
+
+    # The product grid exposes half-hour sessions.  A 60- or 90-minute booking
+    # therefore comprises adjacent session/table items, rather than a fictional
+    # single long session.  Keep the full item list so a later guarded write can
+    # reproduce precisely what the customer selected in the UI.
+    for start_index in range(len(candidates)):
+        slots = []
+        total_minutes = 0
+        previous_end = None
+        for _, candidate in candidates[start_index:]:
+            start = _parse_session_time(candidate["startTime"])
+            end = _parse_session_time(candidate["endTime"])
+            if previous_end is not None and start != previous_end:
+                break
+            slots.append(candidate)
+            total_minutes += int((end - start).total_seconds() / 60)
+            previous_end = end
+            if total_minutes == required_duration_minutes:
+                if not windows or _inside_local_window(
+                    _parse_session_time(slots[0]["startTime"]), end, local_zone, windows
+                ):
+                    return _candidate_from_slots(slots)
+                break
+            if total_minutes > required_duration_minutes:
+                break
+    return None
+
+
+def _candidate_from_slots(slots: List[Dict[str, Any]]) -> Dict[str, Any]:
+    first = dict(slots[0])
+    first["startTime"] = slots[0]["startTime"]
+    first["endTime"] = slots[-1]["endTime"]
+    first["items"] = [
+        {"sessionId": slot["sessionId"], "tableId": slot["tableId"]}
+        for slot in slots
+    ]
+    first["durationMinutes"] = sum(
+        int((_parse_session_time(slot["endTime"]) - _parse_session_time(slot["startTime"])).total_seconds() / 60)
+        for slot in slots
+    )
+    first["rate"] = sum(float(slot["rate"]) for slot in slots)
+    return first
+
+
+def _parse_session_time(value: str) -> datetime:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, ValueError) as exc:
+        raise PreviewReadError("session has an invalid timestamp") from exc
+
+
+def _validate_half_hour_duration(value: int) -> None:
+    if not isinstance(value, int) or value < 30 or value % 30:
+        raise PreviewReadError("duration must be a positive 30-minute increment")
 
 
 def _parse_local_window(value: str) -> Tuple[int, int]:

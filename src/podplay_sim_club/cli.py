@@ -47,6 +47,7 @@ from .preview_payment import (
     load_test_stripe_secret,
     wait_for_payment_method,
 )
+from .preview_owner_event import PreviewOwnerEventWriter
 from .preview_participation import (
     ACCEPTED_STATUSES,
     PreviewAcceptanceEvaluator,
@@ -226,6 +227,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--confirm-origin",
         help="required with --apply; must equal the exact preview origin",
     )
+    preview_open_play = preview_subcommands.add_parser(
+        "create-open-play", help="plan or create one owner-published free Open Play from an owner intent"
+    )
+    preview_open_play_mode = preview_open_play.add_mutually_exclusive_group(required=True)
+    preview_open_play_mode.add_argument("--dry-run", action="store_true")
+    preview_open_play_mode.add_argument("--apply", action="store_true")
+    preview_open_play.add_argument("--confirm-origin", help="required with --apply; must equal the exact preview origin")
+    preview_open_play.add_argument("--intent", help="owner Open Play intent ID; defaults to the active intent")
     preview_book.add_argument(
         "--intent",
         help="execute this preview_ready character intent instead of an operator-created plan",
@@ -321,6 +330,8 @@ def main(argv: Optional[list] = None) -> int:
             return book_preview_match(
                 root, args.apply, args.confirm_origin, args.intent
             )
+        if args.preview_command == "create-open-play":
+            return create_preview_open_play(root, args.apply, args.confirm_origin, args.intent)
         if args.preview_command == "join":
             return join_preview_match(
                 root, args.apply, args.confirm_origin, args.occurrence
@@ -787,8 +798,11 @@ def plan_preview_intent(
             )
         constraints = intent.get("constraints")
         duration = constraints.get("durationMinutes") if isinstance(constraints, dict) else None
-        if not isinstance(duration, int) or duration not in {30, 60}:
-            raise BookingIntentError("preview planning requires a 30- or 60-minute intent")
+        if not isinstance(duration, int) or duration < 30 or duration % 30:
+            raise BookingIntentError("preview planning requires a positive 30-minute increment")
+        journey = intent.get("journey", "customer_booking")
+        if journey not in {"customer_booking", "owner_open_play"}:
+            raise BookingIntentError("preview planning does not recognize the journey type")
 
         credentials = PreviewCredentials.load(root)
         policy = TargetPolicy.from_config(credentials.config)
@@ -843,13 +857,14 @@ def plan_preview_intent(
         end = datetime.fromisoformat(candidate["endTime"].replace("Z", "+00:00"))
         if int((end - start).total_seconds() / 60) != constraints["durationMinutes"]:
             raise BookingIntentError("preview candidate does not satisfy intent duration")
-        requested_credits = min(
-            float(report["actors"]["red-captain"]["virtualCredits"]), 25.0
-        )
-        evaluation = summarize_booking_preview(
-            PreviewBookingEvaluator(policy, red_auth.id_token).evaluate(
+        requested_credits = min(float(report["actors"]["red-captain"]["virtualCredits"]), 25.0)
+        evaluation = (
+            summarize_booking_preview(PreviewBookingEvaluator(policy, red_auth.id_token).evaluate(
                 candidate["sessionId"], candidate["tableId"], requested_credits
-            )
+            ))
+            if journey == "customer_booking"
+            else {"status": "OWNER_EVENT_PLANNED", "total": 0.0, "currency": None,
+                  "errorCodes": [], "readyForOrder": True}
         )
         intent["status"] = (
             "preview_ready" if evaluation["readyForOrder"] else "preview_blocked"
@@ -866,6 +881,8 @@ def plan_preview_intent(
             "podId": report["location"]["podId"],
             "sessionId": candidate["sessionId"],
             "tableId": candidate["tableId"],
+            "items": candidate["items"],
+            "durationMinutes": candidate["durationMinutes"],
             "startTime": candidate["startTime"],
             "endTime": candidate["endTime"],
             "virtualCredits": requested_credits,
@@ -901,7 +918,8 @@ def plan_preview_intent(
             f"location: {report['location']['areaName']} / "
             f"{report['location']['podName']}"
         )
-        print(f"slot: {candidate['startTime']} to {candidate['endTime']}")
+        print(f"journey: {journey}; duration: {candidate['durationMinutes']} minutes")
+        print(f"slot: {candidate['startTime']} to {candidate['endTime']} ({len(candidate['items'])} grid slots)")
         print(
             f"calculation: {evaluation['status']}; total={evaluation['total']:.2f} "
             f"{evaluation['currency'] or ''}; "
@@ -909,6 +927,63 @@ def plan_preview_intent(
         )
         print("remote writes: 0; durable intent updated")
     return 0 if evaluation["readyForOrder"] else 1
+
+
+def create_preview_open_play(
+    root: Path, apply: bool, confirmation: Optional[str], intent_id: Optional[str]
+) -> int:
+    """Create the owner event first; only a later actor tick may promote it."""
+    storage = Storage(root)
+    try:
+        if plan_preview_intent(root, intent_id, announce=False) != 0:
+            raise PreviewWriteError("owner Open Play intent is not ready")
+        ledger = load_intent_ledger(storage)
+        selected_id, intent = select_intent(ledger, intent_id)
+        if intent.get("journey") != "owner_open_play" or intent.get("status") != "preview_ready":
+            raise PreviewWriteError("selected intent is not a ready owner Open Play")
+        plan = intent.get("previewPlan")
+        if not isinstance(plan, dict) or not isinstance(plan.get("items"), list) or not plan["items"]:
+            raise PreviewWriteError("owner Open Play plan is incomplete")
+        credentials = PreviewCredentials.load(root)
+        read_policy = TargetPolicy.from_config(credentials.config)
+        if plan.get("targetOrigin") != read_policy.target_origin:
+            raise PreviewWriteError("owner Open Play was planned for another origin")
+        name = f"Preview Club Open Play {selected_id.rsplit(':', 1)[-1]}"
+        event = intent.get("event")
+        writes = 0
+        if apply and not isinstance(event, dict):
+            admin_auth = FirebaseAuthenticator(root / "secrets" / "preview-auth-cache.json").authenticate(
+                credentials.admin_email, credentials.admin_password, credentials.firebase_api_key
+            )
+            write_policy = TargetPolicy.from_config(replace(
+                credentials.config, mode=RunMode.PREVIEW_WRITE,
+                preview_write_confirmation=confirmation,
+            ))
+            result = PreviewOwnerEventWriter(write_policy, admin_auth.id_token).create_open_play(
+                plan["items"], name, total_teams=len(intent.get("participants", []))
+            )
+            event_id = result["id"]
+            client = PreviewReadonlyClient(read_policy, admin_auth.id_token)
+            event = client.get(f"/apis/v2/events/{event_id}")
+            if not isinstance(event, dict) or event.get("id") != event_id or event.get("subtype") != "OPEN_PLAY":
+                raise PreviewWriteError("owner Open Play read-back did not match the planned event")
+            writes = 1
+            intent["event"] = {"eventId": event_id, "name": name, "status": event.get("status"),
+                               "startTime": event.get("startTime"), "endTime": event.get("endTime")}
+            intent["status"] = "event_created"
+            intent["remoteWrites"] = 1
+            save_intent(storage, ledger, intent)
+            _sync_world_intent_status(storage, intent)
+        print(f"PREVIEW CLUB OPEN PLAY // {'APPLIED' if apply else 'DRY RUN'} // PR #{read_policy.pull_request_number}")
+        print(f"intent: {selected_id}; duration: {plan['durationMinutes']} minutes; grid slots: {len(plan['items'])}")
+        print(f"location: {plan['areaName']} / {plan['podName']}")
+        print(f"slot: {plan['startTime']} to {plan['endTime']}")
+        print(f"promotion: blocked until this event is created; writes: {writes}")
+        return 0
+    except (BookingIntentError, CredentialsError, FirebaseAuthError, IdentityRegistryError,
+            PreviewReadError, PreviewWriteError, TargetPolicyError, ValueError) as exc:
+        print(f"ERROR preview Open Play: {exc}", file=sys.stderr)
+        return 2
 
 
 def _sync_world_intent_status(storage: Storage, intent: dict) -> None:
@@ -1122,6 +1197,8 @@ def book_preview_match(
             selected_intent_id, selected_intent = select_intent(intent_ledger, intent_id)
             if selected_intent.get("status") != "preview_ready":
                 raise PreviewWriteError("character intent is not preview_ready")
+            if selected_intent.get("journey", "customer_booking") != "customer_booking":
+                raise PreviewWriteError("owner Open Play intents must use preview create-open-play")
         credentials = PreviewCredentials.load(root)
         read_policy = TargetPolicy.from_config(credentials.config)
         ledger = load_match_ledger(storage, read_policy.target_origin)
@@ -1158,6 +1235,7 @@ def book_preview_match(
                 "startTime": preview_plan["startTime"],
                 "endTime": preview_plan["endTime"],
                 "virtualCredits": float(preview_plan["virtualCredits"]),
+                "items": preview_plan.get("items"),
             }
         else:
             admin_auth = FirebaseAuthenticator(
@@ -1232,8 +1310,10 @@ def book_preview_match(
                 },
             )
             try:
+                items = plan.get("items")
+                additional_items = items[1:] if isinstance(items, list) else None
                 order = PreviewBookingWriter(write_policy, red_auth.id_token).order(
-                    plan["sessionId"], plan["tableId"], plan["virtualCredits"]
+                    plan["sessionId"], plan["tableId"], plan["virtualCredits"], additional_items
                 )
                 order_summary = summarize_order(order)
                 event_id = order_summary["eventId"]

@@ -49,6 +49,7 @@ class PreviewBookingWriter:
         session_id: str,
         session_table_id: str,
         virtual_credits: float,
+        additional_items: Optional[list] = None,
     ) -> Dict[str, Any]:
         if self._used:
             raise PreviewWriteError("booking write budget exhausted")
@@ -56,15 +57,19 @@ class PreviewBookingWriter:
             raise PreviewWriteError("booking order requires session and table IDs")
         if not isinstance(virtual_credits, (int, float)) or not 0 <= virtual_credits <= 25:
             raise PreviewWriteError("booking order credits must be between 0 and 25")
+        items = [{"session": {"id": session_id}, "sessionTable": {"id": session_table_id}}]
+        for item in additional_items or []:
+            if not isinstance(item, dict):
+                raise PreviewWriteError("booking order items must be objects")
+            extra_session = item.get("sessionId")
+            extra_table = item.get("tableId")
+            if not isinstance(extra_session, str) or not isinstance(extra_table, str):
+                raise PreviewWriteError("booking order items require session and table IDs")
+            items.append({"session": {"id": extra_session}, "sessionTable": {"id": extra_table}})
         self._used = True
         payload = {
             "type": "ORDER",
-            "items": [
-                {
-                    "session": {"id": session_id},
-                    "sessionTable": {"id": session_table_id},
-                }
-            ],
+            "items": items,
             "chargeStrategy": "ONLY_OWNER",
             "passesStrategy": "USE_NONE",
             "virtualCredits": virtual_credits,
