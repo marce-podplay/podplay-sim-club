@@ -269,10 +269,10 @@ select --occurrence KEY` changes that default. The `join`, `match-status`, and
 accidentally act on an ambiguous match.
 
 Running `preview match-status` also refreshes the ignored, sanitized
-`state/preview-match-status.json` snapshot. The observatory renders that remote
-PR-preview state as its default full-screen view and shows the sanitized local
-ledger of scheduled matches. The original deterministic simulation is available
-behind the `LOCAL FAKE` switch; the two booking traces are never merged.
+`state/preview-match-status.json` snapshot. The observatory renders only that
+remote PR-preview state and the sanitized local ledger of scheduled preview
+matches. Scenario and intent files remain the simulator's private planning
+mechanism; the local fake world is not presented as product state.
 
 Plan the persistent Preview Club identities and selected low-activity pod:
 

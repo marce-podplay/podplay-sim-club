@@ -232,7 +232,7 @@ class SimClubTestCase(unittest.TestCase):
         self.assertIn("POD-1 [R] ⇄ [B] occupied", frame)
         self.assertIn("BOOKING TRACE", frame)
 
-    def test_observatory_serves_world_and_health(self):
+    def test_observatory_serves_preview_snapshot_and_health(self):
         orchestrator = self.orchestrator()
         orchestrator.run_beat(turns=2, now=FIXED_NOW)
         orchestrator.storage.write_json(
@@ -299,30 +299,26 @@ class SimClubTestCase(unittest.TestCase):
         try:
             with urlopen(f"http://{host}:{port}/health", timeout=2) as response:
                 health = json.load(response)
-            with urlopen(f"http://{host}:{port}/api/world", timeout=2) as response:
-                world = json.load(response)
+            with urlopen(f"http://{host}:{port}/api/preview", timeout=2) as response:
+                preview = json.load(response)
             with urlopen(f"http://{host}:{port}/", timeout=2) as response:
                 page = response.read().decode("utf-8")
         finally:
             server.shutdown()
             thread.join(timeout=2)
 
-        self.assertEqual({"mode": "fake", "ok": True}, health)
-        self.assertEqual("season-001", world["season"])
-        self.assertEqual("SCHEDULED", world["previewMatch"]["result"])
-        self.assertEqual("pp7444-test", world["previewMatches"]["activeOccurrenceKey"])
-        self.assertEqual(1, len(world["previewMatches"]["matches"]))
+        self.assertEqual({"mode": "preview-observatory", "ok": True}, health)
+        self.assertEqual("SCHEDULED", preview["previewMatch"]["result"])
+        self.assertEqual("pp7444-test", preview["previewMatches"]["activeOccurrenceKey"])
+        self.assertEqual(1, len(preview["previewMatches"]["matches"]))
         self.assertIn("PODPLAY SIM CLUB // OBSERVATORY", page)
-        self.assertIn("LOCAL FAKE WORLD", page)
         self.assertIn("REMOTE PRODUCT STATE", page)
-        self.assertIn('data-view="preview" aria-selected="true"', page)
-        self.assertIn('id="fake-view" hidden', page)
         self.assertIn('id="copy-next"', page)
         self.assertIn("navigator.clipboard.writeText", page)
         self.assertIn("if (element.innerHTML !== html)", page)
-        self.assertIn("CHARACTER NEEDS", page)
-        self.assertIn("BOOKING INTENTS", page)
-        self.assertIn("bookingIntentLedger", world)
+        self.assertNotIn("LOCAL FAKE", page)
+        self.assertNotIn("CHARACTER NEEDS", page)
+        self.assertNotIn("BOOKING INTENTS", page)
 
 
 class PreviewMatchLedgerTestCase(unittest.TestCase):

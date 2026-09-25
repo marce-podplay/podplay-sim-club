@@ -7,7 +7,6 @@ from pathlib import Path
 import threading
 from typing import Optional
 
-from .booking_intents import sanitized_intents
 from .orchestrator import Orchestrator
 from .preview_match_ledger import sanitized_match_index
 
@@ -45,45 +44,29 @@ class ObservatoryServer:
                         "text/html; charset=utf-8",
                     )
                     return
-                if self.path == "/api/world":
-                    world = orchestrator.world_view()
+                if self.path == "/api/preview":
                     snapshot = orchestrator.storage.load_json(
                         orchestrator.storage.state / "preview-match-status.json",
                         default=None,
                     )
-                    world["previewMatch"] = snapshot if isinstance(snapshot, dict) else None
                     ledger = orchestrator.storage.load_json(
                         orchestrator.storage.state / "preview-matches.json",
                         default=None,
                     )
-                    world["previewMatches"] = (
-                        sanitized_match_index(ledger)
-                        if isinstance(ledger, dict)
-                        and isinstance(ledger.get("matches"), dict)
-                        else {"activeOccurrenceKey": None, "matches": []}
-                    )
-                    intent_ledger = orchestrator.storage.load_json(
-                        orchestrator.storage.state / "booking-intents.json",
-                        default=None,
-                    )
-                    world["bookingIntentLedger"] = (
-                        sanitized_intents(intent_ledger)
-                        if isinstance(intent_ledger, dict)
-                        and isinstance(intent_ledger.get("intents"), dict)
-                        else {"activeIntentId": None, "intents": []}
-                    )
-                    self._json(HTTPStatus.OK, world)
-                    return
-                if self.path == "/api/signals":
-                    self._json(
-                        HTTPStatus.OK,
-                        {"signals": orchestrator.world_view()["signals"]},
-                    )
+                    self._json(HTTPStatus.OK, {
+                        "previewMatch": snapshot if isinstance(snapshot, dict) else None,
+                        "previewMatches": (
+                            sanitized_match_index(ledger)
+                            if isinstance(ledger, dict)
+                            and isinstance(ledger.get("matches"), dict)
+                            else {"activeOccurrenceKey": None, "matches": []}
+                        ),
+                    })
                     return
                 if self.path == "/health":
                     self._json(
                         HTTPStatus.OK,
-                        {"ok": True, "mode": orchestrator.preview_mode},
+                        {"ok": True, "mode": "preview-observatory"},
                     )
                     return
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not_found"})

@@ -55,11 +55,6 @@
   </header>
   <div id="offline" class="offline" hidden>LOCAL OBSERVATORY OFFLINE · restart <code>./club serve</code>. Displayed data may be frozen.</div>
 
-  <nav class="switcher" aria-label="World source">
-    <button type="button" data-view="preview" aria-selected="true">PR PREVIEW</button>
-    <button type="button" data-view="fake" aria-selected="false">LOCAL FAKE</button>
-  </nav>
-
   <div id="preview-view">
     <section class="preview-hero">
       <h2>REMOTE PRODUCT STATE</h2>
@@ -79,27 +74,9 @@
     <div id="preview-source" class="source-note"></div>
   </div>
 
-  <div id="fake-view" hidden>
-    <div class="grid preview-grid">
-      <section><h2>CHARACTER NEEDS</h2><div id="needs"></div></section>
-      <section><h2>BOOKING INTENTS</h2><div id="intents"></div></section>
-    </div>
-    <div class="grid">
-      <section><h2>LOCAL FAKE CLUB / NETWORK</h2><div id="people"></div></section>
-      <section><h2>LOCAL FAKE COURT ZONE</h2><div id="pods"></div></section>
-      <section><h2>LOCAL FAKE SIGNALS</h2><div id="signals"></div></section>
-    </div>
-    <section><h2>LOCAL FAKE BOOKING TRACE</h2><div id="bookings" class="trace"></div></section>
-    <div id="detail" aria-live="polite"><span class="live">›</span> Select a character signal for one small hint.</div>
-    <div class="legend"><span>[S] owner · [A] admin · [C] CS · [R/B] captains</span><span>● active · ! attention · · absent</span></div>
-  </div>
 </main>
 <script>
-  const detail = document.getElementById('detail');
-  const glyph = state => state === 'playing' ? '●' : state === 'idle' ? '·' : '›';
   const esc = value => String(value).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-  let currentView = 'preview';
-  let currentWorld = null;
 
   function setHtml(id, html) {
     const element = document.getElementById(id);
@@ -121,26 +98,6 @@
     const copied = document.execCommand('copy');
     temporary.remove();
     if (!copied) throw new Error('copy failed');
-  }
-
-  function switchView(view) {
-    currentView = view;
-    document.getElementById('preview-view').hidden = view !== 'preview';
-    document.getElementById('fake-view').hidden = view !== 'fake';
-    document.querySelectorAll('[data-view]').forEach(button => {
-      button.setAttribute('aria-selected', String(button.dataset.view === view));
-    });
-    document.getElementById('source').textContent = view === 'preview'
-      ? 'PR PREVIEW · remote snapshot'
-      : `LOCAL FAKE WORLD${currentWorld ? ` · ${currentWorld.season} · beat ${currentWorld.beat.count}` : ''}`;
-    if (currentWorld) updateClock(currentWorld);
-  }
-
-  function updateClock(world) {
-    const observed = currentView === 'preview' && world.previewMatch
-      ? world.previewMatch.observedAt
-      : world.observedAt;
-    document.getElementById('clock').textContent = observed || '';
   }
 
   function checkInFact(label, status) {
@@ -219,41 +176,12 @@
     document.getElementById('preview-source').textContent = `Snapshot refreshed ${preview.observedAt} (${snapshotAge(preview.observedAt)}). Use match-status to refresh it; this view does not poll the preview API.`;
   }
 
-  function render(world) {
-    currentWorld = world;
-    updateClock(world);
-    renderPreview(world.previewMatch, world.previewMatches);
-    document.getElementById('needs').innerHTML = Object.entries(world.needs || {}).map(([id, need]) => {
-      const ready = Number(need.desireToPlay) >= Number(need.threshold);
-      return `<div class="fact"><span class="${ready?'live':'dim'}">${ready?'●':'·'} ${esc(id)}</span><strong>desire-to-play ${esc(need.desireToPlay)}/${esc(need.threshold)} · ${ready?'READY':'quiet'}</strong></div>`;
-    }).join('') || '<div class="dim">· no needs recorded</div>';
-    const intentRows = world.bookingIntentLedger && Array.isArray(world.bookingIntentLedger.intents)
-      ? world.bookingIntentLedger.intents : [];
-    document.getElementById('intents').innerHTML = intentRows.map(intent => `
-      <div class="fact"><span class="${intent.active?'live':'dim'}">${intent.active?'●':'·'} ${esc(intent.status || 'unknown')}</span>
-      <strong>${esc((intent.participants || []).join(' ⇄ '))}</strong><span class="dim">${esc(intent.id)}</span></div>`
-    ).join('') || '<div class="dim">· no character agreement yet</div>';
-    document.getElementById('people').innerHTML = Object.entries(world.people).map(([id,p]) =>
-      `<div class="person"><button data-id="${esc(id)}">[${esc(p.glyph)}] ${esc(p.name)}</button> <span class="${p.state==='playing'?'live':'dim'}">${glyph(p.state)} ${esc(p.location)} / ${esc(p.state)}</span></div>`
-    ).join('');
-    document.querySelectorAll('[data-id]').forEach(button => button.onclick = () => {
-      const p = world.people[button.dataset.id];
-      detail.innerHTML = `<span class="live">›</span> ${esc(p.name)} · ${esc(p.location)} · ${esc(p.state)} · ${p.unread} unread`;
-    });
-    document.getElementById('pods').innerHTML = Object.values(world.pods).map(p =>
-      `<div class="pod"><span>${esc(p.name)}</span><span class="${p.state==='occupied'?'live':'dim'}">${esc(p.state)}</span></div>`
-    ).join('');
-    document.getElementById('signals').innerHTML = [...world.signals].reverse().slice(0,6).map(s =>
-      `<div class="signal"><time>${esc(s.observedAt.slice(11,16))}</time><b>${esc(s.kind)}</b> ${esc(s.text)}</div>`
-    ).join('') || '<div class="dim">· no signals</div>';
-    document.getElementById('bookings').innerHTML = world.bookings.map(b =>
-      `<div class="booking ${esc(b.state)}"><span class="${b.state==='current'?'live':'dim'}">${esc(b.occurrenceKey)}</span><br>${esc(b.podId)} · ${b.checkedIn.length}/${b.participants.length} checked in</div>`
-    ).join('') || '<div class="dim">· no bookings yet</div>';
+  function render(previewState) {
+    const preview = previewState.previewMatch;
+    document.getElementById('clock').textContent = preview ? preview.observedAt || '' : '';
+    renderPreview(preview, previewState.previewMatches);
   }
 
-  document.querySelectorAll('[data-view]').forEach(button => {
-    button.onclick = () => switchView(button.dataset.view);
-  });
   document.getElementById('copy-next').onclick = async () => {
     const status = document.getElementById('copy-status');
     const text = document.getElementById('preview-next').innerText.trim();
@@ -267,7 +195,7 @@
   };
   async function refresh() {
     try {
-      const response = await fetch('/api/world', {cache:'no-store'});
+      const response = await fetch('/api/preview', {cache:'no-store'});
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       render(await response.json());
       document.getElementById('connection').textContent = '● OBSERVATORY ONLINE';
@@ -280,7 +208,6 @@
       document.getElementById('source').textContent = 'FROZEN VIEW · restart ./club serve';
     }
   }
-  switchView('preview');
   refresh(); setInterval(refresh, 2000);
 </script>
 </body>
