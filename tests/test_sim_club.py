@@ -81,7 +81,7 @@ class SimClubTestCase(unittest.TestCase):
         roster = json.loads((REPO_ROOT / "characters" / "roster.json").read_text())
         characters = {character["id"]: character for character in roster["characters"]}
 
-        self.assertEqual(2, roster["schemaVersion"])
+        self.assertEqual(3, roster["schemaVersion"])
         for team in roster["teams"]:
             self.assertIn(team["captainId"], team["members"])
             self.assertTrue(all(member in characters for member in team["members"]))
@@ -90,6 +90,11 @@ class SimClubTestCase(unittest.TestCase):
             self.assertTrue(pickleball["captainInvitesOneTeammate"])
             self.assertTrue(pickleball["thirdMemberMayAttendAsGuest"])
         self.assertEqual("kyo-kusanagi", next(team for team in roster["teams"] if team["id"] == "japan-team")["captainId"])
+        team_ids = {team["id"] for team in roster["teams"]}
+        for rivalry in roster["rivalries"]:
+            self.assertEqual(2, len(rivalry["teams"]))
+            self.assertTrue(set(rivalry["teams"]).issubset(team_ids))
+            self.assertIn(rivalry["preferredJourney"], {"doubles", "club_open_play"})
 
     def orchestrator(self):
         return Orchestrator(self.root)

@@ -1,5 +1,16 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
+  "challengePolicy": {
+    "doubles": {
+      "route": "customer_booking",
+      "requires": ["challengingCaptain", "acceptingCaptain", "oneCompatibleTeammatePerSide"],
+      "mayEscalateTo": "owner_open_play"
+    },
+    "club_open_play": {
+      "route": "owner_open_play",
+      "requires": ["clubOwner", "publishedEventBeforePromotion"]
+    }
+  },
   "teams": [
     {
       "id": "bogard-higashi",
@@ -39,6 +50,11 @@
       "members": ["kim-kaphwan", "chang-koehan", "choi-bounge"],
       "sports": {"pickleball": {"preferredTeamSize": 2, "captainInvitesOneTeammate": true, "thirdMemberMayAttendAsGuest": true}}
     }
+  ],
+  "rivalries": [
+    {"teams": ["bogard-higashi", "japan-team"], "intensity": "high", "preferredJourney": "doubles"},
+    {"teams": ["art-of-fighting", "women-fighters"], "intensity": "friendly", "preferredJourney": "club_open_play"},
+    {"teams": ["korea-team", "bogard-higashi"], "intensity": "friendly", "preferredJourney": "doubles"}
   ],
   "characters": [
     {"id": "sofia-alvarez", "actorId": "sofia", "name": "Sofia Alvarez", "role": "club_owner"},

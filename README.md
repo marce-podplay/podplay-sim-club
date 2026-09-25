@@ -160,6 +160,14 @@ chooses one teammate for a doubles booking; the third team member may appear as
 a guest. Team links express preference rather than a forced booking, and the
 same roster can later support a three-player sport.
 
+Rivalries are a distinct motivation in the same roster. A doubles challenge
+means a captain selects one teammate and challenges another captain's pair,
+which can create a normal customer booking. A broader friendly rivalry can
+escalate into Sofia's owner-created Open Play, where the remaining teammates
+join as guests or independent attendees. This keeps the causal choice visible:
+character rivalry proposes demand; it does not silently write a booking or
+event.
+
 A season is the lifetime of one PR-specific preview database. Code can be
 redeployed without starting a new season. Recreating the database from the
 weekly PingPod staging snapshot does start one. Firebase identities live outside
