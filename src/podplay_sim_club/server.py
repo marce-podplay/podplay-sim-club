@@ -129,9 +129,42 @@ class ObservatoryServer:
 def _recent_messages(orchestrator: Orchestrator):
     """Return the shared actor channel in chronological, bounded order."""
     rows = orchestrator.storage.read_jsonl(orchestrator.storage.channel_path("club"))
-    messages = [row for row in rows if isinstance(row, dict)]
+    directory = _actor_directory(orchestrator)
+    messages = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        message = dict(row)
+        sender = message.get("from")
+        recipients = message.get("to")
+        message["fromLabel"] = directory.get(sender, sender or "System")
+        message["toLabels"] = [
+            directory.get(actor_id, actor_id)
+            for actor_id in recipients
+            if isinstance(actor_id, str)
+        ] if isinstance(recipients, list) else []
+        messages.append(message)
     messages.sort(key=lambda row: (str(row.get("observedAt") or ""), str(row.get("id") or "")))
     return messages[-80:]
+
+
+def _actor_directory(orchestrator: Orchestrator):
+    directory = {
+        "sofia": "Sofia Alvarez", "alex": "Alex Morgan", "riley": "Riley Chen",
+        "lead": "Lead Coordinator", "red-captain": "Andy Bogard",
+        "blue-captain": "Terry Bogard", "kyo-captain": "Kyo Kusanagi",
+        "benimaru": "Benimaru Nikaido",
+    }
+    roster = orchestrator.storage.load_json(
+        orchestrator.storage.root / "characters" / "roster.json", default={}
+    )
+    if isinstance(roster, dict):
+        for character in roster.get("characters", []):
+            if isinstance(character, dict):
+                actor_id, name = character.get("actorId"), character.get("name")
+                if isinstance(actor_id, str) and isinstance(name, str):
+                    directory[actor_id] = name
+    return directory
 
 
 def serve(

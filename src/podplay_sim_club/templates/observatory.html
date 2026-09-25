@@ -46,12 +46,19 @@
     .legend { margin-top:12px; color:var(--dim); }
     .stream { min-height:250px; margin-top:14px; }
     .stream-list { max-height:360px; overflow:auto; border-top:1px solid var(--line); }
-    .stream-item { display:grid; grid-template-columns:110px 150px 1fr; gap:10px; padding:10px 4px; border-bottom:1px solid var(--line); }
+    .stream-item { display:grid; grid-template-columns:110px 145px 180px 1fr; gap:10px; padding:10px 4px; border-bottom:1px solid var(--line); }
     .stream-item:last-child { border-bottom:0; }
     .stream-kind { color:var(--warn); } .stream-from { color:var(--live); }
     .stream-link { color:var(--cold); word-break:break-all; }
     .stream-empty { padding:14px 0; color:var(--dim); }
-    @media(max-width:760px){ .grid,.preview-grid{grid-template-columns:1fr;} .preview-result{font-size:19px;} }
+    .booking button { width:100%; border:0; padding:0; background:transparent; color:inherit; text-align:left; font:inherit; cursor:pointer; }
+    .booking button:hover .booking-label, .booking button:focus-visible .booking-label { color:var(--warn); text-decoration:underline; outline:none; }
+    .booking-label { color:var(--text); font-weight:600; }
+    .reference { color:var(--cold); }
+    .match-detail { margin-top:14px; min-height:0; }
+    .detail-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+    .person-row { padding:8px 0; border-top:1px solid var(--line); }
+    @media(max-width:760px){ .grid,.preview-grid,.detail-grid{grid-template-columns:1fr;} .preview-result{font-size:19px;} .stream-item{grid-template-columns:1fr; gap:3px;} }
   </style>
 </head>
 <body>
@@ -68,6 +75,7 @@
       <div id="preview-hero"><span class="dim">· no preview snapshot; run ./club preview match-status</span></div>
     </section>
     <section><h2>PREVIEW MATCH LEDGER</h2><div id="preview-matches" class="trace"></div></section>
+    <section id="match-detail" class="match-detail" hidden><h2>BOOKING / EVENT DETAIL</h2><div id="match-detail-body"></div></section>
     <div class="grid preview-grid">
       <section><h2>VENUE</h2><div id="preview-venue"></div></section>
       <section><h2>SCHEDULE</h2><div id="preview-match"></div></section>
@@ -80,7 +88,7 @@
     </section>
     <div id="preview-source" class="source-note"></div>
     <section class="stream">
-      <h2 class="panel-heading"><span>CLUB MESSAGE STREAM</span><span id="stream-count" class="dim">0 signals</span></h2>
+      <h2 class="panel-heading"><span>CLUB MESSAGE STREAM <span class="dim">· shared channel; TO means mentioned</span></span><span id="stream-count" class="dim">0 signals</span></h2>
       <div id="message-stream" class="stream-list"><div class="stream-empty">· actor messages will appear here after a runtime tick</div></div>
     </section>
   </div>
@@ -135,10 +143,17 @@
     const rows = previewMatches && Array.isArray(previewMatches.matches) ? previewMatches.matches : [];
     setHtml('preview-matches', rows.map(match => `
       <div class="booking ${match.active?'current':''}">
-        <span class="${match.active?'live':'dim'}">${match.active?'●':'·'} ${esc(match.startTime || 'time unknown')}</span><br>
-        ${esc(match.phase || 'unknown')} · ${esc(match.eventStatus || 'event pending')}<br>
-        <span class="dim">${esc(match.occurrenceKey)}</span>
+        <button type="button" onclick="showMatch(${rows.indexOf(match)})" aria-label="Show details for ${esc(match.label || 'preview booking')}">
+          <span class="${match.active?'live':'dim'}">${match.active?'●':'·'} ${esc(formatTime(match.startTime))}</span><br>
+          <span class="booking-label">${esc(match.label || 'Preview booking')}</span> · ${esc(match.eventStatus || 'event pending')}<br>
+          <span class="reference">${esc(match.eventCode || 'EVT-pending')}</span> <span class="dim">${esc(match.phase || 'unknown')}</span>
+        </button>
       </div>`).join('') || '<div class="dim">· no preview matches recorded</div>');
+    window.matchRows = rows;
+    if (rows.length && (typeof window.selectedMatch !== 'number' || !rows[window.selectedMatch])) {
+      window.selectedMatch = Math.max(0, rows.findIndex(match => match.active));
+    }
+    renderMatchDetail(rows[window.selectedMatch]);
     if (!preview) {
       setHtml('preview-hero', '<span class="dim">· no preview snapshot; run ./club preview match-status</span>');
       setHtml('preview-match', '<span class="dim">· unknown</span>');
@@ -187,6 +202,27 @@
     document.getElementById('preview-source').textContent = `Snapshot refreshed ${preview.observedAt} (${snapshotAge(preview.observedAt)}). Use match-status to refresh it; this view does not poll the preview API.`;
   }
 
+  function showMatch(index) {
+    window.selectedMatch = index;
+    renderMatchDetail((window.matchRows || [])[index]);
+  }
+
+  function renderMatchDetail(match) {
+    const panel = document.getElementById('match-detail');
+    if (!match) { panel.hidden = true; return; }
+    panel.hidden = false;
+    const people = Array.isArray(match.participants) ? match.participants : [];
+    setHtml('match-detail-body', `<div class="detail-grid">
+      <div>
+        <div class="fact"><span class="dim">BOOKING</span><strong>${esc(match.label || 'Preview booking')}</strong></div>
+        <div class="fact"><span class="dim">REFERENCE</span><strong class="reference">${esc(match.eventCode || 'pending')}</strong></div>
+        <div class="fact"><span class="dim">EVENT ID</span><strong>${esc(match.eventId || 'not created')}</strong></div>
+        <div class="fact"><span class="dim">SLOT</span><strong>${esc(formatTime(match.startTime))}</strong><span class="dim">to ${esc(formatTime(match.endTime))}</span></div>
+      </div>
+      <div><span class="dim">ASSIGNED PLAYERS</span>${people.map(person => `<div class="person-row"><strong>${esc(person.label)}</strong> <span class="dim">(${esc(person.role)})</span><br><span class="reference">${esc(person.actorId)}</span> · invite ${esc(person.invitationStatus || 'owner')} · check-in ${esc(person.attendance || 'not refreshed')}</div>`).join('')}</div>
+    </div>`);
+  }
+
   function signalText(message) {
     if (typeof message.text === 'string' && message.text) return message.text;
     const payload = message.payload;
@@ -202,10 +238,11 @@
     const html = rows.map(message => {
       const payload = message.payload || {};
       const link = payload.inviteLink && payload.inviteLink.status === 'available' ? payload.inviteLink.url : '';
-      const recipients = Array.isArray(message.to) ? message.to.join(', ') : '';
+      const recipients = Array.isArray(message.toLabels) && message.toLabels.length ? message.toLabels.join(', ') : 'All club';
       return `<div class="stream-item">
         <span class="dim">${esc(message.observedAt || 'time unknown')}</span>
-        <span><strong class="stream-kind">${esc(message.kind || 'signal')}</strong><br><span class="stream-from">${esc(message.from || 'system')}</span>${recipients ? ` <span class="dim">→ ${esc(recipients)}</span>` : ''}</span>
+        <span><strong class="stream-kind">${esc(message.kind || 'signal')}</strong></span>
+        <span><span class="stream-from">FROM ${esc(message.fromLabel || message.from || 'System')}</span><br><span class="dim">TO ${esc(recipients)}</span></span>
         <span>${esc(signalText(message))}${link ? `<br><a class="stream-link" href="${esc(link)}" target="_blank" rel="noreferrer">${esc(link)}</a>` : ''}</span>
       </div>`;
     }).join('');

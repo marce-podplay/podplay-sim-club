@@ -93,16 +93,40 @@ def sanitized_match_index(ledger: JsonObject) -> JsonObject:
     for key, match in ledger["matches"].items():
         plan = match.get("plan") if isinstance(match.get("plan"), dict) else {}
         event = match.get("event") if isinstance(match.get("event"), dict) else {}
+        event_id = match.get("eventId")
+        blue_invitation = (
+            match.get("blueInvitation")
+            if isinstance(match.get("blueInvitation"), dict)
+            else {}
+        )
         rows.append(
             {
                 "occurrenceKey": key,
+                "occurrenceCode": _short_code("OCC", key),
                 "active": key == ledger.get("activeOccurrenceKey"),
                 "phase": match.get("phase"),
-                "eventId": match.get("eventId"),
+                "eventId": event_id,
+                "eventCode": _short_code("EVT", event_id),
+                "label": event.get("name") or _event_label(event),
                 "eventStatus": event.get("status"),
                 "startTime": plan.get("startTime"),
                 "endTime": plan.get("endTime"),
                 "podId": plan.get("podId"),
+                "participants": [
+                    {
+                        "actorId": "red-captain",
+                        "label": "Andy Bogard",
+                        "role": "booking owner",
+                        "attendance": "not refreshed",
+                    },
+                    {
+                        "actorId": "blue-captain",
+                        "label": "Terry Bogard",
+                        "role": "invited player",
+                        "invitationStatus": blue_invitation.get("status", "unknown"),
+                        "attendance": blue_invitation.get("checkInStatus", "not refreshed"),
+                    },
+                ],
             }
         )
     rows.sort(key=lambda row: (str(row.get("startTime") or ""), row["occurrenceKey"]))
@@ -110,6 +134,22 @@ def sanitized_match_index(ledger: JsonObject) -> JsonObject:
         "activeOccurrenceKey": ledger.get("activeOccurrenceKey"),
         "matches": rows,
     }
+
+
+def _short_code(prefix: str, value: Any) -> Optional[str]:
+    if not isinstance(value, str) or not value:
+        return None
+    compact = "".join(character for character in value if character.isalnum())
+    return f"{prefix}-{compact[:8].upper()}" if compact else None
+
+
+def _event_label(event: JsonObject) -> str:
+    subtype = event.get("subtype")
+    if subtype == "PRIVATE":
+        return "Private booking"
+    if subtype == "OPEN_PLAY":
+        return "Open Play"
+    return "Preview event"
 
 
 def _new_ledger(target_origin: str) -> JsonObject:
