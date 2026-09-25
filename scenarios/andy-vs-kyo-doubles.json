@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "andy-vs-kyo-doubles-001",
+  "journey": "doubles_challenge",
+  "challenger": {
+    "teamId": "bogard-higashi",
+    "captainId": "andy-bogard",
+    "teammateId": "terry-bogard",
+    "guestEligible": ["joe-higashi"]
+  },
+  "opponent": {
+    "teamId": "japan-team",
+    "captainId": "kyo-kusanagi",
+    "teammateId": "benimaru-nikaido",
+    "guestEligible": ["goro-daimon"]
+  },
+  "durationMinutes": 60,
+  "daysAhead": [0, 14],
+  "localWindows": ["00:00-24:00"],
+  "escalateTo": "owner_open_play"
+}

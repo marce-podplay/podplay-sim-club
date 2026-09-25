@@ -32,20 +32,31 @@ ACTOR_NAMES = {
     "blue-captain": ("Blue", "Captain PP-7444"),
 }
 
+# These identities are deliberately opt-in.  Normal Preview Club readiness
+# remains a small two-player probe until a scenario explicitly activates a team.
+TEAM_ACTOR_NAMES = {
+    "kyo-captain": ("Kyo", "Kusanagi"),
+    "benimaru": ("Benimaru", "Nikaido"),
+}
+
+TEAM_ACTORS = {"japan-team": ("kyo-captain", "benimaru")}
+
 
 class IdentityRegistry:
     def __init__(self, path: Path):
         self.path = path
 
     def ensure(self, actor_ids: Iterable[str] = ACTOR_NAMES.keys()) -> Dict[str, ActorIdentity]:
+        requested_ids = tuple(actor_ids)
         data = self._read()
         actors = data.setdefault("actors", {})
         changed = False
-        for actor_id in actor_ids:
-            if actor_id not in ACTOR_NAMES:
+        for actor_id in requested_ids:
+            names = {**ACTOR_NAMES, **TEAM_ACTOR_NAMES}
+            if actor_id not in names:
                 raise IdentityRegistryError(f"unsupported actor identity: {actor_id}")
             if actor_id not in actors:
-                first_name, last_name = ACTOR_NAMES[actor_id]
+                first_name, last_name = names[actor_id]
                 suffix = secrets.token_hex(3)
                 actors[actor_id] = {
                     "email": f"marcelo+sim-pp7444-{actor_id}-{suffix}@podplay.app",
@@ -58,7 +69,8 @@ class IdentityRegistry:
                 changed = True
         if changed or not self.path.is_file():
             self._write(data)
-        return self._identities(data)
+        identities = self._identities(data)
+        return {actor_id: identities[actor_id] for actor_id in requested_ids}
 
     def record_verified(
         self,

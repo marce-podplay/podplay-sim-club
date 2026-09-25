@@ -19,7 +19,7 @@ from .actor_runtime import run_tick as run_actor_tick
 from .config import ClubConfig, ConfigurationError, RunMode
 from .credentials import CredentialsError, PreviewCredentials
 from .firebase_auth import FirebaseAuthError, FirebaseAuthenticator
-from .identity_registry import IdentityRegistry, IdentityRegistryError
+from .identity_registry import IdentityRegistry, IdentityRegistryError, TEAM_ACTORS
 from .orchestrator import Orchestrator
 from .preview_evaluation import (
     PreviewBookingEvaluator,
@@ -67,6 +67,7 @@ from .preview_write import PreviewWriteError
 from .server import serve
 from .storage import Storage
 from .target_policy import TargetPolicy, TargetPolicyError
+from .team_challenges import TeamChallengeError, plan_challenge
 from .terminal import render, render_needs
 from .time import parse_instant
 
@@ -193,6 +194,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--confirm-origin",
         help="required with --apply; must equal the exact preview origin",
     )
+    preview_seed.add_argument(
+        "--team", choices=sorted(TEAM_ACTORS),
+        help="also seed the two current product identities for this dormant team",
+    )
     preview_fund = preview_subcommands.add_parser(
         "fund", help="plan or reconcile bounded virtual credits for the captains"
     )
@@ -305,6 +310,12 @@ def build_parser() -> argparse.ArgumentParser:
     reset.add_argument("--confirm", action="store_true", required=True)
 
     subparsers.add_parser("test", help="run the dependency-free unit tests")
+    challenge = subparsers.add_parser(
+        "challenge", help="record a durable no-write team challenge from a roster scenario"
+    )
+    challenge.add_argument(
+        "--scenario", default="andy-vs-kyo-doubles.json", help="scenario file under scenarios/"
+    )
     return parser
 
 
@@ -319,6 +330,21 @@ def main(argv: Optional[list] = None) -> int:
             check=False,
         )
         return result.returncode
+
+    if args.command == "challenge":
+        try:
+            intent = plan_challenge(root, args.scenario, datetime.now(timezone.utc))
+        except (TeamChallengeError, ValueError) as exc:
+            print(f"ERROR team challenge: {exc}", file=sys.stderr)
+            return 2
+        print("PREVIEW CLUB TEAM CHALLENGE // AGREED // LOCAL ONLY")
+        print(f"intent: {intent['id']}")
+        print(f"match: {intent['challenger']['teamName']} vs {intent['opponent']['teamName']}")
+        print(f"players: {', '.join(intent['participantCharacters'])}")
+        print(f"duration: {intent['constraints']['durationMinutes']} minutes")
+        print(f"next: {intent['nextAction']}")
+        print("writes: 0")
+        return 0
 
     if args.command == "preview":
         if args.preview_command == "inspect":
@@ -362,6 +388,7 @@ def main(argv: Optional[list] = None) -> int:
                 root,
                 apply=args.apply,
                 confirmation=args.confirm_origin,
+                team=args.team,
             )
         raise AssertionError(f"unhandled preview command {args.preview_command}")
 
@@ -601,7 +628,7 @@ def inspect_preview(root: Path) -> int:
     return 0
 
 
-def seed_preview(root: Path, apply: bool, confirmation: Optional[str]) -> int:
+def seed_preview(root: Path, apply: bool, confirmation: Optional[str], team: Optional[str] = None) -> int:
     try:
         credentials = PreviewCredentials.load(root)
         read_policy = TargetPolicy.from_config(credentials.config)
@@ -614,7 +641,10 @@ def seed_preview(root: Path, apply: bool, confirmation: Optional[str]) -> int:
         )
         client = PreviewReadonlyClient(read_policy, auth.id_token)
         registry = IdentityRegistry(root / "secrets" / "preview-actors.json")
-        identities = registry.ensure()
+        actor_ids = list(registry.ensure().keys())
+        if team:
+            actor_ids.extend(TEAM_ACTORS[team])
+        identities = registry.ensure(actor_ids)
         if apply:
             write_config = replace(
                 credentials.config,

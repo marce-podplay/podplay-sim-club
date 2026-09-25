@@ -168,6 +168,34 @@ join as guests or independent attendees. This keeps the causal choice visible:
 character rivalry proposes demand; it does not silently write a booking or
 event.
 
+The first executable rivalry definition is
+`scenarios/andy-vs-kyo-doubles.json`: Andy + Terry challenge Kyo + Benimaru
+for a 60-minute doubles session, with Joe and Goro eligible only as guests. To
+prepare Kyo and Benimaru's product identities without expanding normal
+readiness, use the opt-in seed path:
+
+```console
+./club preview seed --dry-run --team japan-team
+./club preview seed --apply --confirm-origin "$PODPLAY_SIM_PREVIEW_ORIGIN" --team japan-team
+```
+
+The dry run is read-only. The apply command uses the existing exact-origin gate
+and creates or reuses only Kyo and Benimaru alongside the original core actors.
+
+The lead records the rivalry agreement before either customer booking or owner
+event work. This is intentionally local: the current preview adapter supports
+ordinary two-player bookings and Open Play signups, not a four-player team
+signup contract.
+
+```console
+./club challenge --scenario andy-vs-kyo-doubles.json
+```
+
+It writes one idempotent `customer_team_signup` intent with all four named
+players and a visible `owner_open_play` fallback. The next adapter milestone is
+to map that intent to the real team-signup UI/API; until then it reports zero
+remote writes rather than approximating a doubles match with separate bookings.
+
 A season is the lifetime of one PR-specific preview database. Code can be
 redeployed without starting a new season. Recreating the database from the
 weekly PingPod staging snapshot does start one. Firebase identities live outside

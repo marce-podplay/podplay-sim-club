@@ -73,6 +73,7 @@ class SimClubTestCase(unittest.TestCase):
         self.root = Path(self.temporary.name)
         shutil.copytree(REPO_ROOT / "seed", self.root / "seed")
         shutil.copytree(REPO_ROOT / "scenarios", self.root / "scenarios")
+        shutil.copytree(REPO_ROOT / "characters", self.root / "characters")
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -95,6 +96,39 @@ class SimClubTestCase(unittest.TestCase):
             self.assertEqual(2, len(rivalry["teams"]))
             self.assertTrue(set(rivalry["teams"]).issubset(team_ids))
             self.assertIn(rivalry["preferredJourney"], {"doubles", "club_open_play"})
+
+    def test_andy_vs_kyo_doubles_scenario_uses_the_roster_pairs_and_guests(self):
+        roster = json.loads((REPO_ROOT / "characters" / "roster.json").read_text())
+        scenario = json.loads((REPO_ROOT / "scenarios" / "andy-vs-kyo-doubles.json").read_text())
+        teams = {team["id"]: team for team in roster["teams"]}
+
+        self.assertEqual("doubles_challenge", scenario["journey"])
+        self.assertEqual(60, scenario["durationMinutes"])
+        for side in (scenario["challenger"], scenario["opponent"]):
+            team = teams[side["teamId"]]
+            self.assertEqual(team["captainId"], side["captainId"])
+            self.assertIn(side["teammateId"], team["members"])
+            self.assertNotEqual(side["captainId"], side["teammateId"])
+            self.assertTrue(set(side["guestEligible"]).issubset(set(team["members"]) - {side["captainId"], side["teammateId"]}))
+
+    def test_team_challenge_records_four_named_players_without_remote_writes(self):
+        from podplay_sim_club.team_challenges import plan_challenge
+
+        intent = plan_challenge(
+            self.root,
+            "andy-vs-kyo-doubles.json",
+            FIXED_NOW,
+        )
+
+        self.assertEqual("customer_team_signup", intent["journey"])
+        self.assertEqual(
+            ["red-captain", "blue-captain", "kyo-captain", "benimaru"],
+            intent["participants"],
+        )
+        self.assertEqual("owner_open_play", intent["fallbackJourney"])
+        self.assertEqual(0, intent["remoteWrites"])
+        replay = plan_challenge(self.root, "andy-vs-kyo-doubles.json", FIXED_NOW)
+        self.assertEqual(intent, replay)
 
     def orchestrator(self):
         return Orchestrator(self.root)
@@ -622,6 +656,9 @@ class PreviewConnectionTestCase(unittest.TestCase):
             self.assertEqual(first["sofia"].password, second["sofia"].password)
             self.assertEqual(0o600, path.stat().st_mode & 0o777)
             self.assertNotIn(first["sofia"].password, repr(first["sofia"]))
+            team = registry.ensure(("kyo-captain", "benimaru"))
+            self.assertEqual({"kyo-captain", "benimaru"}, set(team))
+            self.assertEqual({"sofia", "red-captain", "blue-captain"}, set(registry.ensure()))
 
     def test_identity_writer_requires_write_policy(self):
         policy = TargetPolicy.from_config(
