@@ -18,6 +18,7 @@ from .booking_intents import (
 from .actor_runtime import run_tick as run_actor_tick
 from .config import ClubConfig, ConfigurationError, RunMode
 from .credentials import CredentialsError, PreviewCredentials
+from .communications import record_invite_sent
 from .firebase_auth import FirebaseAuthError, FirebaseAuthenticator
 from .identity_registry import IdentityRegistry, IdentityRegistryError, TEAM_ACTORS
 from .orchestrator import Orchestrator
@@ -1556,6 +1557,15 @@ def join_preview_match(
 
             invitation_summary = summarize_invitation(
                 invitation, blue.podplay_user_id
+            )
+            record_invite_sent(
+                storage,
+                read_policy,
+                occurrence_key=occurrence,
+                event_id=event_id,
+                invitation=invitation,
+                sender_actor_id="red-captain",
+                recipient_actor_id="blue-captain",
             )
             if invitation_summary["status"] not in ACCEPTED_STATUSES:
                 preview_summary = summarize_acceptance(

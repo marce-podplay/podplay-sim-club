@@ -22,6 +22,7 @@ from podplay_sim_club.booking_intents import load_intent_ledger, save_intent
 from podplay_sim_club.cli import main
 from podplay_sim_club.config import ClubConfig, ConfigurationError, RunMode
 from podplay_sim_club.credentials import CredentialsError, PreviewCredentials
+from podplay_sim_club.communications import record_invite_sent
 from podplay_sim_club.firebase_auth import FirebaseAuthenticator
 from podplay_sim_club.identity_registry import ActorIdentity, IdentityRegistry
 from podplay_sim_club.fake_preview import FakePreview
@@ -659,6 +660,41 @@ class PreviewConnectionTestCase(unittest.TestCase):
             team = registry.ensure(("kyo-captain", "benimaru"))
             self.assertEqual({"kyo-captain", "benimaru"}, set(team))
             self.assertEqual({"sofia", "red-captain", "blue-captain"}, set(registry.ensure()))
+
+    def test_invite_sent_protocol_records_product_readback_and_optional_link(self):
+        policy = TargetPolicy.from_config(
+            ClubConfig(
+                mode=RunMode.PREVIEW_READONLY,
+                preview_origin=PREVIEW_ORIGIN,
+                allowed_preview_origins=(PREVIEW_ORIGIN,),
+            )
+        )
+        invitation = {
+            "id": "invite-1",
+            "status": "INVITATION_EXTENDED",
+            "inviteUrl": PREVIEW_ORIGIN + "/invitations/invite-1",
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            storage = Storage(Path(directory))
+            record = record_invite_sent(
+                storage, policy, occurrence_key="pod-1@2026-09-25T12",
+                event_id="event-1", invitation=invitation,
+                sender_actor_id="red-captain", recipient_actor_id="blue-captain",
+                observed_at="2026-09-25T12:00:00Z",
+            )
+            record_invite_sent(
+                storage, policy, occurrence_key="pod-1@2026-09-25T12",
+                event_id="event-1", invitation=invitation,
+                sender_actor_id="red-captain", recipient_actor_id="blue-captain",
+                observed_at="2026-09-25T12:00:01Z",
+            )
+
+            self.assertEqual("available", record["inviteLink"]["status"])
+            self.assertEqual("unobserved", record["delivery"]["email"])
+            self.assertEqual(1, len(storage.read_jsonl(storage.state / "notifications.jsonl")))
+            channel = storage.read_jsonl(storage.channel_path("club"))
+            self.assertEqual("invite_sent", channel[-1]["kind"])
 
     def test_identity_writer_requires_write_policy(self):
         policy = TargetPolicy.from_config(

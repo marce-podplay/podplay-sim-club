@@ -151,6 +151,17 @@ the ordinary event-signup endpoint—not an admin attendee shortcut:
 It reads each player's signup first, writes only a missing signup, then reads it
 back. It refuses to run before both the owner event and the promotion exist.
 
+## Parallel communication protocol
+
+After an actual invitation is created and read back, the simulator mirrors it in
+ignored local files: `state/notifications.jsonl` and the shared
+`state/channels/club.jsonl`. Each deterministic `invite_sent` message contains
+the product event and invitation IDs, read-back status, sender/recipient actor
+IDs, and `email: unobserved`—the simulator never claims delivery of an email it
+cannot inspect. If the product response explicitly exposes a same-preview-origin
+invite link, it is stored as `inviteLink.url`; otherwise the record says
+`not_exposed_by_product`. No link is guessed or manufactured.
+
 `characters/roster.json` separates stable technical actor IDs from personas.
 Andy Bogard (`red-captain`) is the current captain and Terry Bogard
 (`blue-captain`) his current compatible teammate. Joe Higashi is their future
