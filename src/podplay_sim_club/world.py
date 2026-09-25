@@ -47,6 +47,7 @@ def new_world(
         "bookings": [],
         "needs": {},
         "bookingIntents": [],
+        "campaigns": [],
         "signals": [],
         "attention": [],
         "scenarios": {
@@ -73,6 +74,7 @@ def project_world(world: Dict[str, Any]) -> Dict[str, Any]:
         "bookings": deepcopy(world["bookings"][-12:]),
         "needs": deepcopy(world.get("needs", {})),
         "bookingIntents": deepcopy(world.get("bookingIntents", [])[-12:]),
+        "campaigns": deepcopy(world.get("campaigns", [])[-12:]),
         "signals": deepcopy(world["signals"][-12:]),
         "attention": deepcopy(world["attention"]),
     }

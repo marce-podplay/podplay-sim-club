@@ -112,6 +112,10 @@ def render_needs(view: Dict[str, Any]) -> str:
             "RED_PROPOSES_FROM_NEED",
             "BLUE_AGREES_FROM_AVAILABILITY",
             "LEAD_RECORDS_BOOKING_INTENT",
+            "SOFIA_ANNOUNCES_PRIORITY_SESSION",
+            "RED_ACCEPTS_PRIORITY_SESSION",
+            "BLUE_ACCEPTS_PRIORITY_SESSION",
+            "LEAD_RECORDS_PROMOTION_INTENT",
         }
     ]
     for signal in need_signals[-5:]:
@@ -128,5 +132,13 @@ def render_needs(view: Dict[str, Any]) -> str:
         lines.append(
             f"● {intent['id']}  {intent['status']}  "
             f"{','.join(intent['participants'])}"
+        )
+    campaigns = view.get("campaigns", [])
+    lines.extend(["", "OWNER CAMPAIGNS"])
+    if not campaigns:
+        lines.append("· no owner announcement yet")
+    for campaign in campaigns:
+        lines.append(
+            f"● {campaign['id']}  {campaign['status']}  {campaign['owner']}"
         )
     return "\n".join(lines)

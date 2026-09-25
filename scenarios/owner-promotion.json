@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "owner-promotion",
+  "campaignId": "priority-session-001",
+  "owner": "sofia",
+  "participants": ["red-captain", "blue-captain"],
+  "message": "Preview Club priority session: the first two captains who agree will play the next legal 30-minute court slot.",
+  "durationMinutes": 30,
+  "daysAhead": [0, 14],
+  "localWindows": ["00:00-24:00"],
+  "slotPolicy": "nearest_valid_low_contention"
+}

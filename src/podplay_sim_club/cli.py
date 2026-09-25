@@ -125,6 +125,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     needs_run.add_argument("--turns", type=int, default=4)
     needs_run.add_argument("--now", help="override fake preview time with an ISO instant")
+    needs_promote = needs_subcommands.add_parser(
+        "promote", help="let Sofia announce a priority session and collect responses"
+    )
+    needs_promote.add_argument("--turns", type=int, default=4)
+    needs_promote.add_argument("--now", help="override fake preview time with an ISO instant")
     needs_subcommands.add_parser("status", help="show needs and booking intents")
 
     serve_parser = subparsers.add_parser("serve", help="serve the local observatory")
@@ -398,6 +403,18 @@ def main(argv: Optional[list] = None) -> int:
         if args.needs_command == "status":
             print(render_needs(orchestrator.world_view()))
             return 0
+        if args.needs_command == "promote":
+            result = orchestrator.run_promotion_beat(
+                turns=args.turns,
+                now=parse_instant(args.now) if args.now else None,
+            )
+            print(
+                f"{result['interactionKey']}: {result['status']} "
+                f"({result['turnsExecuted']} turns this beat)"
+            )
+            print()
+            print(render_needs(result["world"]))
+            return 0
         raise AssertionError(f"unhandled needs command {args.needs_command}")
 
     if args.command == "serve":
@@ -469,7 +486,8 @@ def run_doctor(root: Path, config: ClubConfig) -> int:
             (
                 "scenario_exists",
                 (root / "scenarios" / "hourly-match.json").is_file()
-                and (root / "scenarios" / "needs-match.json").is_file(),
+                and (root / "scenarios" / "needs-match.json").is_file()
+                and (root / "scenarios" / "owner-promotion.json").is_file(),
                 "",
             ),
             (

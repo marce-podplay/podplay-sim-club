@@ -32,6 +32,13 @@ NEED_STEPS = (
     "lead_records_booking_intent",
 )
 
+PROMOTION_STEPS = (
+    "sofia_announces_priority_session",
+    "red_accepts_priority_session",
+    "blue_accepts_priority_session",
+    "lead_records_promotion_intent",
+)
+
 
 class SimulatedCrash(RuntimeError):
     """Fault injection raised after a product commit but before checkpoint."""
@@ -53,10 +60,18 @@ class Orchestrator:
         self.needs_scenario = self.storage.load_json(
             self.root / "scenarios" / "needs-match.json"
         )
-        if self.seed is None or self.scenario is None or self.needs_scenario is None:
+        self.promotion_scenario = self.storage.load_json(
+            self.root / "scenarios" / "owner-promotion.json"
+        )
+        if (
+            self.seed is None
+            or self.scenario is None
+            or self.needs_scenario is None
+            or self.promotion_scenario is None
+        ):
             raise RuntimeError(
                 "seed/tenant.json, scenarios/hourly-match.json, and "
-                "scenarios/needs-match.json are required"
+                "scenarios/needs-match.json and scenarios/owner-promotion.json are required"
             )
         self._preview_factory = preview_factory or FakePreview
         self.validator = ActionValidator(
@@ -222,6 +237,64 @@ class Orchestrator:
                 step_index = int(interaction["step"])
                 step_name = NEED_STEPS[step_index]
                 self._execute_need_step(
+                    world, interaction, step_name, observed_at
+                )
+                interaction["step"] = step_index + 1
+                executed += 1
+                self.storage.write_json(self.storage.world_path, world)
+
+            world["beat"]["count"] = int(world["beat"]["count"]) + 1
+            world["beat"]["lastTurnCount"] = executed
+            world["beat"]["lastOccurrenceKey"] = interaction_key
+            self.storage.write_json(self.storage.world_path, world)
+            return {
+                "interactionKey": interaction_key,
+                "turnsExecuted": executed,
+                "status": interaction["status"],
+                "step": interaction["step"],
+                "intentId": interaction.get("intentId"),
+                "world": project_world(world),
+            }
+
+    def run_promotion_beat(
+        self, turns: int = 4, now: Optional[datetime] = None
+    ) -> Dict[str, Any]:
+        """Let the owner create near-term demand through an explicit campaign."""
+
+        if turns < 1:
+            raise ValueError("turns must be at least 1")
+        instant = now or parse_instant(None)
+        observed_at = isoformat(instant)
+
+        with self.storage.writer_lock():
+            world = self.ensure_world(instant)
+            self._ensure_needs_state(world)
+            world["clock"].update(
+                {"observedAt": observed_at, "simulationTime": observed_at}
+            )
+            interaction_key = (
+                f"owner-promotion:{world['season']['id']}:"
+                f"{self.promotion_scenario['campaignId']}"
+            )
+            interactions = world["scenarios"].setdefault(
+                "owner-promotion", {"interactions": {}}
+            )["interactions"]
+            interaction = interactions.setdefault(
+                interaction_key,
+                {
+                    "key": interaction_key,
+                    "step": 0,
+                    "status": "running",
+                    "participants": deepcopy(self.promotion_scenario["participants"]),
+                    "createdAt": observed_at,
+                },
+            )
+
+            executed = 0
+            while executed < turns and interaction["status"] == "running":
+                step_index = int(interaction["step"])
+                step_name = PROMOTION_STEPS[step_index]
+                self._execute_promotion_step(
                     world, interaction, step_name, observed_at
                 )
                 interaction["step"] = step_index + 1
@@ -518,6 +591,130 @@ class Orchestrator:
             self._append_unique(self.storage.actor_journal_path(actor_id), event)
         add_signal(world, self._signal(observed_at, step.upper(), detail))
 
+    def _execute_promotion_step(
+        self,
+        world: Dict[str, Any],
+        interaction: Dict[str, Any],
+        step: str,
+        observed_at: str,
+    ) -> None:
+        key = interaction["key"]
+        campaign = self.promotion_scenario
+        actor_id = campaign["owner"]
+
+        if step == "sofia_announces_priority_session":
+            self._message(
+                key,
+                observed_at,
+                actor_id,
+                deepcopy(campaign["participants"]),
+                campaign["message"],
+                "owner_announcement",
+            )
+            interaction["announcementMessageId"] = (
+                f"{key}:message:owner_announcement:{actor_id}"
+            )
+            campaign_summary = {
+                "id": key,
+                "status": "announced",
+                "owner": actor_id,
+                "message": campaign["message"],
+                "createdAt": observed_at,
+            }
+            world["campaigns"] = [
+                row for row in world.get("campaigns", []) if row.get("id") != key
+            ] + [campaign_summary]
+            detail = "Sofia announced a priority session for the next legal court slot."
+
+        elif step == "red_accepts_priority_session":
+            actor_id = "red-captain"
+            self._message(
+                key,
+                observed_at,
+                actor_id,
+                [campaign["owner"]],
+                "I am in for the next legal 30-minute slot.",
+                "promotion_response",
+            )
+            interaction["redResponseMessageId"] = (
+                f"{key}:message:promotion_response:{actor_id}"
+            )
+            world["actors"][actor_id]["state"] = "promotion_ready"
+            detail = "Red accepted Sofia's priority-session announcement."
+
+        elif step == "blue_accepts_priority_session":
+            actor_id = "blue-captain"
+            self._message(
+                key,
+                observed_at,
+                actor_id,
+                [campaign["owner"], "red-captain"],
+                "I can join the next legal 30-minute slot too.",
+                "promotion_response",
+            )
+            interaction["blueResponseMessageId"] = (
+                f"{key}:message:promotion_response:{actor_id}"
+            )
+            world["actors"][actor_id]["state"] = "promotion_ready"
+            detail = "Blue accepted Sofia's priority-session announcement."
+
+        elif step == "lead_records_promotion_intent":
+            actor_id = "lead"
+            intent_id = f"intent:{key}"
+            intent = {
+                "schemaVersion": 1,
+                "id": intent_id,
+                "status": "agreed",
+                "reason": "owner_priority_announcement",
+                "createdAt": observed_at,
+                "participants": deepcopy(campaign["participants"]),
+                "requestedBy": campaign["owner"],
+                "constraints": {
+                    "durationMinutes": campaign["durationMinutes"],
+                    "daysAhead": deepcopy(campaign["daysAhead"]),
+                    "localWindows": deepcopy(campaign["localWindows"]),
+                    "slotPolicy": campaign["slotPolicy"],
+                },
+                "evidence": {
+                    "announcementMessageId": interaction["announcementMessageId"],
+                    "redResponseMessageId": interaction["redResponseMessageId"],
+                    "blueResponseMessageId": interaction["blueResponseMessageId"],
+                },
+                "remoteWrites": 0,
+            }
+            intent_ledger = load_intent_ledger(self.storage)
+            save_intent(self.storage, intent_ledger, intent)
+            interaction["intentId"] = intent_id
+            interaction["status"] = "complete"
+            world["bookingIntents"] = [
+                row
+                for row in world["bookingIntents"]
+                if row.get("id") != intent_id
+            ] + [
+                {
+                    "id": intent_id,
+                    "status": "agreed",
+                    "reason": intent["reason"],
+                    "participants": deepcopy(intent["participants"]),
+                    "createdAt": observed_at,
+                }
+            ]
+            detail = f"Lead recorded promotion booking intent {intent_id}; no product write occurred."
+
+        event = {
+            "id": f"{key}:{step}",
+            "scenario": "owner-promotion",
+            "interactionKey": key,
+            "step": step,
+            "actorId": actor_id,
+            "detail": detail,
+            "observedAt": observed_at,
+        }
+        self._append_unique(self.storage.run_path(key, "events.jsonl"), event)
+        if actor_id != "lead":
+            self._append_unique(self.storage.actor_journal_path(actor_id), event)
+        add_signal(world, self._signal(observed_at, step.upper(), detail))
+
     def _ensure_needs_state(self, world: Dict[str, Any]) -> None:
         needs = world.setdefault("needs", {})
         for actor_id, definition in self.needs_scenario["needs"].items():
@@ -530,6 +727,7 @@ class Orchestrator:
                 },
             )
         world.setdefault("bookingIntents", [])
+        world.setdefault("campaigns", [])
         world.setdefault("scenarios", {}).setdefault(
             "needs-match", {"interactions": {}}
         )
