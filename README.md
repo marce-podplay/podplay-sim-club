@@ -203,6 +203,7 @@ booking:
 ./club preview book --apply --confirm-origin "$preview_origin"
 ./club preview join --dry-run
 ./club preview join --apply --confirm-origin "$preview_origin"
+./club preview matches
 ./club preview match-status
 ./club preview check-in --dry-run
 ./club preview check-in --apply --confirm-origin "$preview_origin"
@@ -215,14 +216,21 @@ request in the same run. `preview join` then reconciles one leader-paid Blue
 invitation, runs a non-persisting acceptance preview, and accepts through Blue's
 own token. `preview match-status` is a zero-write assertion that reports waiting,
 ready-for-check-in, or pass. `preview check-in` reads both statuses but refuses
-to write before the saved event start time. Sanitized progress lives in the ignored file
-`state/preview-manual-match.json`.
+to write before the saved event start time.
+
+Sanitized progress lives in the ignored occurrence ledger
+`state/preview-matches.json`. An existing `state/preview-manual-match.json` is
+migrated automatically without deleting the legacy checkpoint. `preview
+matches` lists every occurrence and marks the active one with `*`; `preview
+select --occurrence KEY` changes that default. The `join`, `match-status`, and
+`check-in` commands also accept `--occurrence KEY`, so retries cannot
+accidentally act on an ambiguous match.
 
 Running `preview match-status` also refreshes the ignored, sanitized
 `state/preview-match-status.json` snapshot. The observatory renders that remote
-PR-preview state as its default full-screen view. The original deterministic
-simulation is available behind the `LOCAL FAKE` switch; the two booking traces
-are never merged.
+PR-preview state as its default full-screen view and shows the sanitized local
+ledger of scheduled matches. The original deterministic simulation is available
+behind the `LOCAL FAKE` switch; the two booking traces are never merged.
 
 Plan the persistent Preview Club identities and selected low-activity pod:
 

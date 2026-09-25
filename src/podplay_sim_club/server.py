@@ -8,6 +8,7 @@ import threading
 from typing import Optional
 
 from .orchestrator import Orchestrator
+from .preview_match_ledger import sanitized_match_index
 
 
 class ObservatoryServer:
@@ -50,6 +51,16 @@ class ObservatoryServer:
                         default=None,
                     )
                     world["previewMatch"] = snapshot if isinstance(snapshot, dict) else None
+                    ledger = orchestrator.storage.load_json(
+                        orchestrator.storage.state / "preview-matches.json",
+                        default=None,
+                    )
+                    world["previewMatches"] = (
+                        sanitized_match_index(ledger)
+                        if isinstance(ledger, dict)
+                        and isinstance(ledger.get("matches"), dict)
+                        else {"activeOccurrenceKey": None, "matches": []}
+                    )
                     self._json(HTTPStatus.OK, world)
                     return
                 if self.path == "/api/signals":

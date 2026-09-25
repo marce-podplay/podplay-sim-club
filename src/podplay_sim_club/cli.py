@@ -27,6 +27,14 @@ from .preview_booking import (
     summarize_order,
 )
 from .preview_funding import apply_funding_plan, build_funding_plan
+from .preview_match_ledger import (
+    PreviewMatchLedgerError,
+    load_match_ledger,
+    sanitized_match_index,
+    save_match,
+    select_active,
+    select_match,
+)
 from .preview_payment import (
     PreviewPaymentMethodWriter,
     load_test_stripe_secret,
@@ -180,7 +188,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="required with --apply; must equal the exact preview origin",
     )
     preview_join = preview_subcommands.add_parser(
-        "join", help="invite and reconcile Blue Captain into the manual match"
+        "join", help="invite and reconcile Blue Captain into the selected match"
     )
     preview_join_mode = preview_join.add_mutually_exclusive_group(required=True)
     preview_join_mode.add_argument("--dry-run", action="store_true")
@@ -189,8 +197,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--confirm-origin",
         help="required with --apply; must equal the exact preview origin",
     )
+    preview_join.add_argument(
+        "--occurrence", help="ledger occurrence to join; defaults to the active match"
+    )
     preview_check_in = preview_subcommands.add_parser(
-        "check-in", help="reconcile captain check-ins when the manual match starts"
+        "check-in", help="reconcile captain check-ins when the selected match starts"
     )
     preview_check_in_mode = preview_check_in.add_mutually_exclusive_group(required=True)
     preview_check_in_mode.add_argument("--dry-run", action="store_true")
@@ -199,9 +210,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--confirm-origin",
         help="required with --apply; must equal the exact preview origin",
     )
-    preview_subcommands.add_parser(
-        "match-status", help="read and assert the current manual-match state"
+    preview_check_in.add_argument(
+        "--occurrence", help="ledger occurrence to check in; defaults to the active match"
     )
+    preview_status = preview_subcommands.add_parser(
+        "match-status", help="read and assert the selected preview-match state"
+    )
+    preview_status.add_argument(
+        "--occurrence", help="ledger occurrence to refresh; defaults to the active match"
+    )
+    preview_subcommands.add_parser("matches", help="list preview matches in the local ledger")
+    preview_select = preview_subcommands.add_parser(
+        "select", help="choose the active preview match for subsequent commands"
+    )
+    preview_select.add_argument("--occurrence", required=True)
     doctor.add_argument(
         "--preview-origin",
         help="override PODPLAY_SIM_PREVIEW_ORIGIN for this check",
@@ -253,11 +275,19 @@ def main(argv: Optional[list] = None) -> int:
         if args.preview_command == "book":
             return book_preview_match(root, args.apply, args.confirm_origin)
         if args.preview_command == "join":
-            return join_preview_match(root, args.apply, args.confirm_origin)
+            return join_preview_match(
+                root, args.apply, args.confirm_origin, args.occurrence
+            )
         if args.preview_command == "check-in":
-            return check_in_preview_match(root, args.apply, args.confirm_origin)
+            return check_in_preview_match(
+                root, args.apply, args.confirm_origin, args.occurrence
+            )
         if args.preview_command == "match-status":
-            return preview_match_status(root)
+            return preview_match_status(root, args.occurrence)
+        if args.preview_command == "matches":
+            return list_preview_matches(root)
+        if args.preview_command == "select":
+            return select_preview_match(root, args.occurrence)
         if args.preview_command == "seed":
             return seed_preview(
                 root,
@@ -788,64 +818,57 @@ def seed_payment_methods(
 
 
 def book_preview_match(root: Path, apply: bool, confirmation: Optional[str]) -> int:
-    match_path = root / "state" / "preview-manual-match.json"
     storage = Storage(root)
     try:
         credentials = PreviewCredentials.load(root)
         read_policy = TargetPolicy.from_config(credentials.config)
+        ledger = load_match_ledger(storage, read_policy.target_origin)
         identities = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure()
         red = identities["red-captain"]
         red_auth = FirebaseAuthenticator(
             root / "secrets" / "actor-auth" / "red-captain.json"
         ).authenticate(red.email, red.password, credentials.firebase_api_key)
         red_client = PreviewReadonlyClient(read_policy, red_auth.id_token)
-        state = storage.load_json(match_path, {}) if apply else {}
+        admin_auth = FirebaseAuthenticator(
+            root / "secrets" / "preview-auth-cache.json"
+        ).authenticate(
+            credentials.admin_email,
+            credentials.admin_password,
+            credentials.firebase_api_key,
+        )
+        report = inspect_preview_readiness(
+            root,
+            read_policy,
+            PreviewReadonlyClient(read_policy, admin_auth.id_token),
+            identities,
+            credentials.firebase_api_key,
+        )
+        candidate = report.get("candidateSession")
+        if not report.get("readyForBookingPreview") or not isinstance(candidate, dict):
+            raise PreviewWriteError("booking readiness gate is blocked")
+        credits = min(float(report["actors"]["red-captain"]["virtualCredits"]), 25.0)
+        preview = summarize_booking_preview(
+            PreviewBookingEvaluator(read_policy, red_auth.id_token).evaluate(
+                candidate["sessionId"], candidate["tableId"], credits
+            )
+        )
+        if not preview["readyForOrder"]:
+            raise PreviewWriteError("booking preview is not ready for ORDER")
+        plan = {
+            "occurrenceKey": occurrence_key(
+                report["location"]["podId"], candidate["startTime"], "red-captain"
+            ),
+            "podId": report["location"]["podId"],
+            "ownerUserId": red.podplay_user_id,
+            "sessionId": candidate["sessionId"],
+            "tableId": candidate["tableId"],
+            "startTime": candidate["startTime"],
+            "endTime": candidate["endTime"],
+            "virtualCredits": credits,
+        }
+        existing_state = ledger["matches"].get(plan["occurrenceKey"], {})
+        state = dict(existing_state) if isinstance(existing_state, dict) else {}
         prepared_at = state.get("preparedAt") if isinstance(state, dict) else None
-        if (
-            isinstance(state, dict)
-            and state
-            and state.get("targetOrigin") != read_policy.target_origin
-        ):
-            raise PreviewWriteError("saved manual-match state belongs to another origin")
-        plan = state.get("plan") if isinstance(state, dict) else None
-        if not isinstance(plan, dict):
-            admin_auth = FirebaseAuthenticator(
-                root / "secrets" / "preview-auth-cache.json"
-            ).authenticate(
-                credentials.admin_email,
-                credentials.admin_password,
-                credentials.firebase_api_key,
-            )
-            report = inspect_preview_readiness(
-                root,
-                read_policy,
-                PreviewReadonlyClient(read_policy, admin_auth.id_token),
-                identities,
-                credentials.firebase_api_key,
-            )
-            candidate = report.get("candidateSession")
-            if not report.get("readyForBookingPreview") or not isinstance(candidate, dict):
-                raise PreviewWriteError("booking readiness gate is blocked")
-            credits = min(float(report["actors"]["red-captain"]["virtualCredits"]), 25.0)
-            preview = summarize_booking_preview(
-                PreviewBookingEvaluator(read_policy, red_auth.id_token).evaluate(
-                    candidate["sessionId"], candidate["tableId"], credits
-                )
-            )
-            if not preview["readyForOrder"]:
-                raise PreviewWriteError("booking preview is not ready for ORDER")
-            plan = {
-                "occurrenceKey": occurrence_key(
-                    report["location"]["podId"], candidate["startTime"], "red-captain"
-                ),
-                "podId": report["location"]["podId"],
-                "ownerUserId": red.podplay_user_id,
-                "sessionId": candidate["sessionId"],
-                "tableId": candidate["tableId"],
-                "startTime": candidate["startTime"],
-                "endTime": candidate["endTime"],
-                "virtualCredits": credits,
-            }
         matches = find_matching_events(
             red_client,
             plan["podId"],
@@ -866,10 +889,11 @@ def book_preview_match(root: Path, apply: bool, confirmation: Optional[str]) -> 
                 preview_write_confirmation=confirmation,
             )
             write_policy = TargetPolicy.from_config(write_config)
-            storage.write_json(
-                match_path,
+            save_match(
+                storage,
+                ledger,
                 {
-                    "schemaVersion": 1,
+                    "schemaVersion": 2,
                     "targetOrigin": read_policy.target_origin,
                     "phase": "planned",
                     "preparedAt": prepared_at,
@@ -906,7 +930,7 @@ def book_preview_match(root: Path, apply: bool, confirmation: Optional[str]) -> 
             )
             next_state.update(
                 {
-                    "schemaVersion": 1,
+                    "schemaVersion": 2,
                     "targetOrigin": read_policy.target_origin,
                     "phase": phase,
                     "preparedAt": prepared_at
@@ -917,10 +941,7 @@ def book_preview_match(root: Path, apply: bool, confirmation: Optional[str]) -> 
                     "event": event,
                 }
             )
-            storage.write_json(
-                match_path,
-                next_state,
-            )
+            save_match(storage, ledger, next_state)
         else:
             event = None
     except (
@@ -929,6 +950,7 @@ def book_preview_match(root: Path, apply: bool, confirmation: Optional[str]) -> 
         IdentityRegistryError,
         PreviewEvaluationError,
         PreviewReadError,
+        PreviewMatchLedgerError,
         PreviewWriteError,
         TargetPolicyError,
     ) as exc:
@@ -949,17 +971,20 @@ def book_preview_match(root: Path, apply: bool, confirmation: Optional[str]) -> 
     return 0
 
 
-def join_preview_match(root: Path, apply: bool, confirmation: Optional[str]) -> int:
-    match_path = root / "state" / "preview-manual-match.json"
+def join_preview_match(
+    root: Path,
+    apply: bool,
+    confirmation: Optional[str],
+    occurrence: Optional[str] = None,
+) -> int:
     storage = Storage(root)
     try:
         credentials = PreviewCredentials.load(root)
         read_policy = TargetPolicy.from_config(credentials.config)
-        state = storage.load_json(match_path, {})
+        ledger = load_match_ledger(storage, read_policy.target_origin)
+        occurrence, state = select_match(ledger, occurrence)
         if not isinstance(state, dict) or not isinstance(state.get("eventId"), str):
-            raise PreviewWriteError("create and reconcile the manual booking before joining")
-        if state.get("targetOrigin") != read_policy.target_origin:
-            raise PreviewWriteError("saved manual-match state belongs to another origin")
+            raise PreviewWriteError("create and reconcile the selected booking before joining")
         event_id = state["eventId"]
         identities = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure()
         red = identities["red-captain"]
@@ -1039,7 +1064,7 @@ def join_preview_match(root: Path, apply: bool, confirmation: Optional[str]) -> 
                     "acceptancePreview": preview_summary,
                 }
             )
-            storage.write_json(match_path, state)
+            save_match(storage, ledger, state)
         else:
             invitation_summary = (
                 summarize_invitation(invitation, blue.podplay_user_id)
@@ -1056,6 +1081,7 @@ def join_preview_match(root: Path, apply: bool, confirmation: Optional[str]) -> 
         CredentialsError,
         FirebaseAuthError,
         IdentityRegistryError,
+        PreviewMatchLedgerError,
         PreviewReadError,
         PreviewWriteError,
         TargetPolicyError,
@@ -1068,6 +1094,7 @@ def join_preview_match(root: Path, apply: bool, confirmation: Optional[str]) -> 
         f"PR #{read_policy.pull_request_number}"
     )
     print(f"event: {event_id}")
+    print(f"occurrence: {occurrence}")
     if invitation_summary:
         print(
             f"Blue invitation: {invitation_summary['invitationId']} "
@@ -1090,13 +1117,18 @@ def join_preview_match(root: Path, apply: bool, confirmation: Optional[str]) -> 
     return 0
 
 
-def check_in_preview_match(root: Path, apply: bool, confirmation: Optional[str]) -> int:
-    match_path = root / "state" / "preview-manual-match.json"
+def check_in_preview_match(
+    root: Path,
+    apply: bool,
+    confirmation: Optional[str],
+    occurrence: Optional[str] = None,
+) -> int:
     storage = Storage(root)
     try:
         credentials = PreviewCredentials.load(root)
         read_policy = TargetPolicy.from_config(credentials.config)
-        state = storage.load_json(match_path, {})
+        ledger = load_match_ledger(storage, read_policy.target_origin)
+        occurrence, state = select_match(ledger, occurrence)
         plan = state.get("plan") if isinstance(state, dict) else None
         if (
             not isinstance(state, dict)
@@ -1105,8 +1137,6 @@ def check_in_preview_match(root: Path, apply: bool, confirmation: Optional[str])
             or not isinstance(plan.get("startTime"), str)
         ):
             raise PreviewWriteError("join the manual match before checking in")
-        if state.get("targetOrigin") != read_policy.target_origin:
-            raise PreviewWriteError("saved manual-match state belongs to another origin")
         event_id = state["eventId"]
         start_time = datetime.fromisoformat(plan["startTime"].replace("Z", "+00:00"))
         eligible = datetime.now(timezone.utc) >= start_time
@@ -1178,9 +1208,10 @@ def check_in_preview_match(root: Path, apply: bool, confirmation: Optional[str])
             if any(row["status"] != "CHECKED_IN" for row in statuses.values()):
                 raise PreviewWriteError("captain check-in read-back is incomplete")
             state.update({"phase": "checked-in", "checkIns": statuses})
-            storage.write_json(match_path, state)
+            save_match(storage, ledger, state)
     except (ValueError, CredentialsError, FirebaseAuthError, IdentityRegistryError,
-            PreviewReadError, PreviewWriteError, TargetPolicyError) as exc:
+            PreviewMatchLedgerError, PreviewReadError, PreviewWriteError,
+            TargetPolicyError) as exc:
         print(f"ERROR preview check-in: {exc}", file=sys.stderr)
         return 2
 
@@ -1189,6 +1220,7 @@ def check_in_preview_match(root: Path, apply: bool, confirmation: Optional[str])
         f"PR #{read_policy.pull_request_number}"
     )
     print(f"event: {event_id}; starts: {plan['startTime']}; eligible: {str(eligible).lower()}")
+    print(f"occurrence: {occurrence}")
     for label, row in statuses.items():
         print(f"- {label}: {row['status']}")
     if apply:
@@ -1199,13 +1231,51 @@ def check_in_preview_match(root: Path, apply: bool, confirmation: Optional[str])
     return 0
 
 
-def preview_match_status(root: Path) -> int:
-    match_path = root / "state" / "preview-manual-match.json"
+def list_preview_matches(root: Path) -> int:
+    storage = Storage(root)
+    try:
+        credentials = PreviewCredentials.load(root)
+        policy = TargetPolicy.from_config(credentials.config)
+        ledger = load_match_ledger(storage, policy.target_origin)
+        index = sanitized_match_index(ledger)
+    except (CredentialsError, PreviewMatchLedgerError, TargetPolicyError) as exc:
+        print(f"ERROR preview matches: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"PREVIEW CLUB MATCHES // PR #{policy.pull_request_number}")
+    if not index["matches"]:
+        print("no matches")
+        return 0
+    for row in index["matches"]:
+        marker = "*" if row["active"] else " "
+        print(
+            f"{marker} {row['occurrenceKey']} // {row.get('phase') or 'unknown'} // "
+            f"{row.get('startTime') or 'unknown'} // {row.get('eventId') or 'no event'}"
+        )
+    return 0
+
+
+def select_preview_match(root: Path, occurrence: str) -> int:
+    storage = Storage(root)
+    try:
+        credentials = PreviewCredentials.load(root)
+        policy = TargetPolicy.from_config(credentials.config)
+        ledger = load_match_ledger(storage, policy.target_origin)
+        select_active(storage, ledger, occurrence)
+    except (CredentialsError, PreviewMatchLedgerError, TargetPolicyError) as exc:
+        print(f"ERROR preview select: {exc}", file=sys.stderr)
+        return 2
+    print(f"ACTIVE PREVIEW MATCH // {occurrence} // PR #{policy.pull_request_number}")
+    return 0
+
+
+def preview_match_status(root: Path, occurrence: Optional[str] = None) -> int:
     storage = Storage(root)
     try:
         credentials = PreviewCredentials.load(root)
         read_policy = TargetPolicy.from_config(credentials.config)
-        state = storage.load_json(match_path, {})
+        ledger = load_match_ledger(storage, read_policy.target_origin)
+        occurrence, state = select_match(ledger, occurrence)
         plan = state.get("plan") if isinstance(state, dict) else None
         if (
             not isinstance(state, dict)
@@ -1213,9 +1283,7 @@ def preview_match_status(root: Path) -> int:
             or not isinstance(state.get("eventId"), str)
             or not isinstance(plan.get("startTime"), str)
         ):
-            raise PreviewReadError("manual-match checkpoint is incomplete")
-        if state.get("targetOrigin") != read_policy.target_origin:
-            raise PreviewReadError("manual-match checkpoint belongs to another origin")
+            raise PreviewReadError("selected match checkpoint is incomplete")
         identities = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure()
         red = identities["red-captain"]
         blue = identities["blue-captain"]
@@ -1274,7 +1342,8 @@ def preview_match_status(root: Path) -> int:
             prepared_at = previous_journey.get("preparedAt")
         if not isinstance(prepared_at, str):
             prepared_at = datetime.fromtimestamp(
-                match_path.stat().st_mtime, timezone.utc
+                (storage.state / "preview-matches.json").stat().st_mtime,
+                timezone.utc,
             ).isoformat()
         court_assignment = (
             "Auto-assigned court"
@@ -1293,6 +1362,8 @@ def preview_match_status(root: Path) -> int:
                 "schemaVersion": 1,
                 "observedAt": observed_at.isoformat(),
                 "pullRequest": read_policy.pull_request_number,
+                "activeOccurrenceKey": ledger.get("activeOccurrenceKey"),
+                "matchIndex": sanitized_match_index(ledger)["matches"],
                 "result": result,
                 "event": event,
                 "venue": {
@@ -1328,6 +1399,7 @@ def preview_match_status(root: Path) -> int:
         CredentialsError,
         FirebaseAuthError,
         IdentityRegistryError,
+        PreviewMatchLedgerError,
         PreviewReadError,
         TargetPolicyError,
     ) as exc:
@@ -1336,6 +1408,7 @@ def preview_match_status(root: Path) -> int:
 
     print(f"PREVIEW CLUB MATCH // {result} // PR #{read_policy.pull_request_number}")
     print(f"event: {event['eventId']} ({event['status']})")
+    print(f"occurrence: {occurrence}")
     venue = " / ".join(
         value
         for value in (location.get("areaName"), location.get("podName"))

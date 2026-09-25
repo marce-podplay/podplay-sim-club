@@ -26,6 +26,13 @@ from podplay_sim_club.fake_preview import FakePreview
 from podplay_sim_club.orchestrator import Orchestrator, SimulatedCrash
 from podplay_sim_club.preview import PreviewAdapter
 from podplay_sim_club.preview_booking import PreviewBookingWriter, occurrence_key
+from podplay_sim_club.preview_match_ledger import (
+    load_match_ledger,
+    sanitized_match_index,
+    save_match,
+    select_active,
+    select_match,
+)
 from podplay_sim_club.preview_participation import (
     PreviewAcceptanceEvaluator,
     PreviewParticipationWriter,
@@ -45,6 +52,7 @@ from podplay_sim_club.preview_write import (
     PreviewWriteError,
 )
 from podplay_sim_club.server import ObservatoryServer
+from podplay_sim_club.storage import Storage
 from podplay_sim_club.target_policy import TargetPolicy, TargetPolicyError
 from podplay_sim_club.terminal import render
 
@@ -203,6 +211,27 @@ class SimClubTestCase(unittest.TestCase):
                 },
             },
         )
+        orchestrator.storage.write_json(
+            orchestrator.storage.state / "preview-matches.json",
+            {
+                "schemaVersion": 2,
+                "targetOrigin": PREVIEW_ORIGIN,
+                "activeOccurrenceKey": "pp7444-test",
+                "matches": {
+                    "pp7444-test": {
+                        "phase": "joined",
+                        "eventId": "event-live",
+                        "plan": {
+                            "occurrenceKey": "pp7444-test",
+                            "podId": "pod-test",
+                            "startTime": "2026-09-26T12:00:00.000Z",
+                            "endTime": "2026-09-26T12:30:00.000Z",
+                        },
+                        "event": {"status": "CONFIRMED"},
+                    }
+                },
+            },
+        )
         server = ObservatoryServer(orchestrator, host="127.0.0.1", port=0)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -221,11 +250,79 @@ class SimClubTestCase(unittest.TestCase):
         self.assertEqual({"mode": "fake", "ok": True}, health)
         self.assertEqual("season-001", world["season"])
         self.assertEqual("SCHEDULED", world["previewMatch"]["result"])
+        self.assertEqual("pp7444-test", world["previewMatches"]["activeOccurrenceKey"])
+        self.assertEqual(1, len(world["previewMatches"]["matches"]))
         self.assertIn("PODPLAY SIM CLUB // OBSERVATORY", page)
         self.assertIn("LOCAL FAKE WORLD", page)
         self.assertIn("REMOTE PRODUCT STATE", page)
         self.assertIn('data-view="preview" aria-selected="true"', page)
         self.assertIn('id="fake-view" hidden', page)
+
+
+class PreviewMatchLedgerTestCase(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.storage = Storage(self.root)
+        self.origin = PREVIEW_ORIGIN
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def match(self, key, start, event_id):
+        return {
+            "schemaVersion": 2,
+            "targetOrigin": self.origin,
+            "phase": "booked",
+            "eventId": event_id,
+            "plan": {
+                "occurrenceKey": key,
+                "podId": "pod-test",
+                "startTime": start,
+                "endTime": start,
+            },
+            "event": {"status": "CONFIRMED"},
+        }
+
+    def test_migrates_single_match_checkpoint_without_losing_it(self):
+        legacy = self.match("first", "2026-09-26T12:00:00Z", "event-1")
+        legacy["schemaVersion"] = 1
+        self.storage.write_json(
+            self.storage.state / "preview-manual-match.json", legacy
+        )
+
+        ledger = load_match_ledger(self.storage, self.origin)
+
+        self.assertEqual(2, ledger["schemaVersion"])
+        self.assertEqual("first", ledger["activeOccurrenceKey"])
+        self.assertEqual("event-1", ledger["matches"]["first"]["eventId"])
+        self.assertTrue((self.storage.state / "preview-matches.json").is_file())
+
+    def test_upsert_is_occurrence_idempotent_and_active_is_explicit(self):
+        ledger = load_match_ledger(self.storage, self.origin)
+        save_match(
+            self.storage,
+            ledger,
+            self.match("first", "2026-09-26T12:00:00Z", "event-1"),
+        )
+        save_match(
+            self.storage,
+            ledger,
+            self.match("second", "2026-09-26T12:30:00Z", "event-2"),
+        )
+        save_match(
+            self.storage,
+            ledger,
+            self.match("second", "2026-09-26T12:30:00Z", "event-2"),
+        )
+
+        self.assertEqual(2, len(ledger["matches"]))
+        self.assertEqual("second", select_match(ledger)[0])
+        select_active(self.storage, ledger, "first")
+        self.assertEqual("first", select_match(ledger)[0])
+        index = sanitized_match_index(ledger)
+        self.assertEqual(["first", "second"], [row["occurrenceKey"] for row in index["matches"]])
+        self.assertTrue(index["matches"][0]["active"])
 
 
 class TargetPolicyTestCase(unittest.TestCase):

@@ -61,6 +61,7 @@
       <h2>REMOTE PRODUCT STATE</h2>
       <div id="preview-hero"><span class="dim">· no preview snapshot; run ./club preview match-status</span></div>
     </section>
+    <section><h2>PREVIEW MATCH LEDGER</h2><div id="preview-matches" class="trace"></div></section>
     <div class="grid preview-grid">
       <section><h2>VENUE</h2><div id="preview-venue"></div></section>
       <section><h2>SCHEDULE</h2><div id="preview-match"></div></section>
@@ -129,7 +130,14 @@
     return `${Math.floor(seconds / 3600)}h old`;
   }
 
-  function renderPreview(preview) {
+  function renderPreview(preview, previewMatches) {
+    const rows = previewMatches && Array.isArray(previewMatches.matches) ? previewMatches.matches : [];
+    document.getElementById('preview-matches').innerHTML = rows.map(match => `
+      <div class="booking ${match.active?'current':''}">
+        <span class="${match.active?'live':'dim'}">${match.active?'●':'·'} ${esc(match.startTime || 'time unknown')}</span><br>
+        ${esc(match.phase || 'unknown')} · ${esc(match.eventStatus || 'event pending')}<br>
+        <span class="dim">${esc(match.occurrenceKey)}</span>
+      </div>`).join('') || '<div class="dim">· no preview matches recorded</div>';
     if (!preview) {
       document.getElementById('preview-hero').innerHTML = '<span class="dim">· no preview snapshot; run ./club preview match-status</span>';
       document.getElementById('preview-match').innerHTML = '<span class="dim">· unknown</span>';
@@ -181,7 +189,7 @@
   function render(world) {
     currentWorld = world;
     updateClock(world);
-    renderPreview(world.previewMatch);
+    renderPreview(world.previewMatch, world.previewMatches);
     document.getElementById('people').innerHTML = Object.entries(world.people).map(([id,p]) =>
       `<div class="person"><button data-id="${esc(id)}">[${esc(p.glyph)}] ${esc(p.name)}</button> <span class="${p.state==='playing'?'live':'dim'}">${glyph(p.state)} ${esc(p.location)} / ${esc(p.state)}</span></div>`
     ).join('');
