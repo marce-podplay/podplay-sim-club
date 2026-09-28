@@ -1,6 +1,7 @@
 """Repository command-line interface."""
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -186,6 +187,11 @@ def build_parser() -> argparse.ArgumentParser:
     preview_subcommands.add_parser(
         "readiness", help="inspect actors, payment state, and one legal future slot"
     )
+    preview_venues = preview_subcommands.add_parser(
+        "scan-venues", help="read-only scan of today's venues for contiguous available sessions"
+    )
+    preview_venues.add_argument("--duration", type=int, default=60, help="required contiguous duration in minutes")
+    preview_venues.add_argument("--within", type=int, default=30, help="highlight starts within this many minutes")
     preview_subcommands.add_parser(
         "booking-preview", help="calculate one non-persisting baseline booking preview"
     )
@@ -366,6 +372,8 @@ def main(argv: Optional[list] = None) -> int:
             return inspect_preview(root)
         if args.preview_command == "readiness":
             return inspect_readiness(root)
+        if args.preview_command == "scan-venues":
+            return scan_preview_venues(root, args.duration, args.within)
         if args.preview_command == "booking-preview":
             return evaluate_booking_preview(root)
         if args.preview_command == "plan-intent":
@@ -653,6 +661,65 @@ def inspect_preview(root: Path) -> int:
     print(f"areas: {len(area_rows)}")
     for name, pod_count in area_rows:
         print(f"- {name}: {pod_count} pods")
+    print("writes: 0")
+    return 0
+
+
+def scan_preview_venues(root: Path, duration: int, within_minutes: int) -> int:
+    """Compare today's actual session grids, not merely pod availability flags."""
+    if duration < 30 or duration % 30 or within_minutes < 0:
+        print("ERROR venue scan: duration must be a 30-minute increment; within must be non-negative", file=sys.stderr)
+        return 2
+    try:
+        credentials = PreviewCredentials.load(root)
+        policy = TargetPolicy.from_config(credentials.config)
+        admin_auth = FirebaseAuthenticator(root / "secrets" / "preview-auth-cache.json").authenticate(credentials.admin_email, credentials.admin_password, credentials.firebase_api_key)
+        admin_client = PreviewReadonlyClient(policy, admin_auth.id_token)
+        red = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure(["red-captain"])["red-captain"]
+        red_auth = FirebaseAuthenticator(root / "secrets" / "actor-auth" / "red-captain.json").authenticate(red.email, red.password, credentials.firebase_api_key)
+        player_client = PreviewReadonlyClient(policy, red_auth.id_token)
+        observed_at = datetime.now(timezone.utc)
+        areas = collection_items(admin_client.get("/apis/v2/areas"))
+        pods_to_scan = []
+        for area in areas[:50]:
+            if not isinstance(area, dict) or not isinstance(area.get("id"), str):
+                continue
+            for pod_stub in collection_items(admin_client.get(f"/apis/v2/areas/{area['id']}/pods")):
+                if not isinstance(pod_stub, dict) or not isinstance(pod_stub.get("id"), str):
+                    continue
+                pods_to_scan.append((area, pod_stub))
+
+        def scan_one(entry):
+            area, pod_stub = entry
+            pod = admin_client.get(f"/apis/v2/pods/{pod_stub['id']}")
+            if not isinstance(pod, dict) or pod.get("status") != "AVAILABLE":
+                return None
+            timezone_name = str(pod.get("timezone") or "UTC")
+            candidate = find_candidate_session(player_client, pod_stub["id"], timezone_name, observed_at, first_day_offset=0, last_day_offset=0, required_duration_minutes=duration)
+            return {"area": area.get("displayName") or area.get("name") or area["id"], "pod": pod.get("displayName") or pod.get("name") or pod_stub["id"], "timezone": timezone_name, "openingHours": pod.get("openingHours"), "candidate": candidate}
+
+        rows = []
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for future in as_completed([pool.submit(scan_one, entry) for entry in pods_to_scan]):
+                row = future.result()
+                if row is not None:
+                    rows.append(row)
+    except (CredentialsError, FirebaseAuthError, IdentityRegistryError, PreviewReadError, TargetPolicyError, ValueError) as exc:
+        print(f"ERROR venue scan: {exc}", file=sys.stderr)
+        return 2
+    immediate_cutoff = observed_at.timestamp() + within_minutes * 60
+    candidates = [row for row in rows if isinstance(row["candidate"], dict)]
+    candidates.sort(key=lambda row: row["candidate"]["startTime"])
+    immediate = [row for row in candidates if datetime.fromisoformat(row["candidate"]["startTime"].replace("Z", "+00:00")).timestamp() <= immediate_cutoff]
+    print(f"PREVIEW VENUE SCAN // PR #{policy.pull_request_number} // {duration} MINUTES")
+    print(f"observed: {observed_at.isoformat()}; available pods scanned: {len(rows)}")
+    print(f"starts within {within_minutes} minutes: {len(immediate)}")
+    for row in candidates[:12]:
+        candidate = row["candidate"]
+        marker = "NOW" if row in immediate else "LATER"
+        print(f"- {marker} {row['area']} / {row['pod']} ({row['timezone']}): {candidate['startTime']} to {candidate['endTime']}; tables={candidate['tablesLeft']}")
+    if not candidates:
+        print("no contiguous candidate today")
     print("writes: 0")
     return 0
 
