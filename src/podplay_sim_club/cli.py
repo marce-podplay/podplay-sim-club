@@ -916,6 +916,15 @@ def plan_preview_intent(
         end = datetime.fromisoformat(candidate["endTime"].replace("Z", "+00:00"))
         if int((end - start).total_seconds() / 60) != constraints["durationMinutes"]:
             raise BookingIntentError("preview candidate does not satisfy intent duration")
+        max_delay = constraints.get("maxDelayMinutes")
+        if isinstance(max_delay, int) and (start - datetime.fromisoformat(report["observedAt"])).total_seconds() > max_delay * 60:
+            intent["status"] = "preview_blocked"
+            intent["previewPlan"] = {"pullRequest": policy.pull_request_number, "targetOrigin": policy.target_origin, "observedAt": report["observedAt"], "blocker": "no_slot_within_max_delay", "maxDelayMinutes": max_delay}
+            intent["remoteWrites"] = 0
+            save_intent(storage, ledger, intent)
+            _sync_world_intent_status(storage, intent)
+            _record_intent_blocker(storage, intent, policy.pull_request_number)
+            raise BookingIntentError(f"no legal preview slot begins within {max_delay} minutes")
         requested_credits = min(float(report["actors"]["red-captain"]["virtualCredits"]), 25.0)
         evaluation = (
             summarize_booking_preview(PreviewBookingEvaluator(policy, red_auth.id_token).evaluate(

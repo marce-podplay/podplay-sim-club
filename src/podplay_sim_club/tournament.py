@@ -100,7 +100,7 @@ def _team_players(scenario: Dict[str, Any], team: str) -> list:
 
 def _record_owner_intent(storage: Storage, ledger: Dict[str, Any], key: str, round_spec: Dict[str, Any], observed_at: str) -> str:
     intent_id = f"intent:{key}:{round_spec['id']}"
-    constraints = {"durationMinutes": round_spec["durationMinutes"], "daysAhead": [0, 14], "localWindows": ["00:00-24:00"], "slotPolicy": "nearest_valid_low_contention", "freeToParticipants": True}
+    constraints = {"durationMinutes": round_spec["durationMinutes"], "daysAhead": [0, 0], "maxDelayMinutes": 30, "localWindows": ["00:00-24:00"], "slotPolicy": "within_30_minutes_or_wait", "freeToParticipants": True}
     if intent_id not in ledger["intents"]:
         intent = {"schemaVersion": 1, "id": intent_id, "status": "agreed", "reason": "owner_tournament_fixture", "journey": "owner_open_play", "createdAt": observed_at, "participants": deepcopy(round_spec["participants"]), "requestedBy": "sofia", "constraints": constraints, "evidence": {"tournamentOccurrenceKey": key, "round": round_spec["id"]}, "promotionOccurrenceKey": key, "promotionKind": "tournament_owner_announcement", "remoteWrites": 0}
         save_intent(storage, ledger, intent)
