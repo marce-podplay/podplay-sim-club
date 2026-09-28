@@ -112,21 +112,7 @@ def sanitized_match_index(ledger: JsonObject) -> JsonObject:
                 "startTime": plan.get("startTime"),
                 "endTime": plan.get("endTime"),
                 "podId": plan.get("podId"),
-                "participants": [
-                    {
-                        "actorId": "red-captain",
-                        "label": "Andy Bogard",
-                        "role": "booking owner",
-                        "attendance": "not refreshed",
-                    },
-                    {
-                        "actorId": "blue-captain",
-                        "label": "Terry Bogard",
-                        "role": "invited player",
-                        "invitationStatus": blue_invitation.get("status", "unknown"),
-                        "attendance": blue_invitation.get("checkInStatus", "not refreshed"),
-                    },
-                ],
+                "participants": _participants(match, blue_invitation),
             }
         )
     rows.sort(key=lambda row: (str(row.get("startTime") or ""), row["occurrenceKey"]))
@@ -150,6 +136,46 @@ def _event_label(event: JsonObject) -> str:
     if subtype == "OPEN_PLAY":
         return "Open Play"
     return "Preview event"
+
+
+def _participants(match: JsonObject, blue_invitation: JsonObject) -> list:
+    """Use per-event participant records, with a safe legacy fallback."""
+    saved = match.get("participants")
+    if isinstance(saved, list) and saved:
+        rows = []
+        for participant in saved:
+            if not isinstance(participant, dict):
+                continue
+            actor_id = participant.get("actorId")
+            if not isinstance(actor_id, str) or not actor_id:
+                continue
+            rows.append(
+                {
+                    "actorId": actor_id,
+                    "role": participant.get("role", "participant"),
+                    "invitationStatus": participant.get("invitationStatus"),
+                    "attendance": participant.get("attendance", "not refreshed"),
+                    "invitationCode": _short_code(
+                        "INV", participant.get("invitationId")
+                    ),
+                }
+            )
+        if rows:
+            return rows
+    return [
+        {
+            "actorId": "red-captain",
+            "role": "booking owner",
+            "attendance": "not refreshed",
+        },
+        {
+            "actorId": "blue-captain",
+            "role": "invited player",
+            "invitationStatus": blue_invitation.get("status", "unknown"),
+            "attendance": blue_invitation.get("checkInStatus", "not refreshed"),
+            "invitationCode": _short_code("INV", blue_invitation.get("invitationId")),
+        },
+    ]
 
 
 def _new_ledger(target_origin: str) -> JsonObject:

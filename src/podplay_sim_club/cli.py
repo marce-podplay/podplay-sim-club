@@ -1600,6 +1600,16 @@ def join_preview_match(
                 {
                     "phase": "joined",
                     "blueInvitation": invitation_summary,
+                    "participants": [
+                        {"actorId": "red-captain", "role": "booking owner"},
+                        {
+                            "actorId": "blue-captain",
+                            "role": "invited player",
+                            "invitationId": invitation_summary["invitationId"],
+                            "invitationStatus": invitation_summary["status"],
+                            "attendance": invitation_summary["checkInStatus"],
+                        },
+                    ],
                     "acceptancePreview": preview_summary,
                 }
             )

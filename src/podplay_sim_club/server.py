@@ -54,14 +54,15 @@ class ObservatoryServer:
                         orchestrator.storage.state / "preview-matches.json",
                         default=None,
                     )
+                    match_index = (
+                        sanitized_match_index(ledger)
+                        if isinstance(ledger, dict)
+                        and isinstance(ledger.get("matches"), dict)
+                        else {"activeOccurrenceKey": None, "matches": []}
+                    )
                     self._json(HTTPStatus.OK, {
                         "previewMatch": snapshot if isinstance(snapshot, dict) else None,
-                        "previewMatches": (
-                            sanitized_match_index(ledger)
-                            if isinstance(ledger, dict)
-                            and isinstance(ledger.get("matches"), dict)
-                            else {"activeOccurrenceKey": None, "matches": []}
-                        ),
+                        "previewMatches": _with_known_venue(orchestrator, match_index),
                         "messages": _recent_messages(orchestrator),
                         "storylines": _active_storylines(orchestrator),
                     })
@@ -204,6 +205,30 @@ def _active_storylines(orchestrator: Orchestrator):
         )
     rows.sort(key=lambda row: (not row["active"], row["id"]))
     return rows
+
+
+def _with_known_venue(orchestrator: Orchestrator, match_index):
+    """Attach the latest known venue to every record using the same pod."""
+    directory = _actor_directory(orchestrator)
+    readiness = orchestrator.storage.load_json(
+        orchestrator.storage.state / "preview-readiness.json", default={}
+    )
+    location = readiness.get("location") if isinstance(readiness, dict) else None
+    venue = (
+        {key: location.get(key) for key in ("areaName", "podName", "timezone")}
+        if isinstance(location, dict) and isinstance(location.get("podId"), str)
+        else None
+    )
+    for match in match_index.get("matches", []):
+        if not isinstance(match, dict):
+            continue
+        if venue is not None and match.get("podId") == location["podId"]:
+            match["venue"] = venue
+        for participant in match.get("participants", []):
+            if isinstance(participant, dict):
+                actor_id = participant.get("actorId")
+                participant["label"] = directory.get(actor_id, actor_id)
+    return match_index
 
 
 def serve(
