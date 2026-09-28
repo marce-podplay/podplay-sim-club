@@ -1278,15 +1278,20 @@ def seed_payment_methods(
                     row["verified"] = True
                     continue
                 auth, client = actor_sessions[actor_id]
-                PreviewPaymentMethodWriter(
+                setup_intent_id = PreviewPaymentMethodWriter(
                     write_policy, auth.id_token, stripe_secret
                 ).add_visa()
                 writes += 1
-                row["verified"] = wait_for_payment_method(client)
+                payment_result = wait_for_payment_method(client)
+                row["verified"] = payment_result["present"]
+                row["setupIntentId"] = setup_intent_id
+                row["paymentElementId"] = payment_result["paymentElementId"]
+                row["brand"] = payment_result["brand"]
                 if not row["verified"]:
                     raise PreviewWriteError(
                         f"payment-method read-back timed out for {actor_id}"
                     )
+            _record_preview_payment_ledger(storage=Storage(root), policy=read_policy, identities=identities, rows=actor_rows)
     except (
         CredentialsError,
         FirebaseAuthError,
@@ -1308,6 +1313,25 @@ def seed_payment_methods(
     planned = sum(1 for row in actor_rows.values() if row["action"] == "add")
     print(f"writes: {writes}; writes planned: {planned if not apply else 0}")
     return 0
+
+
+def _record_preview_payment_ledger(*, storage: Storage, policy: TargetPolicy, identities: dict, rows: dict) -> None:
+    """Keep a private cleanup ledger for cards tied to disposable Preview Club actors."""
+    path = storage.state / "preview-payment-methods.json"
+    ledger = storage.load_json(path, default={"schemaVersion": 1, "entries": {}})
+    entries = ledger.setdefault("entries", {})
+    for actor_id, row in rows.items():
+        if not row.get("verified"):
+            continue
+        identity = identities[actor_id]
+        entries[actor_id] = {
+            "actorId": actor_id, "email": identity.email, "firebaseUid": identity.firebase_uid,
+            "podplayUserId": identity.podplay_user_id, "previewOrigin": policy.target_origin,
+            "pullRequest": policy.pull_request_number, "paymentElementId": row.get("paymentElementId"),
+            "brand": row.get("brand"), "setupIntentId": row.get("setupIntentId"),
+            "status": "active", "cleanup": "reconcile on next preview readiness; detach only after explicit approval",
+        }
+    storage.write_json(path, ledger)
 
 
 def book_preview_match(

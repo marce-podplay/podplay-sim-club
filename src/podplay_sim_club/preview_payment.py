@@ -28,7 +28,14 @@ def load_test_stripe_secret(path: Path) -> str:
     if not path.is_file():
         raise PreviewWriteError("Stripe environment file does not exist")
     value = ""
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
+    if path.suffix == ".json":
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+            source = document.get("offline", document) if isinstance(document, dict) else {}
+            value = source.get("STRIPE_SECRET_KEY", "") if isinstance(source, dict) else ""
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            value = ""
+    for raw_line in ([] if value else path.read_text(encoding="utf-8").splitlines()):
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -149,13 +156,15 @@ class PreviewPaymentMethodWriter:
         return value
 
 
-def wait_for_payment_method(client: PreviewReadonlyClient) -> bool:
+def wait_for_payment_method(client: PreviewReadonlyClient) -> Dict[str, Any]:
     for delay in (0.5, 1, 2, 3, 3, 5, 5, 5):
         time.sleep(delay)
         payment = client.get("/apis/v2/users/current/payment-method")
         if _has_payment_method(payment):
-            return True
-    return False
+            element = payment.get("paymentElement") if isinstance(payment, dict) else {}
+            card = payment.get("preferredCard") if isinstance(payment, dict) else {}
+            return {"present": True, "paymentElementId": element.get("id") if isinstance(element, dict) else None, "brand": card.get("brand") if isinstance(card, dict) else None}
+    return {"present": False, "paymentElementId": None, "brand": None}
 
 
 def _has_payment_method(value: Any) -> bool:

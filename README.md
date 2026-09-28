@@ -345,13 +345,16 @@ normal PodPlay setup-intent flow:
 ./club preview payment-method --dry-run
 ./club preview payment-method --apply \
   --confirm-origin "$preview_origin" \
-  --stripe-env ../pingpod-web-v2/.env
+  --stripe-env ../pingpod-web-v2/secrets.json
 ```
 
 The command reads only `STRIPE_SECRET_KEY` (or its Cypress equivalent) from the
 explicit file, refuses keys that do not start with `sk_test_`, uses the fixed
 Stripe API origin and `pm_card_visa`, never renders the key or setup secret, and
 verifies the resulting default booking payment method with each actor token.
+It also records only non-secret identity and payment-element metadata in
+`state/preview-payment-methods.json`. On a new preview season, readiness must
+reconcile those actors; a card is never detached or deleted automatically.
 
 After `booking-preview` reports ready, plan and explicitly create the first
 booking:
