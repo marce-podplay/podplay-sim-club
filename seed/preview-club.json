@@ -3,11 +3,11 @@
   "ticket": "PP-7444",
   "marker": "preview-club",
   "location": {
-    "areaId": "e95",
-    "areaName": "East 95th",
-    "podId": "26c98855-26e1-4ed5-8a63-fb0f9726a8de",
-    "podName": "Test",
-    "selection": "Zero non-canceled events observed from 21 days before through 21 days after 2026-09-24"
+    "areaId": "w37",
+    "areaName": "West 37th Manhattan",
+    "podId": "hudson-multi",
+    "podName": "Open Pod",
+    "selection": "Temporary tournament venue: four tables and a verified contiguous 60-minute session on 2026-09-28"
   },
   "productIdentities": [
     "sofia",

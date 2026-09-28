@@ -696,7 +696,7 @@ def scan_preview_venues(root: Path, duration: int, within_minutes: int) -> int:
                 return None
             timezone_name = str(pod.get("timezone") or "UTC")
             candidate = find_candidate_session(player_client, pod_stub["id"], timezone_name, observed_at, first_day_offset=0, last_day_offset=0, required_duration_minutes=duration)
-            return {"area": area.get("displayName") or area.get("name") or area["id"], "pod": pod.get("displayName") or pod.get("name") or pod_stub["id"], "timezone": timezone_name, "openingHours": pod.get("openingHours"), "candidate": candidate}
+            return {"area": area.get("displayName") or area.get("name") or area["id"], "areaId": area["id"], "pod": pod.get("displayName") or pod.get("name") or pod_stub["id"], "podId": pod_stub["id"], "timezone": timezone_name, "openingHours": pod.get("openingHours"), "candidate": candidate}
 
         rows = []
         with ThreadPoolExecutor(max_workers=8) as pool:
@@ -717,7 +717,7 @@ def scan_preview_venues(root: Path, duration: int, within_minutes: int) -> int:
     for row in candidates[:12]:
         candidate = row["candidate"]
         marker = "NOW" if row in immediate else "LATER"
-        print(f"- {marker} {row['area']} / {row['pod']} ({row['timezone']}): {candidate['startTime']} to {candidate['endTime']}; tables={candidate['tablesLeft']}")
+        print(f"- {marker} {row['area']} / {row['pod']} ({row['timezone']}): {candidate['startTime']} to {candidate['endTime']}; tables={candidate['tablesLeft']}; ids={row['areaId']}/{row['podId']}")
     if not candidates:
         print("no contiguous candidate today")
     print("writes: 0")
