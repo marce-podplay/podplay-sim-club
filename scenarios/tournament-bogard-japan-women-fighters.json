@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "bogard-japan-women-fighters-001",
+  "cadenceMinutes": 20,
+  "rounds": [
+    {
+      "id": "semi-final",
+      "name": "Bogard-Higashi vs Japan Team",
+      "participants": ["red-captain", "blue-captain", "kyo-captain", "benimaru"],
+      "teams": ["Bogard-Higashi", "Japan Team"],
+      "durationMinutes": 60,
+      "resultReporter": "red-captain"
+    },
+    {
+      "id": "final",
+      "name": "Reported semi-final winner vs Women Fighters Team",
+      "teams": ["semi-final winner", "Women Fighters Team"],
+      "womenFighters": ["king-captain", "mai"],
+      "durationMinutes": 60,
+      "dependsOn": "semi-final"
+    }
+  ]
+}

@@ -1059,7 +1059,7 @@ class PreviewConnectionTestCase(unittest.TestCase):
         )
         body = json.loads(requests[0].data.decode("utf-8"))
 
-        self.assertEqual("EVENT", body["type"])
+        self.assertEqual("ORDER", body["type"])
         self.assertEqual("OPEN_PLAY", body["eventSubtype"])
         self.assertEqual("PUBLISHED", body["eventStatus"])
         self.assertEqual(2, len(body["items"]))
@@ -1076,12 +1076,15 @@ class PreviewConnectionTestCase(unittest.TestCase):
 
         requests = []
         PreviewEventSignupWriter(policy, "actor-token", lambda request, _timeout: requests.append(request) or Response()).signup("event-1", "user-1")
-        body = json.loads(requests[0].data.decode("utf-8"))
+        self.assertEqual(2, len(requests))
+        preview_body = json.loads(requests[0].data.decode("utf-8"))
+        body = json.loads(requests[1].data.decode("utf-8"))
 
+        self.assertEqual("PREVIEW", preview_body["type"])
         self.assertEqual("ORDER", body["type"])
-        self.assertEqual("USER_BOOKED", body["mode"])
-        self.assertEqual({"id": "user-1"}, body["owner"])
-        self.assertEqual("FREE", body["paymentMethod"])
+        self.assertTrue(body["termsAgreed"])
+        self.assertEqual("USE_ALL", body["passesStrategy"])
+        self.assertNotIn("owner", body)
 
     def test_booking_occurrence_key_is_stable_and_slot_specific(self):
         first = occurrence_key("pod-1", "2026-09-26T12:00:00Z", "red-captain")

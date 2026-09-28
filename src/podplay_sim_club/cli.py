@@ -16,11 +16,12 @@ from .booking_intents import (
     select_intent,
 )
 from .actor_runtime import run_tick as run_actor_tick
+from .tournament import report_winner, run_tick as run_tournament_tick
 from .config import ClubConfig, ConfigurationError, RunMode
 from .credentials import CredentialsError, PreviewCredentials
 from .communications import record_invite_sent
 from .firebase_auth import FirebaseAuthError, FirebaseAuthenticator
-from .identity_registry import IdentityRegistry, IdentityRegistryError, TEAM_ACTORS
+from .identity_registry import ACTOR_NAMES, TEAM_ACTOR_NAMES, IdentityRegistry, IdentityRegistryError, TEAM_ACTORS
 from .orchestrator import Orchestrator
 from .preview_evaluation import (
     PreviewBookingEvaluator,
@@ -146,6 +147,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     runtime_tick.add_argument("--max-turns", type=int, default=10)
     runtime_tick.add_argument("--now", help="override runtime clock with an ISO instant")
+    tournament_tick = runtime_subcommands.add_parser("tournament-tick", help="advance one durable tournament decision without preview writes")
+    tournament_tick.add_argument("--now", help="override runtime clock with an ISO instant")
+    tournament_report = runtime_subcommands.add_parser("report-winner", help="record Andy's no-score tournament winner report")
+    tournament_report.add_argument("--winner", required=True, choices=["Bogard-Higashi", "Japan Team"])
+    tournament_report.add_argument("--now", help="override runtime clock with an ISO instant")
 
     serve_parser = subparsers.add_parser("serve", help="serve the local observatory")
     serve_parser.add_argument("--host", default="127.0.0.1")
@@ -223,6 +229,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--stripe-env",
         type=Path,
         help="ignored env file containing STRIPE_SECRET_KEY; required with --apply",
+    )
+    preview_payment.add_argument(
+        "--actor", action="append", choices=sorted({**ACTOR_NAMES, **TEAM_ACTOR_NAMES}),
+        help="actor to reconcile; repeat for an event roster (defaults to the two captains)",
     )
     preview_book = preview_subcommands.add_parser(
         "book", help="plan or create exactly one reconciled Preview Club booking"
@@ -359,9 +369,7 @@ def main(argv: Optional[list] = None) -> int:
         if args.preview_command == "fund":
             return fund_preview(root, args.apply, args.confirm_origin)
         if args.preview_command == "payment-method":
-            return seed_payment_methods(
-                root, args.apply, args.confirm_origin, args.stripe_env
-            )
+            return seed_payment_methods(root, args.apply, args.confirm_origin, args.stripe_env, args.actor)
         if args.preview_command == "book":
             return book_preview_match(
                 root, args.apply, args.confirm_origin, args.intent
@@ -489,6 +497,15 @@ def main(argv: Optional[list] = None) -> int:
             )
             for turn in result["turns"]:
                 print(f"- {turn['actorId']}: {turn['action']} — {turn['detail']}")
+            return 0
+        if args.runtime_command == "tournament-tick":
+            result = run_tournament_tick(root, now=parse_instant(args.now) if args.now else None)
+            print(f"PREVIEW CLUB TOURNAMENT // tick {result['tick']} // remote writes 0")
+            print(f"- {result['action']['actorId']}: {result['action']['action']} — {result['action']['detail']}")
+            return 0
+        if args.runtime_command == "report-winner":
+            state = report_winner(root, args.winner, now=parse_instant(args.now) if args.now else None)
+            print(f"PREVIEW CLUB TOURNAMENT RESULT // {state['rounds']['semi-final']['winner']} // no score")
             return 0
         raise AssertionError(f"unhandled runtime command {args.runtime_command}")
 
@@ -1041,13 +1058,14 @@ def signup_preview_open_play(
             raise PreviewWriteError("Open Play must be created before player signup")
         if not isinstance(event, dict) or not isinstance(event.get("eventId"), str):
             raise PreviewWriteError("Open Play event record is missing")
-        promotion_key = f"actor-runtime:season-001:{selected_id.rsplit(':', 1)[-1]}"
+        promotion_key = intent.get("promotionOccurrenceKey") or f"actor-runtime:season-001:{selected_id.rsplit(':', 1)[-1]}"
+        promotion_kind = intent.get("promotionKind") or "runtime_announcement"
         messages = storage.read_jsonl(storage.channel_path("club"))
-        if not any(row.get("occurrenceKey") == promotion_key and row.get("kind") == "runtime_announcement" for row in messages):
+        if not any(row.get("occurrenceKey") == promotion_key and row.get("kind") == promotion_kind for row in messages):
             raise PreviewWriteError("Open Play must be promoted before player signup")
         credentials = PreviewCredentials.load(root)
         read_policy = TargetPolicy.from_config(credentials.config)
-        identities = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure()
+        identities = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure(intent.get("participants", []))
         player_rows = []
         writes = 0
         for actor_id in intent.get("participants", []):
@@ -1212,14 +1230,16 @@ def seed_payment_methods(
     apply: bool,
     confirmation: Optional[str],
     stripe_env: Optional[Path],
+    actor_ids: Optional[List[str]] = None,
 ) -> int:
     try:
         credentials = PreviewCredentials.load(root)
         read_policy = TargetPolicy.from_config(credentials.config)
-        identities = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure()
+        selected_actors = tuple(actor_ids or ("red-captain", "blue-captain"))
+        identities = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure(selected_actors)
         actor_rows = {}
         actor_sessions = {}
-        for actor_id in ("red-captain", "blue-captain"):
+        for actor_id in selected_actors:
             identity = identities[actor_id]
             auth = FirebaseAuthenticator(
                 root / "secrets" / "actor-auth" / f"{actor_id}.json"

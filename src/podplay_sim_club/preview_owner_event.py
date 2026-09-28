@@ -42,7 +42,7 @@ class PreviewOwnerEventWriter:
             normalized_items.append({"session": {"id": item["sessionId"]}, "sessionTable": {"id": item["tableId"]}})
         self._used = True
         payload = {
-            "type": "EVENT",
+            "type": "ORDER",
             "bookingMode": "FREE_OF_CHARGE",
             "eventSubtype": "OPEN_PLAY",
             "eventCustomType": "Open Play",
@@ -51,10 +51,19 @@ class PreviewOwnerEventWriter:
             "eventStatus": "PUBLISHED",
             "visibility": "LISTED",
             "admission": "OPEN",
+            "admissionKids": "CLOSED",
+            "admissionDate": {"regular": None, "membersDefault": None},
+            "admissionRating": {"type": "DOUBLES"},
             "admissionRate": {"regular": 0, "membersDefault": 0, "memberships": {"items": []}},
+            "allowedMemberships": {"items": []},
             "teamSize": 1,
             "totalTeams": total_teams,
             "maxGuests": 0,
+            "coachRate": None,
+            "paymentMethod": None,
+            "eventFeatures": [],
+            "freeSignupCancellationHorizonHours": 0,
+            "tags": [],
             "createAsSeries": False,
             "termsAgreed": True,
             "liabilityWaiverAgreed": True,
@@ -86,6 +95,9 @@ class PreviewOwnerEventWriter:
             value = json.loads(body.decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise PreviewWriteError("owner event create returned invalid JSON") from exc
-        if not isinstance(value, dict) or not isinstance(value.get("id"), str):
+        event_id = value.get("id") if isinstance(value, dict) else None
+        if not isinstance(event_id, str) and isinstance(value, dict):
+            event_id = value.get("summary", {}).get("events", {}).get("items", [{}])[0].get("id")
+        if not isinstance(event_id, str):
             raise PreviewWriteError("owner event create response has an unexpected shape")
-        return value
+        return {"id": event_id}

@@ -43,11 +43,21 @@ class PreviewEventSignupWriter:
         if not event_id or not owner_user_id:
             raise PreviewWriteError("event signup requires event and owner IDs")
         self._used = True
-        payload = {
-            "type": "ORDER", "mode": "USER_BOOKED", "owner": {"id": owner_user_id},
-            "paymentMethod": "FREE", "passesStrategy": "USE_NONE", "kids": {"items": []},
-            "virtualCredits": 0,
-        }
+        # The actor's bearer token is the owner.  Supplying an ``owner`` field is
+        # an admin-on-behalf flow and is rightly rejected for customer self-signup.
+        preview = self._post(event_id, {
+            "type": "PREVIEW", "termsAgreed": True, "liabilityWaiverAgreed": True,
+            "kidsWaiverAgreed": True, "virtualCredits": 0, "passesStrategy": "USE_ALL",
+        })
+        virtual_credits = preview.get("summary", {}).get("virtualCredits", 0)
+        if not isinstance(virtual_credits, (int, float)):
+            raise PreviewWriteError("event signup preview returned invalid virtual credits")
+        return self._post(event_id, {
+            "type": "ORDER", "termsAgreed": True,
+            "virtualCredits": virtual_credits, "passesStrategy": "USE_ALL",
+        })
+
+    def _post(self, event_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         url = self.policy.target_origin + f"/apis/v2/events/{event_id}/signups"
         self.policy.assert_url(url)
         request = Request(url, data=json.dumps(payload, separators=(",", ":")).encode("utf-8"), headers={
@@ -62,7 +72,9 @@ class PreviewEventSignupWriter:
         except PreviewWriteError:
             raise
         except HTTPError as exc:
-            raise PreviewWriteError(f"event signup failed with HTTP {exc.code}") from exc
+            codes = _error_codes(exc.read(MAX_RESPONSE_BYTES + 1))
+            suffix = f" ({','.join(codes)})" if codes else ""
+            raise PreviewWriteError(f"event signup failed with HTTP {exc.code}{suffix}") from exc
         except URLError as exc:
             raise PreviewWriteError("event signup network request failed") from exc
         if status != 201:
@@ -73,6 +85,18 @@ class PreviewEventSignupWriter:
             value = json.loads(body.decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise PreviewWriteError("event signup returned invalid JSON") from exc
-        if not isinstance(value, dict) or not isinstance(value.get("id"), str):
+        if not isinstance(value, dict):
+            raise PreviewWriteError("event signup response has an unexpected shape")
+        if payload.get("type") == "ORDER" and not isinstance(value.get("id"), str):
             raise PreviewWriteError("event signup response has an unexpected shape")
         return value
+
+
+def _error_codes(body: bytes) -> list:
+    """Expose only stable validation codes, never the response's free-form text."""
+    try:
+        value = json.loads(body.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return []
+    errors = value.get("summary", {}).get("errors", []) if isinstance(value, dict) else []
+    return [str(error["code"]) for error in errors if isinstance(error, dict) and isinstance(error.get("code"), str)][:5]

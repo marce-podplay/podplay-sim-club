@@ -37,9 +37,15 @@ ACTOR_NAMES = {
 TEAM_ACTOR_NAMES = {
     "kyo-captain": ("Kyo", "Kusanagi"),
     "benimaru": ("Benimaru", "Nikaido"),
+    "king-captain": ("King", "Women Fighters"),
+    "mai": ("Mai", "Shiranui"),
+    "yuri": ("Yuri", "Sakazaki"),
 }
 
-TEAM_ACTORS = {"japan-team": ("kyo-captain", "benimaru")}
+TEAM_ACTORS = {
+    "japan-team": ("kyo-captain", "benimaru"),
+    "women-fighters": ("king-captain", "mai", "yuri"),
+}
 
 
 class IdentityRegistry:
