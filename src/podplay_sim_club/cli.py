@@ -17,6 +17,7 @@ from .booking_intents import (
 )
 from .actor_runtime import run_tick as run_actor_tick
 from .tournament import report_winner, run_tick as run_tournament_tick
+from .rally_engine import tick as run_rally_tick
 from .config import ClubConfig, ConfigurationError, RunMode
 from .credentials import CredentialsError, PreviewCredentials
 from .communications import record_invite_sent
@@ -152,6 +153,9 @@ def build_parser() -> argparse.ArgumentParser:
     tournament_report = runtime_subcommands.add_parser("report-winner", help="record Andy's no-score tournament winner report")
     tournament_report.add_argument("--winner", required=True, choices=["Bogard-Higashi", "Japan Team"])
     tournament_report.add_argument("--now", help="override runtime clock with an ISO instant")
+    rally_tick = runtime_subcommands.add_parser("rally-tick", help="run one bounded Rally Engine actor tick")
+    rally_tick.add_argument("--hours", type=int, default=2, help="session lifetime on first tick (default: 2)")
+    rally_tick.add_argument("--now", help="override runtime clock with an ISO instant")
 
     serve_parser = subparsers.add_parser("serve", help="serve the local observatory")
     serve_parser.add_argument("--host", default="127.0.0.1")
@@ -506,6 +510,13 @@ def main(argv: Optional[list] = None) -> int:
         if args.runtime_command == "report-winner":
             state = report_winner(root, args.winner, now=parse_instant(args.now) if args.now else None)
             print(f"PREVIEW CLUB TOURNAMENT RESULT // {state['rounds']['semi-final']['winner']} // no score")
+            return 0
+        if args.runtime_command == "rally-tick":
+            result = run_rally_tick(root, hours=args.hours, now=parse_instant(args.now) if args.now else None)
+            print(f"RALLY ENGINE // {result['status'].upper()} // remote writes 0")
+            if result.get("action"):
+                action = result["action"]
+                print(f"- {action['actorId']}: {action['action']} — {action['detail']}")
             return 0
         raise AssertionError(f"unhandled runtime command {args.runtime_command}")
 

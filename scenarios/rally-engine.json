@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "rally-engine-001",
+  "name": "Rally Engine",
+  "defaultDurationHours": 2,
+  "cadenceMinutes": 20,
+  "maxActorTurnsPerTick": 6,
+  "remoteWritePolicy": "explicit_user_authorization_only",
+  "actors": ["sofia", "red-captain", "blue-captain", "kyo-captain", "benimaru", "king-captain", "mai", "coach-future"],
+  "scenarios": ["tournament-bogard-japan-women-fighters.json"],
+  "outcomePolicy": "ask_a_named_player_after_real_event_end; never infer_a_winner"
+}
