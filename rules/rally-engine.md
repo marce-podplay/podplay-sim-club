@@ -16,6 +16,10 @@ not a character and not a product adapter.
   action boundary validates and persists it.
 - Preview writes are never an emergent model action. They need an existing,
   explicit write gate and current user authorization.
+- On completion, Rally Engine writes one immutable, secret-free summary under
+  `state/runs/`. It includes tick timing, tournament state, fixture plan/event
+  references, remote-write count, and the channel message kinds that explain
+  the outcome.
 
 ## Two-Then-One tournament
 

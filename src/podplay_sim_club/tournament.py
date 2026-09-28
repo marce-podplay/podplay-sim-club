@@ -71,6 +71,8 @@ def run_tick(root: Path, now: Optional[datetime] = None) -> Dict[str, Any]:
                 action = _message(storage, key, observed_at, "sofia", participants, "tournament_final_announcement", f"Sofia announces the final: {winner} vs Women Fighters Team. The final becomes official once its free Open Play is published.")
             else:
                 action = {"actorId": "lead", "action": "pass", "detail": "final is already being prepared", "observedAt": observed_at}
+        elif semi_state["status"] == "blocked_immediate_window":
+            action = {"actorId": "lead", "action": "pass", "detail": "tournament waits for a new 60-minute fixture within the configured lead window", "observedAt": observed_at}
         else:
             action = {"actorId": "lead", "action": "pass", "detail": "tournament awaits a human-reported winner", "observedAt": observed_at}
         state["lastTickAt"] = observed_at
