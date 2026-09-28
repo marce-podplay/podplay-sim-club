@@ -41,7 +41,11 @@ def run_tick(root: Path, now: Optional[datetime] = None) -> Dict[str, Any]:
         elif semi_state["status"] == "awaiting_event":
             _record_owner_intent(storage, ledger, key, semi, observed_at)
             intent = ledger["intents"].get(semi_state["intentId"], {})
-            if intent.get("status") == "players_registered":
+            event_start = intent.get("event", {}).get("startTime") if isinstance(intent.get("event"), dict) else None
+            if isinstance(event_start, str) and (parse_instant(event_start) - instant).total_seconds() > 30 * 60:
+                semi_state.update({"status": "blocked_immediate_window", "blockedAt": observed_at, "reason": "fixture_is_not_within_30_minutes"})
+                action = _message(storage, key, observed_at, "sofia", semi["participants"], "tournament_announcement_superseded", "The earlier tournament announcement is superseded: no legal 60-minute fixture was available within 30 minutes. Rally Engine will wait for an immediate slot; the distant event is not an active tournament fixture.")
+            elif intent.get("status") == "players_registered":
                 semi_state["status"] = "scheduled"
                 semi_state["eventId"] = intent.get("event", {}).get("eventId")
                 action = _message(storage, key, observed_at, "sofia", semi["participants"], "tournament_fixture_confirmed", "The first fixture is published and every named player is registered. Play the scheduled session, then Andy will report the winner.")
