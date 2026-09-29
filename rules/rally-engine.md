@@ -25,7 +25,10 @@ not a character and not a product adapter.
 
 1. Sofia announces interest in Bogard-Higashi versus Japan Team.
 2. The first real product event uses the nearest real contiguous 60-minute
-   slot at the approved venue; a later start does not invalidate the fixture.
+   slot at the approved venue. A singles player, or both captains of a doubles
+   match, may instead take a free court that starts now or within the next 15
+   minutes. The lead runtime owns that exception. When no earlier court is
+   free, a later start does not invalidate the fixture.
 3. Once the event's real end time has passed, Rally Engine asks Andy (or another
    named participant) who won. Check-in or elapsed time never implies a winner.
 4. A reported winner unlocks Sofia's final announcement on the next tick. The

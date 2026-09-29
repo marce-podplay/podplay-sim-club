@@ -49,7 +49,12 @@ from podplay_sim_club.preview_evaluation import (
     summarize_booking_preview,
 )
 from podplay_sim_club.preview_readonly import PreviewReadError, PreviewReadonlyClient
-from podplay_sim_club.preview_readiness import select_candidate_session, summarize_payment
+from podplay_sim_club.preview_readiness import (
+    early_agreed_start,
+    may_start_early,
+    select_candidate_session,
+    summarize_payment,
+)
 from podplay_sim_club.preview_payment import load_test_stripe_secret
 from podplay_sim_club.preview_write import (
     PreviewCreditWriter,
@@ -887,8 +892,40 @@ class PreviewConnectionTestCase(unittest.TestCase):
             sessions,
             not_before=datetime(2026, 9, 24, 17, 30, tzinfo=timezone.utc),
         )
+        now = datetime(2026, 9, 24, 17, 0, tzinfo=timezone.utc)
+        soon = select_candidate_session(sessions, not_before=now)
+        self.assertEqual("too-soon", soon["sessionId"])
+        self.assertTrue(early_agreed_start(soon, now)["pulledForward"])
+        self.assertIsNone(early_agreed_start(result, now))
 
         self.assertEqual("nearest", result["sessionId"])
+
+    def test_early_start_follows_the_singles_player_or_both_doubles_captains(self):
+        self.assertTrue(may_start_early({"participants": ["andy-bogard"], "journey": "customer_booking"}))
+        self.assertTrue(
+            may_start_early(
+                {"participants": ["andy-bogard", "terry-bogard"], "journey": "customer_booking"}
+            )
+        )
+        self.assertTrue(
+            may_start_early(
+                {
+                    "reason": "team_rivalry_doubles",
+                    "journey": "customer_team_signup",
+                    "participants": ["andy-bogard", "terry-bogard", "kyo-captain", "benimaru"],
+                    "challenger": {"captainActorId": "andy-bogard"},
+                    "opponent": {"captainActorId": "kyo-captain"},
+                }
+            )
+        )
+        self.assertFalse(
+            may_start_early(
+                {
+                    "journey": "owner_open_play",
+                    "participants": ["andy-bogard", "terry-bogard", "king-captain", "mai"],
+                }
+            )
+        )
 
     def test_candidate_session_honors_agreed_venue_local_window(self):
         sessions = [

@@ -17,6 +17,10 @@ from .target_policy import TargetPolicy
 
 READINESS_STATE = "preview-readiness.json"
 PLAYER_ACTORS = ("andy-bogard", "terry-bogard")
+# A singles player, or both doubles captains, may take a free court that starts
+# now or inside this window. The ordinary 30-minute safety lead stays in force
+# for every other search.
+EARLY_START_WINDOW_MINUTES = 15
 
 
 def inspect_preview_readiness(
@@ -173,6 +177,69 @@ def find_candidate_session(
         if candidate is not None:
             return candidate
     return None
+
+
+def may_start_early(intent: Dict[str, Any]) -> bool:
+    """Singles needs the player. Doubles needs both captains.
+
+    Teammates and guests on a doubles intent do not have to agree again.
+    A larger event with no two agreeing captains stays on the ordinary search.
+    """
+    participants = [
+        actor_id for actor_id in intent.get("participants") or [] if isinstance(actor_id, str)
+    ]
+    if _is_doubles_intent(intent):
+        captains = [
+            actor_id
+            for actor_id in (
+                _side_captain(intent.get("challenger")),
+                _side_captain(intent.get("opponent")),
+            )
+            if isinstance(actor_id, str)
+        ]
+        return len(captains) == 2 and set(captains) <= set(participants)
+    return 1 <= len(participants) <= 2
+
+
+def _is_doubles_intent(intent: Dict[str, Any]) -> bool:
+    return intent.get("reason") == "team_rivalry_doubles" or intent.get("journey") in {
+        "customer_team_signup",
+        "doubles_challenge",
+    }
+
+
+def _side_captain(side: Any) -> Optional[str]:
+    if not isinstance(side, dict):
+        return None
+    captain = side.get("captainActorId") or side.get("captainId")
+    return captain if isinstance(captain, str) else None
+
+
+def early_agreed_start(
+    candidate: Optional[Dict[str, Any]],
+    now: datetime,
+    window_minutes: int = EARLY_START_WINDOW_MINUTES,
+) -> Optional[Dict[str, Any]]:
+    """Keep a free court only when it starts now or within the next few minutes.
+
+    The caller has already checked that the singles player or both doubles
+    captains agreed. A later opening is not pulled forward by this rule.
+    """
+    if not isinstance(candidate, dict) or window_minutes < 0:
+        return None
+    start = candidate.get("startTime")
+    if not isinstance(start, str):
+        return None
+    start_at = _utc(_parse_session_time(start))
+    observed = _utc(now)
+    if start_at < observed:
+        return None
+    if (start_at - observed).total_seconds() > window_minutes * 60:
+        return None
+    chosen = dict(candidate)
+    chosen["pulledForward"] = True
+    chosen["earlyWindowMinutes"] = window_minutes
+    return chosen
 
 
 def select_candidate_session(

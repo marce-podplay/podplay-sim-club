@@ -66,7 +66,13 @@ from .preview_participation import (
     summarize_invitation,
 )
 from .preview_readonly import PreviewReadError, PreviewReadonlyClient, collection_items
-from .preview_readiness import find_candidate_session, inspect_preview_readiness
+from .preview_readiness import (
+    EARLY_START_WINDOW_MINUTES,
+    early_agreed_start,
+    find_candidate_session,
+    inspect_preview_readiness,
+    may_start_early,
+)
 from .preview_seed import apply_identity_seed, build_seed_plan
 from .preview_write import PreviewWriteError
 from .server import serve
@@ -969,16 +975,25 @@ def plan_preview_intent(
             actor_auth_cache(root, "andy-bogard")
         ).authenticate(booker.email, booker.password, credentials.firebase_api_key)
         booker_client = PreviewReadonlyClient(policy, booker_auth.id_token)
-        candidate = find_candidate_session(
-            booker_client,
-            report["location"]["podId"],
-            report["location"]["timezone"] or "UTC",
-            datetime.fromisoformat(report["observedAt"]),
+        observed = datetime.fromisoformat(report["observedAt"])
+        search = dict(
+            pod_id=report["location"]["podId"],
+            timezone_name=report["location"]["timezone"] or "UTC",
+            now=observed,
             first_day_offset=int(constraints["daysAhead"][0]),
             last_day_offset=int(constraints["daysAhead"][1]),
             allowed_local_windows=constraints["localWindows"],
             required_duration_minutes=duration,
         )
+        candidate = None
+        if may_start_early(intent):
+            candidate = early_agreed_start(
+                find_candidate_session(booker_client, safety_lead_minutes=0, **search),
+                observed,
+                EARLY_START_WINDOW_MINUTES,
+            )
+        if candidate is None:
+            candidate = find_candidate_session(booker_client, **search)
         if not isinstance(candidate, dict):
             intent["status"] = "preview_blocked"
             intent["previewPlan"] = {
@@ -1035,6 +1050,8 @@ def plan_preview_intent(
             "durationMinutes": candidate["durationMinutes"],
             "startTime": candidate["startTime"],
             "endTime": candidate["endTime"],
+            "pulledForward": candidate.get("pulledForward") is True,
+            "earlyWindowMinutes": candidate.get("earlyWindowMinutes"),
             "virtualCredits": requested_credits,
             "evaluation": evaluation,
         }

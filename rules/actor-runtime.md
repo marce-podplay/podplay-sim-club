@@ -21,3 +21,7 @@ raises frustration and advertises a question to Riley rather than a retry.
 An actor receives only these legal advertisements and may accept, ask, or pass.
 It never creates a booking through dialogue. A per-actor cooldown prevents the
 same unanswered offer from repeating on every Rally tick.
+
+The lead may pull a start forward to now or the next 15 minutes when a court
+is free. Singles needs the player's agreement. Doubles needs both captains.
+The actor does not choose that clock.
