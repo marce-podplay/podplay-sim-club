@@ -180,6 +180,77 @@ class SimClubTestCase(unittest.TestCase):
         self.assertEqual("move-andy-bogard", reply["inReplyTo"])
         self.assertEqual("riley", reply["from"])
 
+    def test_riley_turns_a_new_session_message_into_a_requested_intent_without_publishing(self):
+        from podplay_sim_club.front_desk import tick
+
+        storage = Storage(self.root)
+        storage.append_jsonl(storage.channel_path("club"), {
+            "id": "ask-again", "channel": "club", "from": "andy-bogard", "to": ["riley"],
+            "kind": "new_event_request", "text": "Please schedule another club hour.",
+            "observedAt": "2026-09-29T16:00:00Z",
+        })
+        storage.write_json(storage.state / "social-engine.json", {
+            "schemaVersion": 1,
+            "offers": [{"actorId": "riley", "kind": "answer_player", "messageId": "ask-again"}],
+        })
+
+        result = tick(self.root, now=FIXED_NOW)
+        self.assertEqual("new_event_requested", result["action"])
+        intent = load_intent_ledger(storage)["intents"][result["intent_id"]]
+        self.assertEqual("requested", intent["status"])
+        self.assertEqual(0, intent["remoteWrites"])
+
+    def test_sofia_can_stimulate_a_quiet_club_without_creating_an_event(self):
+        from podplay_sim_club.owner_engagement import tick as owner_tick
+        from podplay_sim_club.social_engine import tick as social_tick
+
+        storage = Storage(self.root)
+        social = social_tick(self.root, now=FIXED_NOW)
+        self.assertEqual("sofia", social["offers"][-1]["actorId"])
+        self.assertEqual("stimulate_quiet_club", social["offers"][-1]["kind"])
+
+        result = owner_tick(self.root, now=FIXED_NOW)
+        self.assertEqual("advertise_interest_check", result["action"])
+        self.assertEqual(0, result["remoteWrites"])
+        message = storage.read_jsonl(storage.channel_path("club"))[-1]
+        self.assertEqual("sofia", message["from"])
+        self.assertEqual("owner_interest_check", message["kind"])
+        self.assertEqual({}, load_intent_ledger(storage)["intents"])
+
+        later = social_tick(self.root, now=datetime(2026, 9, 23, 15, 30, tzinfo=timezone.utc))
+        self.assertFalse(any(offer.get("kind") == "stimulate_quiet_club" for offer in later["offers"]))
+
+    def test_rally_tick_runs_a_direct_captain_challenge_round_then_stops(self):
+        from podplay_sim_club.rally_engine import tick
+
+        result = tick(self.root, now=FIXED_NOW)
+        self.assertLessEqual(len(result["rounds"]), 2)
+        self.assertTrue(all(len(round_["actorTurns"]) == 10 for round_ in result["rounds"]))
+        self.assertTrue(result["rounds"][0]["messageSent"])
+        self.assertTrue(any(turn["action"] == "challenge_rival_captain" for round_ in result["rounds"] for turn in round_["actorTurns"]))
+        intents = load_intent_ledger(Storage(self.root))["intents"]
+        invited = [intent for intent in intents.values() if intent.get("reason") == "team_rivalry_doubles"]
+        self.assertEqual(1, len(invited))
+        self.assertEqual("captain_invited", invited[0]["status"])
+        self.assertEqual(0, result["remoteWrites"])
+
+    def test_rally_queue_resumes_after_each_ten_people_and_wraps_only_next_tick(self):
+        from podplay_sim_club.rally_engine import tick
+
+        scenario_path = self.root / "scenarios" / "rally-engine.json"
+        scenario = json.loads(scenario_path.read_text())
+        scenario["actors"] = [f"person-{number}" for number in range(25)]
+        scenario_path.write_text(json.dumps(scenario), encoding="utf-8")
+
+        first = tick(self.root, now=FIXED_NOW)
+        second = tick(self.root, now=datetime(2026, 9, 23, 15, 25, tzinfo=timezone.utc))
+        third = tick(self.root, now=datetime(2026, 9, 23, 15, 45, tzinfo=timezone.utc))
+
+        self.assertEqual([f"person-{number}" for number in range(10)], first["rounds"][0]["actorIds"])
+        self.assertEqual([f"person-{number}" for number in range(10, 20)], second["rounds"][0]["actorIds"])
+        self.assertEqual([f"person-{number}" for number in range(20, 25)], third["rounds"][0]["actorIds"])
+        self.assertEqual(0, third["state"]["schedulerCursor"])
+
     def test_andy_vs_kyo_doubles_scenario_uses_the_roster_pairs_and_guests(self):
         roster = json.loads((REPO_ROOT / "characters" / "roster.json").read_text())
         scenario = json.loads((REPO_ROOT / "scenarios" / "andy-vs-kyo-doubles.json").read_text())
@@ -229,7 +300,7 @@ class SimClubTestCase(unittest.TestCase):
         second = run_tournament_tick(self.root, now=FIXED_NOW)
 
         self.assertEqual("awaiting_event", first["state"]["rounds"]["final"]["status"])
-        self.assertEqual("Japan Team", first["state"]["rounds"]["final"]["winner"])
+        self.assertEqual("Japan Team", first["state"]["rounds"]["final"]["challenger"])
         self.assertEqual("coordinator", second["action"]["actorId"])
         self.assertEqual("create_open_play", second["action"]["action"])
 
@@ -251,6 +322,18 @@ class SimClubTestCase(unittest.TestCase):
         self.assertEqual(0, intent["remoteWrites"])
         replay = plan_challenge(self.root, "andy-vs-kyo-doubles.json", FIXED_NOW)
         self.assertEqual(intent, replay)
+
+    def test_direct_captain_challenge_is_an_invitation_not_a_booking_or_acceptance(self):
+        from podplay_sim_club.team_challenges import propose_challenge
+
+        intent = propose_challenge(self.root, "andy-vs-kyo-doubles.json", FIXED_NOW)
+
+        self.assertEqual("captain_invited", intent["status"])
+        self.assertEqual("await_opponent_captain_acceptance", intent["nextAction"])
+        self.assertEqual(0, intent["remoteWrites"])
+        invitation = Storage(self.root).read_jsonl(Storage(self.root).channel_path("club"))[-1]
+        self.assertEqual("captain_challenge_invitation", invitation["kind"])
+        self.assertEqual(["kyo-captain"], invitation["to"])
 
     def orchestrator(self):
         return Orchestrator(self.root)
@@ -573,6 +656,11 @@ class SimClubTestCase(unittest.TestCase):
         self.assertEqual("pp7444-test", preview["previewMatches"]["activeOccurrenceKey"])
         self.assertEqual(1, len(preview["previewMatches"]["matches"]))
         self.assertEqual("EVT-EVENTLIV", preview["previewMatches"]["matches"][0]["eventCode"])
+        self.assertEqual(PREVIEW_ORIGIN, preview["previewOrigin"])
+        self.assertEqual(
+            PREVIEW_ORIGIN + "/admin/v2/events?eventId=event-live",
+            preview["previewMatches"]["matches"][0]["eventUrl"],
+        )
         self.assertEqual("Andy Bogard", preview["previewMatches"]["matches"][0]["participants"][0]["label"])
         self.assertNotIn("captainAction", preview)
         self.assertEqual({"status": "acknowledged", "actorId": "kyo-captain"}, acknowledgement)
@@ -589,6 +677,8 @@ class SimClubTestCase(unittest.TestCase):
         self.assertIn("SELECTED EVENT / BOOKING", page)
         self.assertIn("CURRENT STORYLINES", page)
         self.assertIn('id="toggle-stream"', page)
+        self.assertIn('id="preview-server"', page)
+        self.assertIn("Open this event in the preview", page)
         self.assertIn("/api/tournament/report", page)
         self.assertIn("if (element.innerHTML !== html)", page)
         self.assertNotIn("LOCAL FAKE", page)

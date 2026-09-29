@@ -455,6 +455,37 @@ Credentials and the local token cache live below the always-ignored `secrets/`
 directory.
 Do not place tokens in actor identities, seed files, journals, or issues.
 
+## Preview warm-up: player booking plus Sim Club communication
+
+Use the real preview player flow to learn product behavior; use the Sim Club
+channel to make the fictional community's intent and evidence visible. Neither
+substitutes for the other.
+
+1. Start as a player, not an admin. In the preview, choose the region, area,
+   pod experience, and a real available slot. Let the UI reach its order
+   summary before submitting.
+2. Record only secret-free facts locally: area/pod type, local slot, duration,
+   displayed capacity, checkout outcome, and the read-back reservation state.
+   Never record order IDs, emails, payment identifiers, passwords, or tokens.
+3. Treat a player reservation as a court reservation, not proof that named
+   Sim Club players agreed, attended, checked in, or played. Publish the
+   corresponding club message and collect those facts through the normal
+   fictional actor flow.
+4. Use the player-facing invitation UI when it is available. It may require
+   recipient email input and can offer split payment or host-paid invitations;
+   do not use an admin event merely to bypass that flow.
+5. If checkout is visually unresponsive, wait briefly, re-read the rendered
+   state, and click once more before diagnosing it. A successful confirmation
+   page is the authoritative evidence; a selected slot alone is not a booking.
+6. Private actor credentials and auth caches may exist locally for named
+   players. Reuse them to log in; never expose, copy into state, or recreate an
+   identity just because a session is missing.
+
+The September W37 probe demonstrated that Open Pod can expose shared-table
+availability and a player booking can reach a zero-total preview order through
+credits/sandbox payment. It did not make any participant acceptance, check-in,
+or match result true.
+
 ## Safety boundary
 
 The GET-only network adapter, narrow mutation writers, and target policy enforce:

@@ -41,6 +41,9 @@ def tick(root: Path, now: Optional[datetime] = None) -> Dict[str, Any]:
         _apply_release_notes(storage, motives, state)
         opportunities = _published_opportunities(storage, people)
         offers = _staff_offers(storage, roster) + _offers(people, roster, motives, opportunities, state, scenario, instant)
+        owner_offer = _quiet_club_owner_offer(offers, opportunities, state, scenario, instant)
+        if owner_offer:
+            offers.append(owner_offer)
         state.update({"schemaVersion": 1, "lastTickAt": observed_at, "offers": offers, "opportunities": opportunities})
         storage.write_json(storage.state / STATE_FILE, state)
     return {"observedAt": observed_at, "offers": offers, "opportunities": opportunities, "motives": motives}
@@ -115,7 +118,7 @@ def _staff_offers(storage: Storage, roster: Dict[str, Any]) -> List[Dict[str, An
             continue
         kind = row.get("kind")
         message_id = row.get("id")
-        if kind not in {"player_request", "reschedule_request"} or not isinstance(message_id, str):
+        if kind not in {"player_request", "reschedule_request", "new_event_request"} or not isinstance(message_id, str):
             continue
         if message_id in answered:
             continue
@@ -189,6 +192,9 @@ def _offers(people: Dict[str, Dict[str, Any]], roster: Dict[str, Any], motives: 
                 teammate = _available_teammate(roster, people, actor_id, team_id)
                 if teammate:
                     offers.append({"actorId": actor_id, "kind": "invite_teammate", "teammateId": teammate, "reason": "desire_to_play_and_static_affinity"})
+                    rival = _high_rival_captain(roster, team_id)
+                    if rival:
+                        offers.append({"actorId": actor_id, "kind": "challenge_rival_captain", "rivalCaptainId": rival, "teammateId": teammate, "reason": "desire_to_play_and_high_rivalry"})
                     cooldowns[actor_id] = isoformat(instant)
     return offers
 
@@ -207,3 +213,42 @@ def _available_teammate(roster: Dict[str, Any], people: Dict[str, Dict[str, Any]
         if member != actor_id and candidate and member in people[actor_id].get("affinities", []):
             return member
     return None
+
+
+def _high_rival_captain(roster: Dict[str, Any], team_id: str) -> Optional[str]:
+    teams = {row.get("id"): row for row in roster.get("teams", []) if isinstance(row, dict)}
+    for rivalry in roster.get("rivalries", []):
+        if not isinstance(rivalry, dict) or rivalry.get("intensity") != "high":
+            continue
+        rivals = rivalry.get("teams", [])
+        if not isinstance(rivals, list) or team_id not in rivals or len(rivals) != 2:
+            continue
+        rival_team = next((candidate for candidate in rivals if candidate != team_id), None)
+        captain = teams.get(rival_team, {}).get("captainId") if isinstance(rival_team, str) else None
+        character = next((row for row in roster.get("characters", []) if isinstance(row, dict) and row.get("id") == captain), {})
+        actor_id = character.get("actorId") if isinstance(character, dict) else None
+        if isinstance(actor_id, str):
+            return actor_id
+    return None
+
+
+def _quiet_club_owner_offer(offers: List[Dict[str, Any]], opportunities: List[Dict[str, Any]], state: Dict[str, Any], scenario: Dict[str, Any], instant: datetime) -> Optional[Dict[str, Any]]:
+    """Offer Sofia one bounded interest check when the club has gone quiet.
+
+    This is an advertisement, not a product event or discount.  A player must
+    still ask Riley for a session before the lead can plan anything.
+    """
+    promotion = scenario.get("quietClubPromotion")
+    if not isinstance(promotion, dict) or offers or opportunities:
+        return None
+    previous = state.get("quietClubPromotionAt")
+    if isinstance(previous, str):
+        elapsed = (instant - parse_instant(previous)).total_seconds()
+        if elapsed < int(promotion.get("cooldownMinutes", 0)) * 60:
+            return None
+    return {
+        "actorId": "sofia",
+        "kind": "stimulate_quiet_club",
+        "reason": "no_active_player_or_staff_interaction",
+        "action": "advertise_interest_check",
+    }

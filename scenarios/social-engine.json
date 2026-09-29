@@ -3,5 +3,9 @@
   "id": "preview-club-social-engine",
   "clock": {"desirePerHour": 8, "curiosityDecayPerHour": 4, "frustrationDecayPerHour": 2},
   "thresholds": {"desireToPlay": 80, "curiosity": 70, "frustration": 60},
-  "cooldownMinutes": 60
+  "cooldownMinutes": 60,
+  "quietClubPromotion": {
+    "desireBoost": 40,
+    "cooldownMinutes": 240
+  }
 }

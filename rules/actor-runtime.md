@@ -22,6 +22,34 @@ An actor receives only these legal advertisements and may accept, ask, or pass.
 It never creates a booking through dialogue. A per-actor cooldown prevents the
 same unanswered offer from repeating on every Rally tick.
 
+When the club has neither a live opportunity nor a player or staff interaction,
+Sofia may receive one quiet-club advertisement. Her legal response is a public
+interest check addressed to enabled players. It can increase their desire to
+play and directs any interested player to Riley; it is not a promo code, an
+event publication, or a booking. The lead still needs a player request before
+planning a new session.
+
+For a high-intensity rivalry, a captain also receives a direct challenge offer.
+That route sends an unbooked invitation to the rival captain and keeps the
+intent at `captain_invited` until the rival captain accepts. It never treats a
+teammate or captain as accepted merely because they were named.
+
+## Event-driven rounds
+
+Rally keeps a durable rotating community queue. A normal tick processes the
+next ten configured people, then persists the cursor after the final person it
+visited. A message may trigger one follow-up batch of up to ten more people,
+so a tick has a hard cap of two batches. A partial final batch reaches the end
+of the queue and resets the cursor only for the next scheduled tick; it does
+not wrap around within the same run. Every actor either selects one legal local
+action or records a pass. If a batch produces no club message, the tick stops
+and waits for the next scheduled run. These extra rounds are local-only;
+preview writes remain a later lead action with the normal validation and
+confirmation.
+
+`state/actor-interpretations.json` records every selected turn as skipped or
+actionable, with its round and compact reason.
+
 The lead may pull a start forward to now or the next 15 minutes when a court
 is free. Singles needs the player's agreement. Doubles needs both captains.
 The actor does not choose that clock.

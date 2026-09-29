@@ -955,7 +955,7 @@ def plan_preview_intent(
     try:
         ledger = load_intent_ledger(storage)
         selected_id, intent = select_intent(ledger, intent_id)
-        if intent.get("status") not in {"agreed", "preview_ready", "preview_blocked"}:
+        if intent.get("status") not in {"requested", "agreed", "preview_ready", "preview_blocked"}:
             raise BookingIntentError(
                 f"booking intent cannot be planned from status {intent.get('status')!r}"
             )

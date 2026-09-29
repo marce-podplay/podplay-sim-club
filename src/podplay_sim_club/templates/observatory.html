@@ -85,7 +85,7 @@
 <main>
   <header>
     <div><h1>PODPLAY SIM CLUB // OBSERVATORY</h1><span id="source" class="dim">PR PREVIEW · remote snapshot</span></div>
-    <div><span id="connection" class="live">● LOCAL UI</span> <span id="clock-label" class="dim">PREVIEW TIME · NOW</span> <span id="clock" class="dim"></span></div>
+    <div><span id="connection" class="live">● LOCAL UI</span> <a id="preview-server" class="stream-link" hidden target="_blank" rel="noreferrer">Open preview</a> <span id="clock-label" class="dim">PREVIEW TIME · NOW</span> <span id="clock" class="dim"></span></div>
   </header>
   <div id="offline" class="offline" hidden>LOCAL OBSERVATORY OFFLINE · restart <code>./club serve</code>. Displayed data may be frozen.</div>
 
@@ -152,6 +152,11 @@
     catch (_error) { return 'unknown'; }
   }
 
+  function eventLink(url, label) {
+    if (typeof url !== 'string' || !url.startsWith('https://')) return '';
+    return `<div><a class="stream-link" href="${esc(url)}" target="_blank" rel="noreferrer">${esc(label)}</a></div>`;
+  }
+
   function snapshotAge(instant) {
     const seconds = Math.max(0, Math.floor((Date.now() - new Date(instant).getTime()) / 1000));
     if (seconds < 60) return `${seconds}s old`;
@@ -178,6 +183,7 @@
           <span class="booking-label">${esc(match.label || 'Preview booking')}</span> · ${esc(match.eventStatus || 'event pending')}<br>
           <span class="reference">${esc(match.eventCode || 'EVT-pending')}</span> <span class="dim">${esc(match.phase || 'unknown')}</span>
         </button>
+        ${eventLink(match.eventUrl, 'Open this event')}
       </div>`).join('') || '<div class="dim">· no preview matches recorded</div>');
     window.matchRows = rows;
     const activeOccurrenceKey = previewMatches && previewMatches.activeOccurrenceKey;
@@ -218,7 +224,7 @@
       <div>
         <div class="fact"><span class="dim">BOOKING</span><strong>${esc(match.label || 'Preview booking')}</strong></div>
         <div class="fact"><span class="dim">REFERENCE</span><strong class="reference">${esc(match.eventCode || 'pending')}</strong></div>
-        <div class="fact"><span class="dim">EVENT ID</span><strong>${esc(match.eventId || 'not created')}</strong></div>
+        <div class="fact"><span class="dim">EVENT ID</span><strong>${esc(match.eventId || 'not created')}</strong>${eventLink(match.eventUrl, 'Open this event in the preview')}</div>
         <div class="fact"><span class="dim">SLOT</span><strong>${esc(formatTime(match.startTime))}</strong><span class="dim">to ${esc(formatTime(match.endTime))}</span></div>
         <div class="fact"><span class="dim">LOCATION</span><strong>${esc(venue.areaName || 'refresh status for venue')}</strong><span class="dim">${venue.podName ? ` / ${esc(venue.podName)}` : ''}</span></div>
       </div>
@@ -309,6 +315,15 @@
     renderPreview(preview, previewState.previewMatches);
     renderStream(previewState.messages);
     renderStorylines(previewState.storylines);
+    const serverLink = document.getElementById('preview-server');
+    const origin = previewState.previewOrigin;
+    if (typeof origin === 'string' && origin.startsWith('https://')) {
+      serverLink.hidden = false;
+      serverLink.href = origin;
+    } else {
+      serverLink.hidden = true;
+      serverLink.removeAttribute('href');
+    }
   }
 
   document.getElementById('toggle-stream').onclick = () => {

@@ -14,6 +14,46 @@ class TeamChallengeError(ValueError):
     """Raised when a team challenge cannot be tied back to the roster."""
 
 
+def propose_challenge(root: Path, scenario_name: str, now: datetime) -> Dict[str, Any]:
+    """Send a captain-to-captain doubles invitation without booking a court."""
+    storage = Storage(root)
+    scenario = storage.load_json(root / "scenarios" / scenario_name)
+    roster = storage.load_json(root / "characters" / "roster.json")
+    if not isinstance(scenario, dict) or scenario.get("journey") != "doubles_challenge":
+        raise TeamChallengeError("team challenge scenario is invalid")
+    teams = {team.get("id"): team for team in roster.get("teams", []) if isinstance(team, dict)} if isinstance(roster, dict) else {}
+    characters = {character.get("id"): character for character in roster.get("characters", []) if isinstance(character, dict)} if isinstance(roster, dict) else {}
+    challenger = _validate_side(scenario.get("challenger"), teams, characters)
+    opponent = _validate_side(scenario.get("opponent"), teams, characters)
+    scenario_id = scenario.get("id")
+    if not isinstance(scenario_id, str) or not scenario_id:
+        raise TeamChallengeError("team challenge is missing its ID")
+    intent_id = f"intent:team-challenge:{scenario_id}"
+    observed_at = isoformat(now)
+    with storage.writer_lock():
+        ledger = load_intent_ledger(storage)
+        existing = ledger["intents"].get(intent_id)
+        if isinstance(existing, dict):
+            return deepcopy(existing)
+        intent = {
+            "schemaVersion": 1, "id": intent_id, "status": "captain_invited",
+            "reason": "team_rivalry_doubles", "journey": "customer_team_signup",
+            "createdAt": observed_at,
+            "participants": [challenger["captainActorId"], challenger["teammateActorId"], opponent["captainActorId"], opponent["teammateActorId"]],
+            "challenger": challenger, "opponent": opponent,
+            "constraints": {"durationMinutes": scenario.get("durationMinutes", 60), "daysAhead": deepcopy(scenario.get("daysAhead", [0, 14])), "localWindows": deepcopy(scenario.get("localWindows", ["00:00-24:00"])), "slotPolicy": "nearest_valid_low_contention"},
+            "fallbackJourney": scenario.get("escalateTo", "owner_open_play"), "nextAction": "await_opponent_captain_acceptance", "remoteWrites": 0,
+        }
+        save_intent(storage, ledger, intent)
+        storage.append_jsonl(storage.channel_path("club"), {
+            "id": f"{intent_id}:captain-invitation", "channel": "club", "kind": "captain_challenge_invitation",
+            "from": challenger["captainActorId"], "to": [opponent["captainActorId"]], "intentId": intent_id,
+            "text": f"{challenger['teamName']} challenges {opponent['teamName']} to doubles. Accept this captain invitation and the lead may plan one court; teammates are invited afterward.",
+            "observedAt": observed_at, "remoteWrites": 0,
+        })
+    return intent
+
+
 def plan_challenge(root: Path, scenario_name: str, now: datetime) -> Dict[str, Any]:
     """Record one agreed doubles challenge; product writes require a later adapter."""
     storage = Storage(root)

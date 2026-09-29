@@ -1,0 +1,66 @@
+"""Sofia's bounded response when Preview Club has no active interaction.
+
+The owner can advertise a future free session.  The advertisement is local
+club speech: it cannot publish an event, issue a product promotion, or create
+a booking.  A player must subsequently request a session through Riley.
+"""
+
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+from .storage import Storage
+from .time import isoformat, parse_instant
+
+
+def tick(root: Path, now: Optional[datetime] = None) -> Dict[str, Any]:
+    storage = Storage(root)
+    instant = now or parse_instant(None)
+    observed_at = isoformat(instant)
+    scenario = storage.load_json(root / "scenarios" / "social-engine.json")
+    promotion = scenario.get("quietClubPromotion") if isinstance(scenario, dict) else None
+    if not isinstance(promotion, dict):
+        return _pass(observed_at, "quiet-club promotion is not configured")
+
+    with storage.writer_lock():
+        social = storage.load_json(storage.state / "social-engine.json", default={})
+        offers = social.get("offers", []) if isinstance(social, dict) else []
+        offer = next((row for row in offers if isinstance(row, dict) and row.get("actorId") == "sofia" and row.get("kind") == "stimulate_quiet_club"), None)
+        if not offer:
+            return _pass(observed_at, "no quiet-club owner offer")
+        motives = social.get("motives", {})
+        if not isinstance(motives, dict):
+            return _pass(observed_at, "player motives are unavailable")
+        targets = [actor_id for actor_id, motive in motives.items() if isinstance(actor_id, str) and isinstance(motive, dict)]
+        if not targets:
+            return _pass(observed_at, "no enabled players to address")
+        boost = int(promotion.get("desireBoost", 0))
+        for actor_id in targets:
+            motive = motives[actor_id]
+            motive["desireToPlay"] = min(100, int(motive.get("desireToPlay", 0)) + boost)
+        count = int(social.get("quietClubPromotionCount", 0)) + 1
+        social["quietClubPromotionAt"] = observed_at
+        social["quietClubPromotionCount"] = count
+        storage.write_json(storage.state / "social-engine.json", social)
+        message_id = f"sofia:quiet-club:{count}"
+        storage.append_jsonl(storage.channel_path("club"), {
+            "id": message_id,
+            "occurrenceKey": "owner:quiet-club",
+            "channel": "club",
+            "from": "sofia",
+            "to": targets,
+            "kind": "owner_interest_check",
+            "text": "The club is quiet. I can promote a free W37 session when a player asks Riley for a new event—who wants the next match?",
+            "observedAt": observed_at,
+            "remoteWrites": 0,
+        })
+    return {
+        "actorId": "sofia", "action": "advertise_interest_check",
+        "detail": "addressed quiet-club players with a local interest check",
+        "messageId": message_id, "targets": targets, "observedAt": observed_at,
+        "remoteWrites": 0,
+    }
+
+
+def _pass(observed_at: str, detail: str) -> Dict[str, Any]:
+    return {"actorId": "sofia", "action": "pass", "detail": detail, "observedAt": observed_at, "remoteWrites": 0}

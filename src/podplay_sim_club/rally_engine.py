@@ -10,6 +10,9 @@ from .tournament import run_tick as run_tournament_tick
 from .booking_intents import load_intent_ledger
 from .social_engine import tick as run_social_tick
 from .front_desk import tick as run_front_desk_tick
+from .event_observation import observe_finished_events
+from .owner_engagement import tick as run_owner_engagement_tick
+from .club_rounds import tick as run_club_round
 
 
 STATE_FILE = "rally-engine.json"
@@ -36,15 +39,73 @@ def tick(root: Path, hours: int = 2, now: Optional[datetime] = None) -> Dict[str
             _write_run_summary(storage, state)
         storage.write_json(storage.state / STATE_FILE, state)
     social = run_social_tick(root, now=instant)
-    front_desk = run_front_desk_tick(root, now=instant)
+    actors = scenario.get("actors", [])
+    if not isinstance(actors, list) or not all(isinstance(actor_id, str) for actor_id in actors):
+        raise ValueError("Rally Engine actors are invalid")
+    actor_limit = int(scenario.get("maxActorTurnsPerRound", 10))
+    round_limit = int(scenario.get("maxRoundsPerTick", 5))
+    if not 1 <= actor_limit <= 10 or not 1 <= round_limit <= 5:
+        raise ValueError("Rally Engine turn limits are invalid")
+    if not actors:
+        raise ValueError("Rally Engine needs at least one actor")
+    rounds = []
+    owner_engagement = {"actorId": "sofia", "action": "pass"}
+    player = {"actorId": None, "action": "pass"}
+    front_desk = {"actorId": "riley", "action": "pass"}
+    cursor = int(state.get("schedulerCursor", 0)) % len(actors)
+    for number in range(1, round_limit + 1):
+        batch = actors[cursor:cursor + actor_limit]
+        if not batch:
+            cursor = 0
+            break
+        before = len(storage.read_jsonl(storage.channel_path("club")))
+        actor_turns = []
+        for actor_id in batch:
+            if actor_id == "sofia":
+                turn = run_owner_engagement_tick(root, now=instant)
+                owner_engagement = turn
+            elif actor_id == "riley":
+                turn = run_front_desk_tick(root, now=instant)
+                front_desk = turn
+            else:
+                turn = run_club_round(root, actor_id=actor_id, now=instant)
+                if turn.get("action") != "pass":
+                    player = turn
+            actor_turns.append(turn)
+            if turn.get("action") != "pass":
+                social = run_social_tick(root, now=instant)
+        after = len(storage.read_jsonl(storage.channel_path("club")))
+        cursor += len(batch)
+        if cursor >= len(actors):
+            cursor = 0
+            at_end_of_queue = True
+        else:
+            at_end_of_queue = False
+        rounds.append({"number": number, "actorIds": batch, "actorTurns": actor_turns, "messageSent": after > before})
+        if after == before or at_end_of_queue:
+            break
+    observation = observe_finished_events(root, now=instant)
     result = run_tournament_tick(root, now=instant)
     with storage.writer_lock():
         state = storage.load_json(storage.state / STATE_FILE, default=state)
         state["ticks"] = int(state.get("ticks", 0)) + 1
         state["lastTickAt"] = isoformat(instant)
         state["lastAction"] = result["action"]
+        state["schedulerCursor"] = cursor
         storage.write_json(storage.state / STATE_FILE, state)
-    return {"status": state["status"], "state": state, "action": result["action"], "socialOffers": social["offers"], "frontDesk": front_desk, "remoteWrites": 0}
+        _write_interpretation_audit(storage, rounds, isoformat(instant))
+    return {"status": state["status"], "state": state, "action": result["action"], "socialOffers": social["offers"], "rounds": rounds, "ownerEngagement": owner_engagement, "player": player, "frontDesk": front_desk, "observation": observation, "remoteWrites": 0}
+
+
+def _write_interpretation_audit(storage: Storage, rounds: list[Dict[str, Any]], observed_at: str) -> None:
+    path = storage.state / "actor-interpretations.json"
+    audit = storage.load_json(path, default={})
+    rows = audit.get("turns", []) if isinstance(audit, dict) else []
+    for round_ in rounds:
+        for turn in round_.get("actorTurns", []):
+            if isinstance(turn, dict):
+                rows.append({"observedAt": observed_at, "round": round_.get("number"), "actorId": turn.get("actorId"), "status": "skipped" if turn.get("action") == "pass" else "actionable", "action": turn.get("action"), "reason": turn.get("detail")})
+    storage.write_json(path, {"schemaVersion": 1, "lastTickAt": observed_at, "turns": rows[-500:]})
 
 
 def _write_run_summary(storage: Storage, state: Dict[str, Any]) -> None:

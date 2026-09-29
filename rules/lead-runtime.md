@@ -46,3 +46,11 @@ every other offer. Riley proposes one move, or replies why it cannot happen.
 The lead checks the agreement and the free court, then moves that same event
 and reads it back. Riley tells the players the result. No second booking is
 created.
+
+## Quiet club
+
+When there is no active event, player action, or front-desk request, Sofia may
+advertise an interest check on a durable cooldown. This local message can raise
+the addressed players' desire to play, but it is not a product promotion or an
+event. A named player must ask Riley for a new session before the lead plans a
+slot, and Sofia must still promote a planned event before any preview write.

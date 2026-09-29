@@ -32,6 +32,11 @@ def run_tick(root: Path, now: Optional[datetime] = None) -> Dict[str, Any]:
         semi = scenario["rounds"][0]
         final = scenario["rounds"][1]
         ledger = load_intent_ledger(storage)
+        # Earlier state used ``winner`` to carry the semi-final champion into
+        # the final.  That wording incorrectly implies a final result.
+        final_state = rounds.get("final")
+        if isinstance(final_state, dict) and "winner" in final_state and "challenger" not in final_state:
+            final_state["challenger"] = final_state.pop("winner")
         semi_state = rounds.setdefault("semi-final", {"status": "pending"})
         action: Dict[str, Any]
         if semi_state["status"] == "pending":
@@ -64,7 +69,7 @@ def run_tick(root: Path, now: Optional[datetime] = None) -> Dict[str, Any]:
                 participants = list(_team_players(scenario, winner)) + list(final["womenFighters"])
                 round_copy = {**final, "participants": participants}
                 intent_id = _record_owner_intent(storage, ledger, key, round_copy, observed_at)
-                final_state.update({"status": "awaiting_event", "intentId": intent_id, "winner": winner})
+                final_state.update({"status": "awaiting_event", "intentId": intent_id, "challenger": winner})
                 action = _message(storage, key, observed_at, "sofia", participants, "tournament_final_announcement", f"Sofia announces the final: {winner} vs Women Fighters Team. The coordinator will create its free Open Play fixture on the next tick.")
             elif final_state["status"] == "awaiting_event":
                 intent = ledger["intents"].get(final_state["intentId"], {})
@@ -73,8 +78,16 @@ def run_tick(root: Path, now: Optional[datetime] = None) -> Dict[str, Any]:
                     action = _message(storage, key, observed_at, "sofia", intent.get("participants", []), "tournament_final_fixture_created", "The Women Fighters final is published. Players may now register for the official fixture.")
                 else:
                     action = {"actorId": "coordinator", "action": "create_open_play", "detail": "create the announced Women Fighters final from its owner Open Play intent", "observedAt": observed_at}
+            elif final_state["status"] == "event_created":
+                intent = ledger["intents"].get(final_state.get("intentId"), {})
+                if isinstance(intent, dict) and intent.get("status") == "observed_empty":
+                    final_state["status"] = "empty"
+                    action = {"actorId": "lead", "action": "empty_event_observed", "detail": "final was empty; await a new club request", "observedAt": observed_at}
+                else:
+                    action = {"actorId": "lead", "action": "pass", "detail": "final is already being prepared", "observedAt": observed_at}
             else:
-                action = {"actorId": "lead", "action": "pass", "detail": "final is already being prepared", "observedAt": observed_at}
+                detail = "final was empty; await a new club request" if final_state["status"] == "empty" else "final is already being prepared"
+                action = {"actorId": "lead", "action": "pass", "detail": detail, "observedAt": observed_at}
         else:
             action = {"actorId": "lead", "action": "pass", "detail": "tournament awaits a human-reported winner", "observedAt": observed_at}
         state["lastTickAt"] = observed_at

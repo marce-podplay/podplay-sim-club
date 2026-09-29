@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import threading
 from typing import Optional
+from urllib.parse import quote
 
 from .actor_runtime import run_tick as run_actor_tick
 from .identity_registry import TEAM_ACTOR_NAMES
@@ -63,6 +64,7 @@ class ObservatoryServer:
                         else {"activeOccurrenceKey": None, "matches": []}
                     )
                     tournament = _tournament_fixture(orchestrator)
+                    preview_origin = _preview_origin(orchestrator)
                     if tournament is not None:
                         match_index["matches"] = [
                             match
@@ -74,9 +76,12 @@ class ObservatoryServer:
                         match_index["matches"].append(tournament["match"])
                         match_index["activeOccurrenceKey"] = tournament["match"]["occurrenceKey"]
                         snapshot = tournament["snapshot"]
+                    match_index = _with_known_venue(orchestrator, match_index)
+                    _attach_preview_links(match_index, preview_origin)
                     self._json(HTTPStatus.OK, {
+                        "previewOrigin": preview_origin,
                         "previewMatch": snapshot if isinstance(snapshot, dict) else None,
-                        "previewMatches": _with_known_venue(orchestrator, match_index),
+                        "previewMatches": match_index,
                         "messages": _recent_messages(orchestrator),
                         "storylines": _active_storylines(orchestrator),
                     })
@@ -189,6 +194,38 @@ def _recent_messages(orchestrator: Orchestrator):
         messages.append(message)
     messages.sort(key=lambda row: (str(row.get("observedAt") or ""), str(row.get("id") or "")))
     return messages[-80:]
+
+
+def _preview_origin(orchestrator: Orchestrator) -> Optional[str]:
+    """Return the approved preview origin already stored on local product state."""
+    ledger = orchestrator.storage.load_json(
+        orchestrator.storage.state / "preview-matches.json", default={}
+    )
+    origin = ledger.get("targetOrigin") if isinstance(ledger, dict) else None
+    if isinstance(origin, str) and origin.startswith("https://"):
+        return origin.rstrip("/")
+    intents = orchestrator.storage.load_json(
+        orchestrator.storage.state / "booking-intents.json", default={}
+    )
+    rows = intents.get("intents", {}) if isinstance(intents, dict) else {}
+    if isinstance(rows, dict):
+        for intent in rows.values():
+            plan = intent.get("previewPlan") if isinstance(intent, dict) else None
+            origin = plan.get("targetOrigin") if isinstance(plan, dict) else None
+            if isinstance(origin, str) and origin.startswith("https://"):
+                return origin.rstrip("/")
+    return None
+
+
+def _attach_preview_links(match_index, origin: Optional[str]) -> None:
+    for match in match_index.get("matches", []):
+        if not isinstance(match, dict):
+            continue
+        event_id = match.get("eventId")
+        if isinstance(origin, str) and isinstance(event_id, str) and event_id:
+            match["eventUrl"] = f"{origin}/admin/v2/events?eventId={quote(event_id, safe='')}"
+        else:
+            match["eventUrl"] = None
 
 
 def _actor_directory(orchestrator: Orchestrator):

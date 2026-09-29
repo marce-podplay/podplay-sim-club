@@ -7,6 +7,7 @@
     "check_in": {"roles": ["player", "podplay_admin"], "writesProduct": true},
     "inspect_available_packages": {"roles": ["owner", "podplay_admin"], "writesProduct": false},
     "answer_player": {"roles": ["club_staff"], "writesProduct": false},
-    "reschedule_match": {"roles": ["club_staff"], "writesProduct": true}
+    "reschedule_match": {"roles": ["club_staff"], "writesProduct": true},
+    "advertise_interest_check": {"roles": ["club_owner"], "writesProduct": false}
   }
 }

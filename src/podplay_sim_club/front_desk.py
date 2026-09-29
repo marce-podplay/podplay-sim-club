@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .booking_intents import load_intent_ledger
+from .booking_intents import load_intent_ledger, save_intent
 from .preview_readiness import may_start_early
 from .storage import Storage
 from .time import isoformat, parse_instant
@@ -73,6 +73,8 @@ def _riley_offers(storage: Storage) -> list[Dict[str, Any]]:
 def _handle_request(storage: Storage, messages: list, request: Any, observed_at: str) -> Dict[str, Any]:
     if not isinstance(request, dict):
         return {"actorId": "riley", "action": "pass", "detail": "request disappeared", "observedAt": observed_at}
+    if request.get("kind") == "new_event_request":
+        return _new_event_request(storage, request, observed_at)
     request_id = request.get("id")
     intent_id = request.get("intentId")
     if not isinstance(request_id, str) or not isinstance(intent_id, str):
@@ -88,6 +90,24 @@ def _handle_request(storage: Storage, messages: list, request: Any, observed_at:
     if not _captains_agreed(messages, intent, intent_id):
         return _reply(storage, request, observed_at, "I need the eligible player—or both doubles captains—to request the earlier time first.", "request_missing_agreement")
     return _reply(storage, request, observed_at, "I’ll ask the lead to check the nearest legal court and move this same event if it is free.", "propose_reschedule", intent_id=intent_id, event_id=event_id)
+
+
+def _new_event_request(storage: Storage, request: Dict[str, Any], observed_at: str) -> Dict[str, Any]:
+    request_id = request.get("id")
+    requester = request.get("from")
+    if not isinstance(request_id, str) or not isinstance(requester, str):
+        return _reply(storage, request, observed_at, "I need to know who is asking before I can open a new-session request.", "request_missing_requester")
+    intent_id = f"intent:new-event:{request_id}"
+    ledger = load_intent_ledger(storage)
+    if intent_id not in ledger["intents"]:
+        save_intent(storage, ledger, {
+            "schemaVersion": 1, "id": intent_id, "status": "requested",
+            "reason": "community_new_event_request", "journey": "owner_open_play",
+            "createdAt": observed_at, "requestedBy": requester, "participants": [requester],
+            "constraints": {"durationMinutes": 60, "daysAhead": [0, 14], "localWindows": ["00:00-24:00"], "slotPolicy": "nearest_real_contiguous_slot", "freeToParticipants": True},
+            "evidence": {"clubRequestId": request_id}, "remoteWrites": 0,
+        })
+    return _reply(storage, request, observed_at, "I logged the new-session request. The lead may plan a court, but nothing will publish until the owner promotes it.", "new_event_requested", intent_id=intent_id)
 
 
 def _captains_agreed(messages: list, intent: Dict[str, Any], intent_id: str) -> bool:
