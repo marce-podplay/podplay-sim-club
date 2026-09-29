@@ -25,6 +25,7 @@ class AuthSession:
     email: str
     source: str
     id_token: str = field(repr=False)
+    firebase_uid: str = ""
 
 
 JsonRequest = Callable[[str, Dict[str, Any]], Dict[str, Any]]
@@ -89,7 +90,12 @@ class FirebaseAuthenticator:
             and cache.get("firebaseKeyFingerprint") == fingerprint
             and self._is_fresh(str(cache.get("idToken", "")), cache.get("expiresAt"))
         ):
-            return AuthSession(email=email, source="cache", id_token=cache["idToken"])
+            return AuthSession(
+                email=email,
+                source="cache",
+                id_token=cache["idToken"],
+                firebase_uid=_firebase_uid(cache["idToken"]),
+            )
 
         refresh_token = str(cache.get("refreshToken", "")) if cache.get("email") == email else ""
         if refresh_token and cache.get("firebaseKeyFingerprint") == fingerprint:
@@ -102,7 +108,12 @@ class FirebaseAuthenticator:
                 next_refresh = str(refreshed.get("refresh_token") or refresh_token)
                 expires_at = self._expires_at(id_token, refreshed.get("expires_in"))
                 self._write_cache(email, id_token, next_refresh, expires_at, fingerprint)
-                return AuthSession(email=email, source="refresh", id_token=id_token)
+                return AuthSession(
+                    email=email,
+                    source="refresh",
+                    id_token=id_token,
+                    firebase_uid=_firebase_uid(id_token),
+                )
             except (FirebaseAuthError, KeyError, TypeError, ValueError):
                 pass
 
@@ -118,7 +129,12 @@ class FirebaseAuthenticator:
         refresh_token = str(signed_in.get("refreshToken") or "")
         expires_at = self._expires_at(id_token, signed_in.get("expiresIn"))
         self._write_cache(signed_in_email, id_token, refresh_token, expires_at, fingerprint)
-        return AuthSession(email=signed_in_email, source="password", id_token=id_token)
+        return AuthSession(
+            email=signed_in_email,
+            source="password",
+            id_token=id_token,
+            firebase_uid=str(signed_in.get("localId") or _firebase_uid(id_token)),
+        )
 
     def _expires_at(self, token: str, fallback_seconds: Optional[Any]) -> int:
         expiration = _jwt_payload(token).get("exp")
@@ -182,3 +198,12 @@ class FirebaseAuthenticator:
             except FileNotFoundError:
                 pass
             raise
+
+
+def _firebase_uid(token: str) -> str:
+    payload = _jwt_payload(token)
+    for field in ("user_id", "sub"):
+        value = payload.get(field)
+        if isinstance(value, str) and value:
+            return value
+    return ""

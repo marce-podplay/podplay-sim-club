@@ -40,7 +40,7 @@ def tick(root: Path, now: Optional[datetime] = None) -> Dict[str, Any]:
             _age_motive(motive, elapsed, scenario["clock"])
         _apply_release_notes(storage, motives, state)
         opportunities = _published_opportunities(storage, people)
-        offers = _offers(people, roster, motives, opportunities, state, scenario, instant)
+        offers = _staff_offers(storage, roster) + _offers(people, roster, motives, opportunities, state, scenario, instant)
         state.update({"schemaVersion": 1, "lastTickAt": observed_at, "offers": offers, "opportunities": opportunities})
         storage.write_json(storage.state / STATE_FILE, state)
     return {"observedAt": observed_at, "offers": offers, "opportunities": opportunities, "motives": motives}
@@ -92,6 +92,41 @@ def record_feature_trial(root: Path, actor_id: str, release_note_id: str, now: O
         state.setdefault("triedReleases", {}).setdefault(actor_id, {})[release_note_id] = observed_at
         state["lastTickAt"] = observed_at
         storage.write_json(storage.state / STATE_FILE, state)
+
+
+def _staff_offers(storage: Storage, roster: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Unanswered player requests reach the front desk before any other offer."""
+    staff_ids = {
+        row["actorId"]
+        for row in roster.get("staff", [])
+        if isinstance(row, dict) and isinstance(row.get("actorId"), str)
+    }
+    if not staff_ids:
+        return []
+    messages = storage.read_jsonl(storage.channel_path("club"))
+    answered = {
+        row.get("inReplyTo")
+        for row in messages
+        if isinstance(row, dict) and row.get("from") in staff_ids
+    }
+    offers = []
+    for row in messages:
+        if not isinstance(row, dict):
+            continue
+        kind = row.get("kind")
+        message_id = row.get("id")
+        if kind not in {"player_request", "reschedule_request"} or not isinstance(message_id, str):
+            continue
+        if message_id in answered:
+            continue
+        offers.append({
+            "actorId": next(iter(staff_ids)),
+            "kind": "reschedule_match" if kind == "reschedule_request" else "answer_player",
+            "messageId": message_id,
+            "reason": "player_request_is_staff_priority",
+            "priority": "answer_player_requests",
+        })
+    return offers
 
 
 def _enabled_people(roster: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:

@@ -18,6 +18,11 @@
       "virtualCredits": 0,
       "packages": []
     },
+    "riley": {
+      "roles": ["ADMIN", "FRONT_DESK"],
+      "virtualCredits": 0,
+      "packages": []
+    },
     "andy-bogard": {
       "roles": ["PLAYER"],
       "virtualCredits": 200,

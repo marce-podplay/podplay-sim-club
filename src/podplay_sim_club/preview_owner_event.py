@@ -1,6 +1,7 @@
 """Guarded owner-created Open Play writes for Preview Club."""
 
 import json
+import re
 from typing import Any, Callable, Dict, List, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, build_opener
@@ -101,3 +102,63 @@ class PreviewOwnerEventWriter:
         if not isinstance(event_id, str):
             raise PreviewWriteError("owner event create response has an unexpected shape")
         return {"id": event_id}
+
+
+class PreviewEventRescheduleWriter:
+    """Move one existing event; deliberately has no create-booking capability."""
+
+    EVENT_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+    def __init__(self, policy: TargetPolicy, admin_token: str, transport: Optional[Transport] = None):
+        if not policy.writes_allowed:
+            raise PreviewWriteError("preview-write policy confirmation is required")
+        if not admin_token:
+            raise PreviewWriteError("admin token is required for event reschedule")
+        self.policy = policy
+        self._admin_token = admin_token
+        self._used = False
+        opener = build_opener(_RejectRedirects())
+        self._transport = transport or (lambda request, timeout: opener.open(request, timeout=timeout))
+
+    def reschedule(self, event_id: str, start_time: str, end_time: str) -> Dict[str, Any]:
+        if self._used:
+            raise PreviewWriteError("event reschedule write budget exhausted")
+        if not self.EVENT_ID.fullmatch(event_id):
+            raise PreviewWriteError("event reschedule target ID is invalid")
+        if not isinstance(start_time, str) or not isinstance(end_time, str):
+            raise PreviewWriteError("event reschedule requires ISO start and end times")
+        self._used = True
+        url = self.policy.target_origin + f"/apis/v2/events/{event_id}/reschedules"
+        self.policy.assert_url(url)
+        request = Request(
+            url,
+            data=json.dumps({"startTime": start_time, "endTime": end_time}, separators=(",", ":")).encode("utf-8"),
+            headers={
+                "Accept": "application/json", "Content-Type": "application/json",
+                "Authorization": f"Bearer {self._admin_token}",
+                "User-Agent": "podplay-sim-club/0.1 front-desk-reschedule",
+            },
+            method="POST",
+        )
+        try:
+            response = self._transport(request, 30)
+            with response:
+                self.policy.assert_url(response.geturl())
+                body, status = response.read(MAX_RESPONSE_BYTES + 1), response.status
+        except PreviewWriteError:
+            raise
+        except HTTPError as exc:
+            raise PreviewWriteError(f"event reschedule failed with HTTP {exc.code}") from exc
+        except URLError as exc:
+            raise PreviewWriteError("event reschedule network request failed") from exc
+        if status not in {200, 201}:
+            raise PreviewWriteError(f"event reschedule returned HTTP {status}")
+        if len(body) > MAX_RESPONSE_BYTES:
+            raise PreviewWriteError("event reschedule response exceeded the size limit")
+        try:
+            value = json.loads(body.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise PreviewWriteError("event reschedule returned invalid JSON") from exc
+        if not isinstance(value, dict) or value.get("status") not in {"CONFIRMED", None}:
+            raise PreviewWriteError("event reschedule was not confirmed")
+        return value

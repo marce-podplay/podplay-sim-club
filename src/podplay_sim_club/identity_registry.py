@@ -32,7 +32,13 @@ ACTOR_NAMES = {
     "sofia": ("Sofia", "Preview Club"),
     "andy-bogard": ("Andy", "Bogard"),
     "terry-bogard": ("Terry", "Bogard"),
+    "riley": ("Riley", "Chen"),
 }
+
+# Riley is provisioned by the Preview Club identity seed as the additional
+# persistent front-desk fixture.  Keep the ordinary default set unchanged:
+# readiness probes and unrelated commands must not accidentally create staff.
+DEFAULT_ACTOR_IDS = ("sofia", "andy-bogard", "terry-bogard")
 
 # These identities are deliberately opt-in.  Normal Preview Club readiness
 # remains a small two-player probe until a scenario explicitly activates a team.
@@ -54,7 +60,7 @@ class IdentityRegistry:
     def __init__(self, path: Path):
         self.path = path
 
-    def ensure(self, actor_ids: Iterable[str] = ACTOR_NAMES.keys()) -> Dict[str, ActorIdentity]:
+    def ensure(self, actor_ids: Iterable[str] = DEFAULT_ACTOR_IDS) -> Dict[str, ActorIdentity]:
         requested_ids = tuple(canonical_actor_id(actor_id) for actor_id in actor_ids)
         data = self._read()
         actors = data.setdefault("actors", {})

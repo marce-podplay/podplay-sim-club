@@ -51,6 +51,15 @@
       "sports": {"pickleball": {"preferredTeamSize": 2, "captainInvitesOneTeammate": true, "thirdMemberMayAttendAsGuest": true}}
     }
   ],
+  "staff": [
+    {
+      "characterId": "riley-chen",
+      "actorId": "riley",
+      "title": "Preview Club front desk",
+      "productRoles": ["ADMIN", "FRONT_DESK"],
+      "priority": "answer_player_requests"
+    }
+  ],
   "rivalries": [
     {"teams": ["bogard-higashi", "japan-team"], "intensity": "high", "preferredJourney": "doubles"},
     {"teams": ["art-of-fighting", "women-fighters"], "intensity": "friendly", "preferredJourney": "club_open_play"},
@@ -59,7 +68,7 @@
   "characters": [
     {"id": "sofia-alvarez", "actorId": "sofia", "name": "Sofia Alvarez", "role": "club_owner"},
     {"id": "alex-morgan", "actorId": "alex", "name": "Alex Morgan", "role": "podplay_admin"},
-    {"id": "riley-chen", "actorId": "riley", "name": "Riley Chen", "role": "customer_success"},
+    {"id": "riley-chen", "actorId": "riley", "name": "Riley Chen", "role": "club_staff", "productRoles": ["ADMIN", "FRONT_DESK"], "duties": ["answer_player_requests", "reschedule_agreed_match"], "priority": "answer_player_requests"},
     {"id": "andy-bogard", "actorId": "andy-bogard", "name": "Andy Bogard", "role": "player", "teamIds": ["bogard-higashi"], "affinities": ["terry-bogard", "joe-higashi"], "captainOf": ["bogard-higashi"]},
     {"id": "terry-bogard", "actorId": "terry-bogard", "name": "Terry Bogard", "role": "player", "teamIds": ["bogard-higashi"], "affinities": ["andy-bogard", "joe-higashi"]},
     {"id": "joe-higashi", "name": "Joe Higashi", "role": "future_player", "teamIds": ["bogard-higashi"], "affinities": ["andy-bogard", "terry-bogard"]},

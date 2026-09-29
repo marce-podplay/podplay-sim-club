@@ -59,6 +59,7 @@ from podplay_sim_club.preview_payment import load_test_stripe_secret
 from podplay_sim_club.preview_write import (
     PreviewCreditWriter,
     PreviewIdentityWriter,
+    PreviewRoleWriter,
     PreviewWriteError,
 )
 from podplay_sim_club.server import ObservatoryServer
@@ -98,11 +99,86 @@ class SimClubTestCase(unittest.TestCase):
             self.assertTrue(pickleball["captainInvitesOneTeammate"])
             self.assertTrue(pickleball["thirdMemberMayAttendAsGuest"])
         self.assertEqual("kyo-kusanagi", next(team for team in roster["teams"] if team["id"] == "japan-team")["captainId"])
+        riley = characters["riley-chen"]
+        self.assertEqual("club_staff", riley["role"])
+        self.assertEqual(["ADMIN", "FRONT_DESK"], riley["productRoles"])
+        self.assertEqual("riley", roster["staff"][0]["actorId"])
+        self.assertEqual(["ADMIN", "FRONT_DESK"], roster["staff"][0]["productRoles"])
         team_ids = {team["id"] for team in roster["teams"]}
         for rivalry in roster["rivalries"]:
             self.assertEqual(2, len(rivalry["teams"]))
             self.assertTrue(set(rivalry["teams"]).issubset(team_ids))
             self.assertIn(rivalry["preferredJourney"], {"doubles", "club_open_play"})
+
+    def test_front_desk_hears_a_reschedule_request_before_other_offers(self):
+        from podplay_sim_club.social_engine import tick
+
+        storage = Storage(self.root)
+        storage.append_jsonl(
+            storage.channel_path("club"),
+            {
+                "id": "msg-move-earlier",
+                "channel": "club",
+                "from": "andy-bogard",
+                "to": ["riley"],
+                "kind": "reschedule_request",
+                "text": "Both captains agree. Please move the doubles match earlier.",
+                "observedAt": "2026-09-29T14:00:00Z",
+            },
+        )
+
+        first = tick(self.root, now=FIXED_NOW)
+        self.assertEqual("riley", first["offers"][0]["actorId"])
+        self.assertEqual("reschedule_match", first["offers"][0]["kind"])
+        self.assertEqual("msg-move-earlier", first["offers"][0]["messageId"])
+
+        storage.append_jsonl(
+            storage.channel_path("club"),
+            {
+                "id": "msg-move-earlier:reply",
+                "channel": "club",
+                "from": "riley",
+                "to": ["andy-bogard"],
+                "kind": "staff_reply",
+                "inReplyTo": "msg-move-earlier",
+                "text": "I asked the lead to move that same match.",
+                "observedAt": "2026-09-29T14:05:00Z",
+            },
+        )
+        second = tick(self.root, now=datetime(2026, 9, 23, 15, 25, tzinfo=timezone.utc))
+        self.assertFalse(any(offer.get("messageId") == "msg-move-earlier" for offer in second["offers"]))
+
+    def test_riley_proposes_one_same_event_reschedule_only_after_both_doubles_captains_ask(self):
+        from podplay_sim_club.front_desk import tick
+
+        storage = Storage(self.root)
+        intent_id = "intent:doubles-001"
+        ledger = load_intent_ledger(storage)
+        save_intent(storage, ledger, {
+            "schemaVersion": 1, "id": intent_id, "status": "event_created",
+            "journey": "customer_team_signup",
+            "participants": ["andy-bogard", "terry-bogard", "kyo-captain", "benimaru"],
+            "challenger": {"captainActorId": "andy-bogard"},
+            "opponent": {"captainActorId": "kyo-captain"},
+            "event": {"eventId": "event-001"}, "remoteWrites": 0,
+        })
+        for sender in ("andy-bogard", "kyo-captain"):
+            storage.append_jsonl(storage.channel_path("club"), {
+                "id": f"move-{sender}", "channel": "club", "from": sender,
+                "to": ["riley"], "kind": "reschedule_request", "intentId": intent_id,
+                "text": "Please move our agreed doubles match earlier.", "observedAt": "2026-09-29T14:00:00Z",
+            })
+        storage.write_json(storage.state / "social-engine.json", {
+            "schemaVersion": 1,
+            "offers": [{"actorId": "riley", "kind": "reschedule_match", "messageId": "move-andy-bogard"}],
+        })
+
+        result = tick(self.root, now=FIXED_NOW)
+        self.assertEqual("propose_reschedule", result["action"])
+        self.assertEqual("event-001", result["event_id"])
+        reply = storage.read_jsonl(storage.channel_path("club"))[-1]
+        self.assertEqual("move-andy-bogard", reply["inReplyTo"])
+        self.assertEqual("riley", reply["from"])
 
     def test_andy_vs_kyo_doubles_scenario_uses_the_roster_pairs_and_guests(self):
         roster = json.loads((REPO_ROOT / "characters" / "roster.json").read_text())
@@ -760,6 +836,8 @@ class PreviewConnectionTestCase(unittest.TestCase):
             self.assertNotIn(first["sofia"].password, repr(first["sofia"]))
             team = registry.ensure(("kyo-captain", "benimaru"))
             self.assertEqual({"kyo-captain", "benimaru"}, set(team))
+            riley = registry.ensure(("riley",))
+            self.assertEqual(("Riley", "Chen"), (riley["riley"].first_name, riley["riley"].last_name))
             self.assertEqual({"sofia", "andy-bogard", "terry-bogard"}, set(registry.ensure()))
 
     def test_invite_sent_protocol_records_product_readback_and_optional_link(self):
@@ -810,6 +888,9 @@ class PreviewConnectionTestCase(unittest.TestCase):
 
         with self.assertRaises(PreviewWriteError):
             PreviewCreditWriter(policy, "admin-token")
+
+        with self.assertRaises(PreviewWriteError):
+            PreviewRoleWriter(policy, "admin-token")
 
     def test_payment_reference_is_not_a_saved_payment_method(self):
         result = summarize_payment(

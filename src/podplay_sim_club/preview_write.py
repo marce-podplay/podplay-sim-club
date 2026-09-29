@@ -66,6 +66,94 @@ class PreviewIdentityWriter:
         return value
 
 
+class PreviewRoleWriter:
+    """Assign a verified staff fixture's roles without touching other users."""
+
+    USER_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+    def __init__(self, policy: TargetPolicy, admin_token: str):
+        if not policy.writes_allowed:
+            raise PreviewWriteError("preview-write policy confirmation is required")
+        if not admin_token:
+            raise PreviewWriteError("admin token is required for role assignment")
+        self.policy = policy
+        self._admin_token = admin_token
+        self._opener = build_opener(_RejectRedirects())
+
+    def assign_roles(
+        self, user_id: str, profile: Dict[str, Any], required_roles: list[str]
+    ) -> Dict[str, Any]:
+        """PATCH the product's required full role form, preserving all roles already present."""
+        if not self.USER_ID.fullmatch(user_id):
+            raise PreviewWriteError("role-assignment target user ID is invalid")
+        if not isinstance(profile, dict):
+            raise PreviewWriteError("role-assignment profile is invalid")
+        if not required_roles or not all(
+            isinstance(role, str) and re.fullmatch(r"[A-Z_]{2,64}", role)
+            for role in required_roles
+        ):
+            raise PreviewWriteError("role-assignment role tokens are invalid")
+        required_fields = ("firstName", "lastName", "email")
+        if any(not isinstance(profile.get(field), str) or not profile[field] for field in required_fields):
+            raise PreviewWriteError("role-assignment profile is incomplete")
+
+        existing_roles = profile.get("roles")
+        if not isinstance(existing_roles, list) or not all(isinstance(role, str) for role in existing_roles):
+            existing_roles = []
+        roles = sorted(set(existing_roles).union(required_roles))
+        roles_areas = profile.get("rolesAreas")
+        if not isinstance(roles_areas, dict) or not isinstance(roles_areas.get("items"), list):
+            roles_areas = {"items": [], "_total": 0}
+        payload = {
+            "firstName": profile["firstName"],
+            "lastName": profile["lastName"],
+            "email": profile["email"],
+            "roles": roles,
+            "rolesAreas": roles_areas,
+        }
+        # These fields are optional in the public DTO.  Preserve them only when
+        # the live profile actually has values; never invent a profile edit.
+        for field in ("gender", "birthday"):
+            if isinstance(profile.get(field), str) and profile[field]:
+                payload[field] = profile[field]
+
+        url = self.policy.target_origin + f"/apis/v2/users/{user_id}"
+        self.policy.assert_url(url)
+        request = Request(
+            url,
+            data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self._admin_token}",
+                "User-Agent": "podplay-sim-club/0.1 role-seed",
+            },
+            method="PATCH",
+        )
+        try:
+            with self._opener.open(request, timeout=20) as response:
+                self.policy.assert_url(response.geturl())
+                body = response.read(MAX_RESPONSE_BYTES + 1)
+                status = response.status
+        except PreviewWriteError:
+            raise
+        except HTTPError as exc:
+            raise PreviewWriteError(f"preview role assignment failed with HTTP {exc.code}") from exc
+        except URLError as exc:
+            raise PreviewWriteError("preview role assignment network request failed") from exc
+        if status != 200:
+            raise PreviewWriteError(f"preview role assignment returned HTTP {status}")
+        if len(body) > MAX_RESPONSE_BYTES:
+            raise PreviewWriteError("preview role assignment response exceeded the size limit")
+        try:
+            value = json.loads(body.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise PreviewWriteError("preview role assignment returned invalid JSON") from exc
+        if not isinstance(value, dict):
+            raise PreviewWriteError("preview role assignment response has an unexpected shape")
+        return value
+
+
 class PreviewCreditWriter:
     REASON = "PP-7444 Preview Club seed"
     USER_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")

@@ -7,7 +7,7 @@ from typing import Any, Dict
 ACTORS = {
     "sofia": {"name": "Sofia", "role": "owner", "glyph": "S"},
     "alex": {"name": "Alex", "role": "podplay_admin", "glyph": "A"},
-    "riley": {"name": "Riley", "role": "customer_success", "glyph": "C"},
+    "riley": {"name": "Riley", "role": "club_staff", "glyph": "C"},
     "andy-bogard": {"name": "Andy Bogard", "role": "player", "glyph": "A"},
     "terry-bogard": {"name": "Terry Bogard", "role": "player", "glyph": "T"},
 }
@@ -21,7 +21,7 @@ def new_world(
         actor = deepcopy(definition)
         actor.update(
             {
-                "location": "outside" if actor_id in {"alex", "riley"} else "club",
+                "location": "outside" if actor_id == "alex" else "club",
                 "state": "idle",
                 "unread": 0,
             }

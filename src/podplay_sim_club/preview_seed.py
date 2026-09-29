@@ -10,7 +10,7 @@ from .firebase_auth import FirebaseAuthenticator
 from .players import actor_auth_cache
 from .identity_registry import ActorIdentity, IdentityRegistry
 from .preview_readonly import PreviewReadError, PreviewReadonlyClient, collection_items
-from .preview_write import PreviewIdentityWriter, PreviewWriteError
+from .preview_write import PreviewIdentityWriter, PreviewRoleWriter, PreviewWriteError
 from .target_policy import TargetPolicy
 
 
@@ -32,6 +32,33 @@ def load_preview_seed(root: Path) -> Dict[str, Any]:
     if not isinstance(value, dict) or value.get("schemaVersion") != 1:
         raise PreviewReadError("unsupported Preview Club seed definition")
     return value
+
+
+def seed_actor_ids(seed: Dict[str, Any]) -> tuple[str, ...]:
+    """The published player identities plus the durable staff login."""
+    configured = seed.get("productIdentities")
+    if not isinstance(configured, list) or not all(isinstance(actor_id, str) for actor_id in configured):
+        raise PreviewReadError("seed productIdentities are missing or invalid")
+    staff = seed.get("staffFixture")
+    if not isinstance(staff, dict) or not isinstance(staff.get("actorId"), str):
+        raise PreviewReadError("seed staffFixture is missing or invalid")
+    return tuple(dict.fromkeys([*configured, staff["actorId"]]))
+
+
+def staff_fixture(seed: Dict[str, Any]) -> Dict[str, Any]:
+    fixture = seed.get("staffFixture")
+    if not isinstance(fixture, dict):
+        raise PreviewReadError("seed staffFixture is missing or invalid")
+    actor_id = fixture.get("actorId")
+    roles = fixture.get("productRoles")
+    if (
+        not isinstance(actor_id, str)
+        or not isinstance(roles, list)
+        or not roles
+        or not all(isinstance(role, str) and role for role in roles)
+    ):
+        raise PreviewReadError("seed staffFixture roles are missing or invalid")
+    return {"actorId": actor_id, "productRoles": list(roles)}
 
 
 def build_seed_plan(
@@ -115,6 +142,7 @@ def build_seed_plan(
         "settings": settings,
         "prerequisitesOk": prerequisites_ok,
         "actors": actor_rows,
+        "staffFixture": staff_fixture(seed),
     }
 
 
@@ -138,12 +166,15 @@ def apply_identity_seed(
     admin_client: PreviewReadonlyClient,
     identities: Dict[str, ActorIdentity],
     firebase_api_key: str,
+    admin_token: str,
 ) -> Tuple[Dict[str, Any], list]:
     plan = build_seed_plan(root, admin_client, identities)
     if not plan["prerequisitesOk"]:
         raise PreviewWriteError("signup prerequisites are not safe for automatic seeding")
     writer = PreviewIdentityWriter(write_policy)
+    role_writer = PreviewRoleWriter(write_policy, admin_token)
     registry = IdentityRegistry(root / "secrets" / "preview-actors.json")
+    fixture = staff_fixture(load_preview_seed(root))
     results = []
 
     for actor_id, identity in identities.items():
@@ -182,11 +213,30 @@ def apply_identity_seed(
             raise PreviewWriteError(f"identity verification failed for {actor_id}")
         registry.record_verified(
             actor_id,
-            podplay_user_id,
+            actor_auth.firebase_uid or identity.firebase_uid,
             podplay_user_id,
             read_policy.target_origin,
             plan["tenantId"],
         )
+        assigned_roles = []
+        if actor_id == fixture["actorId"]:
+            # Read the target profile with the admin session before the PATCH so
+            # role assignment preserves its current profile and role scope.
+            live_profile = admin_client.get(f"/apis/v2/users/{podplay_user_id}")
+            live_roles = live_profile.get("roles") if isinstance(live_profile, dict) else None
+            if not isinstance(live_roles, list):
+                raise PreviewWriteError("Riley role profile is invalid")
+            if not set(fixture["productRoles"]).issubset(live_roles):
+                role_writer.assign_roles(
+                    podplay_user_id, live_profile, fixture["productRoles"]
+                )
+            verified_profile = PreviewReadonlyClient(
+                read_policy, actor_auth.id_token
+            ).get("/apis/v2/users/current")
+            live_roles = verified_profile.get("roles") if isinstance(verified_profile, dict) else None
+            if not isinstance(live_roles, list) or not set(fixture["productRoles"]).issubset(live_roles):
+                raise PreviewWriteError("Riley role verification failed")
+            assigned_roles = [role for role in fixture["productRoles"] if role in live_roles]
         results.append(
             {
                 "actorId": actor_id,
@@ -194,6 +244,7 @@ def apply_identity_seed(
                 "id": podplay_user_id,
                 "action": action,
                 "authSource": actor_auth.source,
+                "roles": assigned_roles,
             }
         )
     return plan, results

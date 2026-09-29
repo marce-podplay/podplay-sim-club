@@ -33,3 +33,16 @@ The move replaces the start on that same intent. It does not create a second
 booking. A product write still requires exact-origin confirmation and a
 read-back. An event that is already created keeps its start until the lead
 can move that same event through a verified write.
+
+## Club staff
+
+Riley is the persistent front desk on the King of Fighters roster, with
+`ADMIN` and `FRONT_DESK`. Sofia promotes events. Alex keeps platform
+administration.
+
+A reschedule starts as a club-channel message from the singles player or from
+both doubles captains. The social engine offers that request to Riley before
+every other offer. Riley proposes one move, or replies why it cannot happen.
+The lead checks the agreement and the free court, then moves that same event
+and reads it back. Riley tells the players the result. No second booking is
+created.

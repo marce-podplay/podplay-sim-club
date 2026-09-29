@@ -9,6 +9,7 @@ from .time import isoformat, parse_instant
 from .tournament import run_tick as run_tournament_tick
 from .booking_intents import load_intent_ledger
 from .social_engine import tick as run_social_tick
+from .front_desk import tick as run_front_desk_tick
 
 
 STATE_FILE = "rally-engine.json"
@@ -35,6 +36,7 @@ def tick(root: Path, hours: int = 2, now: Optional[datetime] = None) -> Dict[str
             _write_run_summary(storage, state)
         storage.write_json(storage.state / STATE_FILE, state)
     social = run_social_tick(root, now=instant)
+    front_desk = run_front_desk_tick(root, now=instant)
     result = run_tournament_tick(root, now=instant)
     with storage.writer_lock():
         state = storage.load_json(storage.state / STATE_FILE, default=state)
@@ -42,7 +44,7 @@ def tick(root: Path, hours: int = 2, now: Optional[datetime] = None) -> Dict[str
         state["lastTickAt"] = isoformat(instant)
         state["lastAction"] = result["action"]
         storage.write_json(storage.state / STATE_FILE, state)
-    return {"status": state["status"], "state": state, "action": result["action"], "socialOffers": social["offers"], "remoteWrites": 0}
+    return {"status": state["status"], "state": state, "action": result["action"], "socialOffers": social["offers"], "frontDesk": front_desk, "remoteWrites": 0}
 
 
 def _write_run_summary(storage: Storage, state: Dict[str, Any]) -> None:

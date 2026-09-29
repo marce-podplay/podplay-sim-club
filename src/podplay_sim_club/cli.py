@@ -53,6 +53,7 @@ from .preview_payment import (
     wait_for_payment_method,
 )
 from .preview_owner_event import PreviewOwnerEventWriter
+from .preview_owner_event import PreviewEventRescheduleWriter
 from .preview_event_signup import PreviewEventSignupWriter, find_event_signup
 from .preview_participation import (
     ACCEPTED_STATUSES,
@@ -73,12 +74,13 @@ from .preview_readiness import (
     inspect_preview_readiness,
     may_start_early,
 )
-from .preview_seed import apply_identity_seed, build_seed_plan
+from .preview_seed import apply_identity_seed, build_seed_plan, load_preview_seed, seed_actor_ids
 from .preview_write import PreviewWriteError
 from .server import serve
 from .storage import Storage
 from .target_policy import TargetPolicy, TargetPolicyError
 from .team_challenges import TeamChallengeError, plan_challenge
+from .front_desk import mark_rescheduled, pending_reschedule
 from .terminal import render, render_needs
 from .time import parse_instant
 
@@ -219,6 +221,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--confirm-origin",
         help="required with --apply; must equal the exact preview origin",
     )
+    preview_reschedule = preview_subcommands.add_parser(
+        "reschedule", help="plan or move one Riley-approved event without creating another"
+    )
+    preview_reschedule_mode = preview_reschedule.add_mutually_exclusive_group(required=True)
+    preview_reschedule_mode.add_argument("--dry-run", action="store_true")
+    preview_reschedule_mode.add_argument("--apply", action="store_true")
+    preview_reschedule.add_argument("--confirm-origin", help="required with --apply; exact preview origin")
+    preview_reschedule.add_argument("--request", help="Riley request ID; defaults only when one is pending")
     preview_seed.add_argument(
         "--team", choices=sorted(TEAM_ACTORS),
         help="also seed the two current product identities for this dormant team",
@@ -421,6 +431,8 @@ def main(argv: Optional[list] = None) -> int:
                 confirmation=args.confirm_origin,
                 team=args.team,
             )
+        if args.preview_command == "reschedule":
+            return reschedule_preview(root, args.apply, args.confirm_origin, args.request)
         raise AssertionError(f"unhandled preview command {args.preview_command}")
 
     try:
@@ -747,7 +759,7 @@ def seed_preview(root: Path, apply: bool, confirmation: Optional[str], team: Opt
         )
         client = PreviewReadonlyClient(read_policy, auth.id_token)
         registry = IdentityRegistry(root / "secrets" / "preview-actors.json")
-        actor_ids = list(registry.ensure().keys())
+        actor_ids = list(seed_actor_ids(load_preview_seed(root)))
         if team:
             actor_ids.extend(TEAM_ACTORS[team])
         identities = registry.ensure(actor_ids)
@@ -765,6 +777,7 @@ def seed_preview(root: Path, apply: bool, confirmation: Optional[str], team: Opt
                 client,
                 identities,
                 credentials.firebase_api_key,
+                auth.id_token,
             )
         else:
             plan = build_seed_plan(root, client, identities)
@@ -790,13 +803,16 @@ def seed_preview(root: Path, apply: bool, confirmation: Optional[str], team: Opt
     print(f"signup prerequisites: {'safe' if plan['prerequisitesOk'] else 'blocked'}")
     if apply:
         for result in results:
-            print(f"- {result['actorId']}: {result['action']} and verified ({result['email']})")
-        print(f"writes: {sum(1 for result in results if result['action'] == 'created')} user signups")
+            roles = f"; roles={','.join(result['roles'])}" if result["roles"] else ""
+            print(f"- {result['actorId']}: {result['action']} and verified ({result['email']}){roles}")
+        signups = sum(1 for result in results if result['action'] == 'created')
+        print(f"writes: {signups} user signups; Riley roles reconciled")
     else:
         for actor_id, actor in plan["actors"].items():
             print(f"- {actor_id}: {actor['status']} ({actor['email']})")
         missing = sum(1 for actor in plan["actors"].values() if actor["status"] == "missing")
-        print(f"writes planned: {missing} user signups; no roles, credits, memberships, or bookings")
+        fixture = plan["staffFixture"]
+        print(f"writes planned: {missing} user signups; {fixture['actorId']} roles={','.join(fixture['productRoles'])}; no credits, memberships, or bookings")
     return 0
 
 
@@ -1431,6 +1447,83 @@ def _record_preview_payment_ledger(*, storage: Storage, policy: TargetPolicy, id
             "status": "active", "cleanup": "reconcile on next preview readiness; detach only after explicit approval",
         }
     storage.write_json(path, ledger)
+
+
+def reschedule_preview(root: Path, apply: bool, confirmation: Optional[str], request_id: Optional[str] = None) -> int:
+    """Lead-only move of the one event Riley already proposed to reschedule."""
+    storage = Storage(root)
+    try:
+        pending = pending_reschedule(root, request_id)
+        intent_id = pending.get("intent_id")
+        event_id = pending.get("event_id")
+        if not isinstance(intent_id, str) or not isinstance(event_id, str):
+            raise PreviewWriteError("Riley request is missing its event reference")
+        ledger = load_intent_ledger(storage)
+        _, intent = select_intent(ledger, intent_id)
+        preview_plan = intent.get("previewPlan")
+        if not isinstance(preview_plan, dict):
+            raise PreviewWriteError("Riley request has no durable preview plan")
+        pod_id = preview_plan.get("podId")
+        duration = preview_plan.get("durationMinutes")
+        old_start = preview_plan.get("startTime")
+        if not isinstance(pod_id, str) or not isinstance(duration, int) or not isinstance(old_start, str):
+            raise PreviewWriteError("Riley request preview plan is incomplete")
+        credentials = PreviewCredentials.load(root)
+        read_policy = TargetPolicy.from_config(credentials.config)
+        if preview_plan.get("targetOrigin") != read_policy.target_origin:
+            raise PreviewWriteError("Riley request belongs to another preview origin")
+        admin_auth = FirebaseAuthenticator(root / "secrets" / "preview-auth-cache.json").authenticate(
+            credentials.admin_email, credentials.admin_password, credentials.firebase_api_key
+        )
+        client = PreviewReadonlyClient(read_policy, admin_auth.id_token)
+        pod = client.get(f"/apis/v2/pods/{pod_id}")
+        timezone_name = pod.get("timezone") if isinstance(pod, dict) else None
+        if not isinstance(timezone_name, str):
+            raise PreviewReadError("Riley request pod has no timezone")
+        now = datetime.now(timezone.utc)
+        candidate = early_agreed_start(
+            find_candidate_session(client, pod_id, timezone_name, now, safety_lead_minutes=0, required_duration_minutes=duration),
+            now,
+            EARLY_START_WINDOW_MINUTES,
+        )
+        if not isinstance(candidate, dict):
+            raise PreviewWriteError("no free court starts within the agreed 15-minute window")
+        if candidate.get("startTime") == old_start:
+            raise PreviewWriteError("nearest legal court is already the event's current start")
+        plan = {"eventId": event_id, "podId": pod_id, "startTime": candidate["startTime"], "endTime": candidate["endTime"], "durationMinutes": duration}
+        if apply:
+            write_policy = TargetPolicy.from_config(replace(
+                credentials.config, mode=RunMode.PREVIEW_WRITE, preview_write_confirmation=confirmation
+            ))
+            PreviewEventRescheduleWriter(write_policy, admin_auth.id_token).reschedule(
+                event_id, plan["startTime"], plan["endTime"]
+            )
+            event = client.get(f"/apis/v2/events/{event_id}")
+            if not isinstance(event, dict) or event.get("id") != event_id or event.get("isCanceled") is True or event.get("startTime") != plan["startTime"] or event.get("endTime") != plan["endTime"]:
+                raise PreviewWriteError("same-event reschedule read-back did not match the plan")
+            preview_plan.update({
+                "startTime": plan["startTime"], "endTime": plan["endTime"],
+                "sessionId": candidate["sessionId"], "tableId": candidate["tableId"],
+                "items": candidate["items"], "observedAt": now.isoformat(),
+            })
+            if isinstance(intent.get("event"), dict):
+                intent["event"].update({"startTime": plan["startTime"], "endTime": plan["endTime"]})
+            intent["previewPlan"] = preview_plan
+            save_intent(storage, ledger, intent)
+            mark_rescheduled(root, pending["requestId"], plan, now)
+            storage.append_jsonl(storage.channel_path("club"), {
+                "id": f"{pending['requestId']}:riley-completed", "channel": "club", "from": "riley",
+                "to": intent.get("participants", []), "kind": "staff_reschedule_completed",
+                "inReplyTo": pending["requestId"], "text": "The lead moved the same event to the confirmed earlier court.",
+                "observedAt": now.isoformat(),
+            })
+    except (ValueError, BookingIntentError, CredentialsError, FirebaseAuthError, PreviewReadError, PreviewWriteError, TargetPolicyError) as exc:
+        print(f"ERROR preview reschedule: {exc}", file=sys.stderr)
+        return 2
+    print(f"PREVIEW CLUB RESCHEDULE // {'APPLIED' if apply else 'DRY RUN'} // PR #{read_policy.pull_request_number}")
+    print(f"event: {plan['eventId']}; same-event move: {plan['startTime']} to {plan['endTime']}")
+    print(f"writes: {1 if apply else 0}")
+    return 0
 
 
 def book_preview_match(

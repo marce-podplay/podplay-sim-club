@@ -25,3 +25,7 @@ same unanswered offer from repeating on every Rally tick.
 The lead may pull a start forward to now or the next 15 minutes when a court
 is free. Singles needs the player's agreement. Doubles needs both captains.
 The actor does not choose that clock.
+
+Riley is Preview Club staff, not a player and not the platform administrator.
+Player requests outrank every other staff offer. Riley may answer a player or
+propose a reschedule of an agreed match. Riley may not choose the start time.

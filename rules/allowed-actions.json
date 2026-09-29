@@ -5,6 +5,8 @@
     "invite_player": {"roles": ["player"], "writesProduct": true},
     "accept_invitation": {"roles": ["player"], "writesProduct": true},
     "check_in": {"roles": ["player", "podplay_admin"], "writesProduct": true},
-    "inspect_available_packages": {"roles": ["owner", "podplay_admin"], "writesProduct": false}
+    "inspect_available_packages": {"roles": ["owner", "podplay_admin"], "writesProduct": false},
+    "answer_player": {"roles": ["club_staff"], "writesProduct": false},
+    "reschedule_match": {"roles": ["club_staff"], "writesProduct": true}
   }
 }

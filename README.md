@@ -406,10 +406,14 @@ Applying the plan requires repeating the exact target origin:
 ./club preview seed --apply --confirm-origin "$preview_origin"
 ```
 
-The first seed creates only Sofia, Andy Bogard, and Terry Bogard through the
-normal signup API, verifies each Firebase login and `/users/current` response,
-and stores passwords and stable UIDs only in ignored `0600` files. Alex maps to
-the existing operator admin and Riley remains file-only. Roles, memberships,
+The first seed creates Sofia, Andy Bogard, Terry Bogard, and the additional
+Riley Chen front-desk fixture through the normal signup API, verifies each
+Firebase login and `/users/current` response, and stores passwords and stable
+Firebase UIDs only in ignored `0600` files. A new preview database is a new
+season: the same Firebase identity is reused, while the seed reads back and
+replaces the per-season PodPlay user ID. Riley's `ADMIN` and `FRONT_DESK`
+roles are reconciled and read back on every season. Alex maps to the existing
+operator admin. Roles for other actors, memberships,
 waivers, and bookings remain separate gates; player credits and test payment
 methods are reconciled by their own explicitly confirmed commands.
 

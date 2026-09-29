@@ -15,8 +15,13 @@
     "terry-bogard"
   ],
   "operatorMappings": {
-    "alex": "marcelo@podplay.app",
-    "riley": "file-only"
+    "alex": "marcelo@podplay.app"
+  },
+  "staffFixture": {
+    "actorId": "riley",
+    "characterId": "riley-chen",
+    "productRoles": ["ADMIN", "FRONT_DESK"],
+    "login": "not-seeded"
   },
   "virtualCredits": {
     "andy-bogard": 25.0,
