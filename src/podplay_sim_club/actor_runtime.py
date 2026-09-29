@@ -59,15 +59,17 @@ def _take_turn(storage: Storage, world: Dict[str, Any], campaign: Dict[str, Any]
 
     if actor_id == campaign["owner"] and "runtime_event_request" not in kinds:
         return _message(storage, key, observed_at, actor_id, ["lead"], "Please create the free Open Play first; promotion waits for its published event record.", "runtime_event_request", "requested the owner Open Play")
-    if actor_id == "red-captain" and "runtime_red_acceptance" not in kinds:
-        return _message(storage, key, observed_at, actor_id, [campaign["owner"]], "Red is in if the area, pod, and zero-price outcome are visible before check-in.", "runtime_red_acceptance", "accepted with visibility requirements")
-    if actor_id == "blue-captain" and "runtime_blue_acceptance" not in kinds:
-        return _message(storage, key, observed_at, actor_id, [campaign["owner"], "red-captain"], "Blue accepts a free one-hour session and will verify the invitation before arrival.", "runtime_blue_acceptance", "accepted and requested invitation evidence")
+    if actor_id == "andy-bogard" and not {"runtime_andy_acceptance", "runtime_red_acceptance"}.intersection(kinds):
+        return _message(storage, key, observed_at, actor_id, [campaign["owner"]], "Andy wants the session. He will book and invite Terry once the area, pod, and zero-price outcome are visible.", "runtime_andy_acceptance", "accepted and will invite a teammate")
+    if actor_id == "terry-bogard" and not {"runtime_terry_acceptance", "runtime_blue_acceptance"}.intersection(kinds):
+        return _message(storage, key, observed_at, actor_id, [campaign["owner"], "andy-bogard"], "Terry wants the session and will accept Andy's invitation before arrival.", "runtime_terry_acceptance", "accepted the invitation")
     if actor_id == "alex" and "runtime_location_review" not in kinds:
         return _message(storage, key, observed_at, actor_id, [campaign["owner"]], "Before booking, expose exact area, pod, local start time, and whether a 60-minute session exists.", "runtime_location_review", "requested location and duration evidence")
     if actor_id == "riley" and "runtime_support_watch" not in kinds:
         return _message(storage, key, observed_at, actor_id, [campaign["owner"]], "If the preview cannot offer one contiguous free hour, record the constraint once; do not retry blindly.", "runtime_support_watch", "set support observation rule")
-    if actor_id == "lead" and intent_id not in ledger["intents"] and {"runtime_event_request", "runtime_red_acceptance", "runtime_blue_acceptance"}.issubset(kinds):
+    has_andy_acceptance = bool({"runtime_andy_acceptance", "runtime_red_acceptance"}.intersection(kinds))
+    has_terry_acceptance = bool({"runtime_terry_acceptance", "runtime_blue_acceptance"}.intersection(kinds))
+    if actor_id == "lead" and intent_id not in ledger["intents"] and "runtime_event_request" in kinds and has_andy_acceptance and has_terry_acceptance:
         intent = {
             "schemaVersion": 1, "id": intent_id, "status": "agreed", "reason": "owner_open_play", "journey": campaign.get("journey", "owner_open_play"), "createdAt": observed_at,
             "participants": deepcopy(campaign["participants"]), "requestedBy": campaign["owner"],
@@ -79,9 +81,9 @@ def _take_turn(storage: Storage, world: Dict[str, Any], campaign: Dict[str, Any]
         return {"actorId": actor_id, "action": "intent", "detail": "recorded a 60-minute owner Open Play intent", "observedAt": observed_at}
     if actor_id == campaign["owner"] and intent_id in ledger["intents"] and ledger["intents"][intent_id].get("status") == "event_created" and "runtime_announcement" not in kinds:
         return _message(storage, key, observed_at, actor_id, campaign["participants"], campaign["message"], "runtime_announcement", "promoted the published Open Play")
-    if actor_id == "red-captain" and "runtime_announcement" in kinds and "runtime_andy_signup" not in kinds:
+    if actor_id == "andy-bogard" and "runtime_announcement" in kinds and "runtime_andy_signup" not in kinds:
         return _message(storage, key, observed_at, actor_id, [campaign["owner"]], "Andy sees the published Open Play and is ready to self-sign up.", "runtime_andy_signup", "requested self-signup")
-    if actor_id == "blue-captain" and "runtime_announcement" in kinds and "runtime_terry_signup" not in kinds:
+    if actor_id == "terry-bogard" and "runtime_announcement" in kinds and "runtime_terry_signup" not in kinds:
         return _message(storage, key, observed_at, actor_id, [campaign["owner"]], "Terry sees the published Open Play and is ready to self-sign up.", "runtime_terry_signup", "requested self-signup")
     return {"actorId": actor_id, "action": "pass", "detail": "no new relevant information", "observedAt": observed_at}
 

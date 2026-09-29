@@ -8,8 +8,8 @@ ACTORS = {
     "sofia": {"name": "Sofia", "role": "owner", "glyph": "S"},
     "alex": {"name": "Alex", "role": "podplay_admin", "glyph": "A"},
     "riley": {"name": "Riley", "role": "customer_success", "glyph": "C"},
-    "red-captain": {"name": "Red Captain", "role": "player", "glyph": "R"},
-    "blue-captain": {"name": "Blue Captain", "role": "player", "glyph": "B"},
+    "andy-bogard": {"name": "Andy Bogard", "role": "player", "glyph": "A"},
+    "terry-bogard": {"name": "Terry Bogard", "role": "player", "glyph": "T"},
 }
 
 

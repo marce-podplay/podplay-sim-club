@@ -25,6 +25,7 @@ from .communications import record_invite_sent
 from .firebase_auth import FirebaseAuthError, FirebaseAuthenticator
 from .identity_registry import ACTOR_NAMES, TEAM_ACTOR_NAMES, IdentityRegistry, IdentityRegistryError, TEAM_ACTORS
 from .orchestrator import Orchestrator
+from .players import actor_auth_cache, migrate_legacy_actor_files
 from .preview_evaluation import (
     PreviewBookingEvaluator,
     PreviewEvaluationError,
@@ -151,8 +152,9 @@ def build_parser() -> argparse.ArgumentParser:
     runtime_tick.add_argument("--now", help="override runtime clock with an ISO instant")
     tournament_tick = runtime_subcommands.add_parser("tournament-tick", help="advance one durable tournament decision without preview writes")
     tournament_tick.add_argument("--now", help="override runtime clock with an ISO instant")
-    tournament_report = runtime_subcommands.add_parser("report-winner", help="record Andy's no-score tournament winner report")
+    tournament_report = runtime_subcommands.add_parser("report-winner", help="record a designated captain's no-score tournament winner report")
     tournament_report.add_argument("--winner", required=True, choices=["Bogard-Higashi", "Japan Team"])
+    tournament_report.add_argument("--reporter", required=True, choices=["andy-bogard"], help="player attesting to the result")
     tournament_report.add_argument("--now", help="override runtime clock with an ISO instant")
     rally_tick = runtime_subcommands.add_parser("rally-tick", help="run one bounded Rally Engine actor tick")
     rally_tick.add_argument("--hours", type=int, default=2, help="session lifetime on first tick (default: 2)")
@@ -216,7 +218,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="also seed the two current product identities for this dormant team",
     )
     preview_fund = preview_subcommands.add_parser(
-        "fund", help="plan or reconcile bounded virtual credits for the captains"
+        "fund", help="plan or reconcile bounded virtual credits for the players"
     )
     preview_fund_mode = preview_fund.add_mutually_exclusive_group(required=True)
     preview_fund_mode.add_argument("--dry-run", action="store_true")
@@ -226,7 +228,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="required with --apply; must equal the exact preview origin",
     )
     preview_payment = preview_subcommands.add_parser(
-        "payment-method", help="plan or attach Stripe test Visa methods to the captains"
+        "payment-method", help="plan or attach Stripe test Visa methods to the players"
     )
     preview_payment_mode = preview_payment.add_mutually_exclusive_group(required=True)
     preview_payment_mode.add_argument("--dry-run", action="store_true")
@@ -242,7 +244,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     preview_payment.add_argument(
         "--actor", action="append", choices=sorted({**ACTOR_NAMES, **TEAM_ACTOR_NAMES}),
-        help="actor to reconcile; repeat for an event roster (defaults to the two captains)",
+        help="actor to reconcile; repeat for an event roster (defaults to Andy and Terry)",
     )
     preview_book = preview_subcommands.add_parser(
         "book", help="plan or create exactly one reconciled Preview Club booking"
@@ -275,7 +277,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="execute this preview_ready character intent instead of an operator-created plan",
     )
     preview_join = preview_subcommands.add_parser(
-        "join", help="invite and reconcile Blue Captain into the selected match"
+        "join", help="invite and reconcile Terry Bogard into the selected match"
     )
     preview_join_mode = preview_join.add_mutually_exclusive_group(required=True)
     preview_join_mode.add_argument("--dry-run", action="store_true")
@@ -288,7 +290,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--occurrence", help="ledger occurrence to join; defaults to the active match"
     )
     preview_check_in = preview_subcommands.add_parser(
-        "check-in", help="reconcile captain check-ins when the selected match starts"
+        "check-in", help="reconcile player check-ins when the selected match starts"
     )
     preview_check_in_mode = preview_check_in.add_mutually_exclusive_group(required=True)
     preview_check_in_mode.add_argument("--dry-run", action="store_true")
@@ -343,6 +345,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[list] = None) -> int:
     args = build_parser().parse_args(argv)
     root = args.home.resolve()
+    if args.command != "test":
+        migrate_legacy_actor_files(root)
 
     if args.command == "test":
         result = subprocess.run(
@@ -516,7 +520,7 @@ def main(argv: Optional[list] = None) -> int:
             print(f"- {result['action']['actorId']}: {result['action']['action']} — {result['action']['detail']}")
             return 0
         if args.runtime_command == "report-winner":
-            state = report_winner(root, args.winner, now=parse_instant(args.now) if args.now else None)
+            state = report_winner(root, args.winner, args.reporter, now=parse_instant(args.now) if args.now else None)
             print(f"PREVIEW CLUB TOURNAMENT RESULT // {state['rounds']['semi-final']['winner']} // no score")
             return 0
         if args.runtime_command == "rally-tick":
@@ -675,9 +679,9 @@ def scan_preview_venues(root: Path, duration: int, within_minutes: int) -> int:
         policy = TargetPolicy.from_config(credentials.config)
         admin_auth = FirebaseAuthenticator(root / "secrets" / "preview-auth-cache.json").authenticate(credentials.admin_email, credentials.admin_password, credentials.firebase_api_key)
         admin_client = PreviewReadonlyClient(policy, admin_auth.id_token)
-        red = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure(["red-captain"])["red-captain"]
-        red_auth = FirebaseAuthenticator(root / "secrets" / "actor-auth" / "red-captain.json").authenticate(red.email, red.password, credentials.firebase_api_key)
-        player_client = PreviewReadonlyClient(policy, red_auth.id_token)
+        booker = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure(["andy-bogard"])["andy-bogard"]
+        booker_auth = FirebaseAuthenticator(actor_auth_cache(root, "andy-bogard")).authenticate(booker.email, booker.password, credentials.firebase_api_key)
+        player_client = PreviewReadonlyClient(policy, booker_auth.id_token)
         observed_at = datetime.now(timezone.utc)
         areas = collection_items(admin_client.get("/apis/v2/areas"))
         pods_to_scan = []
@@ -873,15 +877,15 @@ def evaluate_booking_preview(root: Path) -> int:
         )
         if not report["readyForBookingPreview"] or not report["candidateSession"]:
             raise PreviewEvaluationError("readiness gate must pass before booking preview")
-        red = identities["red-captain"]
-        red_auth = FirebaseAuthenticator(
-            root / "secrets" / "actor-auth" / "red-captain.json"
-        ).authenticate(red.email, red.password, credentials.firebase_api_key)
+        booker = identities["andy-bogard"]
+        booker_auth = FirebaseAuthenticator(
+            actor_auth_cache(root, "andy-bogard")
+        ).authenticate(booker.email, booker.password, credentials.firebase_api_key)
         candidate = report["candidateSession"]
         requested_credits = min(
-            float(report["actors"]["red-captain"]["virtualCredits"]), 25.0
+            float(report["actors"]["andy-bogard"]["virtualCredits"]), 25.0
         )
-        response = PreviewBookingEvaluator(policy, red_auth.id_token).evaluate(
+        response = PreviewBookingEvaluator(policy, booker_auth.id_token).evaluate(
             candidate["sessionId"], candidate["tableId"], requested_credits
         )
         evaluation = summarize_booking_preview(response)
@@ -960,13 +964,13 @@ def plan_preview_intent(
         )
         if not report.get("readyForBookingPreview"):
             raise PreviewEvaluationError("readiness gate must pass before intent planning")
-        red = identities["red-captain"]
-        red_auth = FirebaseAuthenticator(
-            root / "secrets" / "actor-auth" / "red-captain.json"
-        ).authenticate(red.email, red.password, credentials.firebase_api_key)
-        red_client = PreviewReadonlyClient(policy, red_auth.id_token)
+        booker = identities["andy-bogard"]
+        booker_auth = FirebaseAuthenticator(
+            actor_auth_cache(root, "andy-bogard")
+        ).authenticate(booker.email, booker.password, credentials.firebase_api_key)
+        booker_client = PreviewReadonlyClient(policy, booker_auth.id_token)
         candidate = find_candidate_session(
-            red_client,
+            booker_client,
             report["location"]["podId"],
             report["location"]["timezone"] or "UTC",
             datetime.fromisoformat(report["observedAt"]),
@@ -1003,9 +1007,9 @@ def plan_preview_intent(
             _sync_world_intent_status(storage, intent)
             _record_intent_blocker(storage, intent, policy.pull_request_number)
             raise BookingIntentError(f"no legal preview slot begins within {max_delay} minutes")
-        requested_credits = min(float(report["actors"]["red-captain"]["virtualCredits"]), 25.0)
+        requested_credits = min(float(report["actors"]["andy-bogard"]["virtualCredits"]), 25.0)
         evaluation = (
-            summarize_booking_preview(PreviewBookingEvaluator(policy, red_auth.id_token).evaluate(
+            summarize_booking_preview(PreviewBookingEvaluator(policy, booker_auth.id_token).evaluate(
                 candidate["sessionId"], candidate["tableId"], requested_credits
             ))
             if journey == "customer_booking"
@@ -1020,7 +1024,7 @@ def plan_preview_intent(
             "targetOrigin": policy.target_origin,
             "observedAt": report["observedAt"],
             "occurrenceKey": occurrence_key(
-                report["location"]["podId"], candidate["startTime"], "red-captain"
+                report["location"]["podId"], candidate["startTime"], "andy-bogard"
             ),
             "areaName": report["location"]["areaName"],
             "podName": report["location"]["podName"],
@@ -1159,7 +1163,7 @@ def signup_preview_open_play(
             identity = identities.get(actor_id)
             if identity is None or not identity.podplay_user_id:
                 raise PreviewWriteError(f"player identity is incomplete: {actor_id}")
-            auth = FirebaseAuthenticator(root / "secrets" / "actor-auth" / f"{actor_id}.json").authenticate(
+            auth = FirebaseAuthenticator(actor_auth_cache(root, actor_id)).authenticate(
                 identity.email, identity.password, credentials.firebase_api_key
             )
             client = PreviewReadonlyClient(read_policy, auth.id_token)
@@ -1322,14 +1326,14 @@ def seed_payment_methods(
     try:
         credentials = PreviewCredentials.load(root)
         read_policy = TargetPolicy.from_config(credentials.config)
-        selected_actors = tuple(actor_ids or ("red-captain", "blue-captain"))
+        selected_actors = tuple(actor_ids or ("andy-bogard", "terry-bogard"))
         identities = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure(selected_actors)
         actor_rows = {}
         actor_sessions = {}
         for actor_id in selected_actors:
             identity = identities[actor_id]
             auth = FirebaseAuthenticator(
-                root / "secrets" / "actor-auth" / f"{actor_id}.json"
+                actor_auth_cache(root, actor_id)
             ).authenticate(identity.email, identity.password, credentials.firebase_api_key)
             client = PreviewReadonlyClient(read_policy, auth.id_token)
             payment = client.get("/apis/v2/users/current/payment-method")
@@ -1436,11 +1440,11 @@ def book_preview_match(
         read_policy = TargetPolicy.from_config(credentials.config)
         ledger = load_match_ledger(storage, read_policy.target_origin)
         identities = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure()
-        red = identities["red-captain"]
-        red_auth = FirebaseAuthenticator(
-            root / "secrets" / "actor-auth" / "red-captain.json"
-        ).authenticate(red.email, red.password, credentials.firebase_api_key)
-        red_client = PreviewReadonlyClient(read_policy, red_auth.id_token)
+        booker = identities["andy-bogard"]
+        booker_auth = FirebaseAuthenticator(
+            actor_auth_cache(root, "andy-bogard")
+        ).authenticate(booker.email, booker.password, credentials.firebase_api_key)
+        booker_client = PreviewReadonlyClient(read_policy, booker_auth.id_token)
         if selected_intent is not None:
             preview_plan = selected_intent.get("previewPlan")
             if (
@@ -1448,7 +1452,7 @@ def book_preview_match(
                 or preview_plan.get("targetOrigin") != read_policy.target_origin
             ):
                 raise PreviewWriteError("character intent was planned for another origin")
-            required = (
+            requibooker = (
                 "occurrenceKey",
                 "podId",
                 "sessionId",
@@ -1462,7 +1466,7 @@ def book_preview_match(
             plan = {
                 "occurrenceKey": preview_plan["occurrenceKey"],
                 "podId": preview_plan["podId"],
-                "ownerUserId": red.podplay_user_id,
+                "ownerUserId": booker.podplay_user_id,
                 "sessionId": preview_plan["sessionId"],
                 "tableId": preview_plan["tableId"],
                 "startTime": preview_plan["startTime"],
@@ -1488,9 +1492,9 @@ def book_preview_match(
             candidate = report.get("candidateSession")
             if not report.get("readyForBookingPreview") or not isinstance(candidate, dict):
                 raise PreviewWriteError("booking readiness gate is blocked")
-            credits = min(float(report["actors"]["red-captain"]["virtualCredits"]), 25.0)
+            credits = min(float(report["actors"]["andy-bogard"]["virtualCredits"]), 25.0)
             preview = summarize_booking_preview(
-                PreviewBookingEvaluator(read_policy, red_auth.id_token).evaluate(
+                PreviewBookingEvaluator(read_policy, booker_auth.id_token).evaluate(
                     candidate["sessionId"], candidate["tableId"], credits
                 )
             )
@@ -1498,10 +1502,10 @@ def book_preview_match(
                 raise PreviewWriteError("booking preview is not ready for ORDER")
             plan = {
                 "occurrenceKey": occurrence_key(
-                    report["location"]["podId"], candidate["startTime"], "red-captain"
+                    report["location"]["podId"], candidate["startTime"], "andy-bogard"
                 ),
                 "podId": report["location"]["podId"],
-                "ownerUserId": red.podplay_user_id,
+                "ownerUserId": booker.podplay_user_id,
                 "sessionId": candidate["sessionId"],
                 "tableId": candidate["tableId"],
                 "startTime": candidate["startTime"],
@@ -1512,7 +1516,7 @@ def book_preview_match(
         state = dict(existing_state) if isinstance(existing_state, dict) else {}
         prepared_at = state.get("preparedAt") if isinstance(state, dict) else None
         matches = find_matching_events(
-            red_client,
+            booker_client,
             plan["podId"],
             plan["ownerUserId"],
             plan["startTime"],
@@ -1545,7 +1549,7 @@ def book_preview_match(
             try:
                 items = plan.get("items")
                 additional_items = items[1:] if isinstance(items, list) else None
-                order = PreviewBookingWriter(write_policy, red_auth.id_token).order(
+                order = PreviewBookingWriter(write_policy, booker_auth.id_token).order(
                     plan["sessionId"], plan["tableId"], plan["virtualCredits"], additional_items
                 )
                 order_summary = summarize_order(order)
@@ -1553,7 +1557,7 @@ def book_preview_match(
                 writes = 1
             except PreviewWriteError:
                 matches = find_matching_events(
-                    red_client,
+                    booker_client,
                     plan["podId"],
                     plan["ownerUserId"],
                     plan["startTime"],
@@ -1565,7 +1569,7 @@ def book_preview_match(
         if apply:
             if not isinstance(event_id, str):
                 raise PreviewWriteError("booking event ID is missing after ORDER")
-            event = read_back_event(red_client, event_id, plan)
+            event = read_back_event(booker_client, event_id, plan)
             next_state = dict(state) if isinstance(state, dict) else {}
             phase = (
                 next_state.get("phase")
@@ -1648,16 +1652,16 @@ def join_preview_match(
             raise PreviewWriteError("create and reconcile the selected booking before joining")
         event_id = state["eventId"]
         identities = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure()
-        red = identities["red-captain"]
-        blue = identities["blue-captain"]
-        red_auth = FirebaseAuthenticator(
-            root / "secrets" / "actor-auth" / "red-captain.json"
-        ).authenticate(red.email, red.password, credentials.firebase_api_key)
-        blue_auth = FirebaseAuthenticator(
-            root / "secrets" / "actor-auth" / "blue-captain.json"
-        ).authenticate(blue.email, blue.password, credentials.firebase_api_key)
-        red_client = PreviewReadonlyClient(read_policy, red_auth.id_token)
-        invitation = find_actor_invitation(red_client, event_id, blue.podplay_user_id)
+        booker = identities["andy-bogard"]
+        teammate = identities["terry-bogard"]
+        booker_auth = FirebaseAuthenticator(
+            actor_auth_cache(root, "andy-bogard")
+        ).authenticate(booker.email, booker.password, credentials.firebase_api_key)
+        teammate_auth = FirebaseAuthenticator(
+            actor_auth_cache(root, "terry-bogard")
+        ).authenticate(teammate.email, teammate.password, credentials.firebase_api_key)
+        booker_client = PreviewReadonlyClient(read_policy, booker_auth.id_token)
+        invitation = find_actor_invitation(booker_client, event_id, teammate.podplay_user_id)
         writes = 0
         preview_summary = None
 
@@ -1670,24 +1674,24 @@ def join_preview_match(
             write_policy = TargetPolicy.from_config(write_config)
             if invitation is None:
                 try:
-                    PreviewParticipationWriter(write_policy, red_auth.id_token).invite(
+                    PreviewParticipationWriter(write_policy, booker_auth.id_token).invite(
                         event_id, blue
                     )
                     writes += 1
                 except PreviewWriteError:
                     invitation = find_actor_invitation(
-                        red_client, event_id, blue.podplay_user_id
+                        booker_client, event_id, teammate.podplay_user_id
                     )
                     if invitation is None:
                         raise
                 invitation = find_actor_invitation(
-                    red_client, event_id, blue.podplay_user_id
+                    booker_client, event_id, teammate.podplay_user_id
                 )
                 if invitation is None:
                     raise PreviewWriteError("invitation write was not visible on read-back")
 
             invitation_summary = summarize_invitation(
-                invitation, blue.podplay_user_id
+                invitation, teammate.podplay_user_id
             )
             record_invite_sent(
                 storage,
@@ -1695,46 +1699,46 @@ def join_preview_match(
                 occurrence_key=occurrence,
                 event_id=event_id,
                 invitation=invitation,
-                sender_actor_id="red-captain",
-                recipient_actor_id="blue-captain",
+                sender_actor_id="andy-bogard",
+                recipient_actor_id="terry-bogard",
             )
             if invitation_summary["status"] not in ACCEPTED_STATUSES:
                 preview_summary = summarize_acceptance(
                     PreviewAcceptanceEvaluator(
-                        read_policy, blue_auth.id_token
+                        read_policy, teammate_auth.id_token
                     ).evaluate(event_id, invitation_summary["invitationId"])
                 )
                 try:
                     summarize_acceptance(
                         PreviewParticipationWriter(
-                            write_policy, blue_auth.id_token
+                            write_policy, teammate_auth.id_token
                         ).accept(event_id, invitation_summary["invitationId"])
                     )
                     writes += 1
                 except PreviewWriteError:
                     invitation = find_actor_invitation(
-                        red_client, event_id, blue.podplay_user_id
+                        booker_client, event_id, teammate.podplay_user_id
                     )
                     if invitation is None or invitation.get("status") not in ACCEPTED_STATUSES:
                         raise
                 invitation = find_actor_invitation(
-                    red_client, event_id, blue.podplay_user_id
+                    booker_client, event_id, teammate.podplay_user_id
                 )
                 if invitation is None:
                     raise PreviewWriteError("accepted invitation disappeared on read-back")
             invitation_summary = summarize_invitation(
-                invitation, blue.podplay_user_id
+                invitation, teammate.podplay_user_id
             )
             if not invitation_summary["accepted"]:
-                raise PreviewWriteError("Blue Captain invitation is not accepted")
+                raise PreviewWriteError("Terry Bogard invitation is not accepted")
             state.update(
                 {
                     "phase": "joined",
                     "blueInvitation": invitation_summary,
                     "participants": [
-                        {"actorId": "red-captain", "role": "booking owner"},
+                        {"actorId": "andy-bogard", "role": "booking owner"},
                         {
-                            "actorId": "blue-captain",
+                            "actorId": "terry-bogard",
                             "role": "invited player",
                             "invitationId": invitation_summary["invitationId"],
                             "invitationStatus": invitation_summary["status"],
@@ -1747,14 +1751,14 @@ def join_preview_match(
             save_match(storage, ledger, state)
         else:
             invitation_summary = (
-                summarize_invitation(invitation, blue.podplay_user_id)
+                summarize_invitation(invitation, teammate.podplay_user_id)
                 if invitation is not None
                 else None
             )
             if invitation_summary and invitation_summary["status"] not in ACCEPTED_STATUSES:
                 preview_summary = summarize_acceptance(
                     PreviewAcceptanceEvaluator(
-                        read_policy, blue_auth.id_token
+                        read_policy, teammate_auth.id_token
                     ).evaluate(event_id, invitation_summary["invitationId"])
                 )
     except (
@@ -1777,11 +1781,11 @@ def join_preview_match(
     print(f"occurrence: {occurrence}")
     if invitation_summary:
         print(
-            f"Blue invitation: {invitation_summary['invitationId']} "
+            f"Teammate invitation: {invitation_summary['invitationId']} "
             f"({invitation_summary['status']})"
         )
     else:
-        print("Blue invitation: missing")
+        print("Teammate invitation: missing")
     if preview_summary:
         print(f"acceptance preview: ${preview_summary['total']:.2f}; no errors")
     if apply:
@@ -1821,24 +1825,24 @@ def check_in_preview_match(
         start_time = datetime.fromisoformat(plan["startTime"].replace("Z", "+00:00"))
         eligible = datetime.now(timezone.utc) >= start_time
         identities = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure()
-        red = identities["red-captain"]
-        blue = identities["blue-captain"]
-        red_auth = FirebaseAuthenticator(
-            root / "secrets" / "actor-auth" / "red-captain.json"
-        ).authenticate(red.email, red.password, credentials.firebase_api_key)
-        blue_auth = FirebaseAuthenticator(
-            root / "secrets" / "actor-auth" / "blue-captain.json"
-        ).authenticate(blue.email, blue.password, credentials.firebase_api_key)
-        red_client = PreviewReadonlyClient(read_policy, red_auth.id_token)
-        owner_invitation = find_owner_invitation(red_client, event_id)
+        booker = identities["andy-bogard"]
+        teammate = identities["terry-bogard"]
+        booker_auth = FirebaseAuthenticator(
+            actor_auth_cache(root, "andy-bogard")
+        ).authenticate(booker.email, booker.password, credentials.firebase_api_key)
+        teammate_auth = FirebaseAuthenticator(
+            actor_auth_cache(root, "terry-bogard")
+        ).authenticate(teammate.email, teammate.password, credentials.firebase_api_key)
+        booker_client = PreviewReadonlyClient(read_policy, booker_auth.id_token)
+        owner_invitation = find_owner_invitation(booker_client, event_id)
         blue_invitation = find_actor_invitation(
-            red_client, event_id, blue.podplay_user_id
+            booker_client, event_id, teammate.podplay_user_id
         )
         if blue_invitation is None or blue_invitation.get("status") not in ACCEPTED_STATUSES:
-            raise PreviewWriteError("Blue Captain must accept before check-in")
+            raise PreviewWriteError("Terry Bogard must accept before check-in")
         participants = [
-            ("Red Captain", red_auth.id_token, owner_invitation),
-            ("Blue Captain", blue_auth.id_token, blue_invitation),
+            ("Andy Bogard", booker_auth.id_token, owner_invitation),
+            ("Terry Bogard", teammate_auth.id_token, blue_invitation),
         ]
         statuses = {
             label: {
@@ -1869,24 +1873,24 @@ def check_in_preview_match(
                     writes += 1
                 except PreviewWriteError:
                     refreshed = (
-                        find_owner_invitation(red_client, event_id)
+                        find_owner_invitation(booker_client, event_id)
                         if invitation["id"] == "00000000-0000-0000-0000-000000000000"
                         else find_actor_invitation(
-                            red_client, event_id, blue.podplay_user_id
+                            booker_client, event_id, teammate.podplay_user_id
                         )
                     )
                     if refreshed is None or check_in_status(refreshed) != "CHECKED_IN":
                         raise
                 refreshed = (
-                    find_owner_invitation(red_client, event_id)
+                    find_owner_invitation(booker_client, event_id)
                     if invitation["id"] == "00000000-0000-0000-0000-000000000000"
-                    else find_actor_invitation(red_client, event_id, blue.podplay_user_id)
+                    else find_actor_invitation(booker_client, event_id, teammate.podplay_user_id)
                 )
                 if refreshed is None:
                     raise PreviewWriteError("invitation disappeared after check-in")
                 statuses[label]["status"] = check_in_status(refreshed)
             if any(row["status"] != "CHECKED_IN" for row in statuses.values()):
-                raise PreviewWriteError("captain check-in read-back is incomplete")
+                raise PreviewWriteError("player check-in read-back is incomplete")
             state.update({"phase": "checked-in", "checkIns": statuses})
             save_match(storage, ledger, state)
     except (ValueError, CredentialsError, FirebaseAuthError, IdentityRegistryError,
@@ -1965,19 +1969,19 @@ def preview_match_status(root: Path, occurrence: Optional[str] = None) -> int:
         ):
             raise PreviewReadError("selected match checkpoint is incomplete")
         identities = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure()
-        red = identities["red-captain"]
-        blue = identities["blue-captain"]
-        red_auth = FirebaseAuthenticator(
-            root / "secrets" / "actor-auth" / "red-captain.json"
-        ).authenticate(red.email, red.password, credentials.firebase_api_key)
-        client = PreviewReadonlyClient(read_policy, red_auth.id_token)
+        booker = identities["andy-bogard"]
+        teammate = identities["terry-bogard"]
+        booker_auth = FirebaseAuthenticator(
+            actor_auth_cache(root, "andy-bogard")
+        ).authenticate(booker.email, booker.password, credentials.firebase_api_key)
+        client = PreviewReadonlyClient(read_policy, booker_auth.id_token)
         event = read_back_event(client, state["eventId"], plan)
         owner_invitation = find_owner_invitation(client, state["eventId"])
         blue_invitation = find_actor_invitation(
-            client, state["eventId"], blue.podplay_user_id
+            client, state["eventId"], teammate.podplay_user_id
         )
         if blue_invitation is None:
-            raise PreviewReadError("Blue Captain invitation is missing")
+            raise PreviewReadError("Terry Bogard invitation is missing")
         start_time = datetime.fromisoformat(plan["startTime"].replace("Z", "+00:00"))
         observed_at = datetime.now(timezone.utc)
         result = classify_match_status(
@@ -2100,8 +2104,8 @@ def preview_match_status(root: Path, occurrence: Optional[str] = None) -> int:
     if court_assignment:
         print(f"court: {court_assignment.lower()}")
     print(f"slot: {event['startTime']} to {event['endTime']}")
-    print(f"Blue invitation: {blue_invitation['status']}")
-    print(f"Red check-in: {owner_check_in}; Blue check-in: {blue_check_in}")
+    print(f"Teammate invitation: {blue_invitation['status']}")
+    print(f"Booker check-in: {owner_check_in}; teammate check-in: {blue_check_in}")
     print("remote writes: 0")
     return 0
 

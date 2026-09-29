@@ -18,12 +18,12 @@
       "virtualCredits": 0,
       "packages": []
     },
-    "red-captain": {
+    "andy-bogard": {
       "roles": ["PLAYER"],
       "virtualCredits": 200,
       "packages": ["preview-hourly-pass"]
     },
-    "blue-captain": {
+    "terry-bogard": {
       "roles": ["PLAYER"],
       "virtualCredits": 200,
       "packages": ["preview-hourly-pass"]

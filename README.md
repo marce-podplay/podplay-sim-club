@@ -105,13 +105,14 @@ Run the first needs-driven interaction:
 ```
 
 The scenario parameters live in `scenarios/needs-match.json`. Red's
-desire-to-play pressure crosses its configured threshold, Red proposes a match,
-Blue checks the configured overlapping availability, and the lead records one
+desire-to-play pressure crosses its configured threshold, Andy proposes a match
+and offers to book and invite Terry, Terry checks the overlapping availability
+and agrees to accept, and the lead records one
 durable intent in ignored local state. Repeating the command does not duplicate
 messages or intents, and this local interaction performs no product write.
 
 `needs promote` gives Sofia a distinct influence tool: she announces a Preview
-Club priority session, Red and Blue respond, and the lead records a second
+Club priority session, Andy and Terry accept, and the lead records a second
 intent with flexible availability for the nearest legal slot. It does not claim
 that a real discount or product event exists; those need a supported PodPlay
 promotion or event adapter. It is a controlled way to create early demand and
@@ -124,7 +125,7 @@ coordination without allowing any preview mutations:
 ./club runtime tick --max-turns 10
 ```
 
-Each turn rotates through Sofia, the captains, admin, CS, and lead. In the Open
+Each turn rotates through Sofia, the players, admin, CS, and lead. In the Open
 Play journey, Sofia requests the event first and promotes it only after a
 published event record exists. Actors write compact files under ignored
 `state/actors/<actor>/memory.md` plus shared club messages. A turn with no new
@@ -175,8 +176,8 @@ invite link, it is stored as `inviteLink.url`; otherwise the record says
 `not_exposed_by_product`. No link is guessed or manufactured.
 
 `characters/roster.json` separates stable technical actor IDs from personas.
-Andy Bogard (`red-captain`) is the current captain and Terry Bogard
-(`blue-captain`) his current compatible teammate. Joe Higashi is their future
+Andy Bogard (`andy-bogard`) and Terry Bogard (`terry-bogard`) play for
+Bogard-Higashi. When Andy wants to play, he books and invites Terry. Joe Higashi is their future
 third teammate without a product identity yet. The Japan, Art of Fighting,
 Women Fighters, and Korea teams are also ready as dormant rosters. A captain
 chooses one teammate for a doubles booking; the third team member may appear as
@@ -297,7 +298,7 @@ overlapping availability, while the lead continues to enforce real preview
 time and product constraints.
 
 `preview booking-preview` refreshes that gate and then sends one tightly fixed
-`type: PREVIEW` calculation for Red Captain. The server implementation returns
+`type: PREVIEW` calculation for Andy Bogard. The server implementation returns
 before the persistent `ORDER` branch. The local client rejects `ORDER`, multiple
 items, passes, acting for another user, credit amounts above the bounded seed,
 and payload extensions. It
@@ -315,8 +316,8 @@ To execute a ready character intent, revalidate it and use the normal explicit
 write confirmation:
 
 ```console
-./club preview book --dry-run --intent "intent:needs-match:season-001:red-blue-001"
-./club preview book --apply --intent "intent:needs-match:season-001:red-blue-001" \
+./club preview book --dry-run --intent "intent:needs-match:season-001:andy-terry-001"
+./club preview book --apply --intent "intent:needs-match:season-001:andy-terry-001" \
   --confirm-origin "$preview_origin"
 ```
 
@@ -324,7 +325,7 @@ The applied match is recorded in both the occurrence ledger and the intent,
 then can be joined and checked in with the existing occurrence-targeted commands.
 
 If that calculation requires payment, the seed defines a bounded `$25` virtual
-credit balance for each captain. Reconcile it first with `preview fund
+credit balance for each player. Reconcile it first with `preview fund
 --dry-run`. Applying credits requires the same exact-origin confirmation as
 identity creation:
 
@@ -405,11 +406,11 @@ Applying the plan requires repeating the exact target origin:
 ./club preview seed --apply --confirm-origin "$preview_origin"
 ```
 
-The first seed creates only Sofia, Red Captain, and Blue Captain through the
+The first seed creates only Sofia, Andy Bogard, and Terry Bogard through the
 normal signup API, verifies each Firebase login and `/users/current` response,
 and stores passwords and stable UIDs only in ignored `0600` files. Alex maps to
 the existing operator admin and Riley remains file-only. Roles, memberships,
-waivers, and bookings remain separate gates; captain credits and test payment
+waivers, and bookings remain separate gates; player credits and test payment
 methods are reconciled by their own explicitly confirmed commands.
 
 Configuration may alternatively be exported using the variable names in

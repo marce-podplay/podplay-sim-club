@@ -164,12 +164,12 @@ def _participants(match: JsonObject, blue_invitation: JsonObject) -> list:
             return rows
     return [
         {
-            "actorId": "red-captain",
+            "actorId": "andy-bogard",
             "role": "booking owner",
             "attendance": "not refreshed",
         },
         {
-            "actorId": "blue-captain",
+            "actorId": "terry-bogard",
             "role": "invited player",
             "invitationStatus": blue_invitation.get("status", "unknown"),
             "attendance": blue_invitation.get("checkInStatus", "not refreshed"),

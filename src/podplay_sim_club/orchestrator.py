@@ -3,7 +3,7 @@
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .actions import ActionValidator
 from .booking_intents import load_intent_ledger, save_intent
@@ -15,27 +15,27 @@ from .world import add_signal, new_world, project_world
 
 
 STEPS = (
-    "red_proposes",
-    "blue_agrees",
+    "player_wants_to_play",
+    "teammate_agrees",
     "booking_created",
-    "blue_invited",
-    "blue_accepts",
-    "red_checks_in",
-    "blue_checks_in",
+    "teammate_invited",
+    "teammate_accepts",
+    "booker_checks_in",
+    "invitee_checks_in",
     "assert_match",
 )
 
 NEED_STEPS = (
-    "red_need_rises",
-    "red_proposes_from_need",
-    "blue_agrees_from_availability",
+    "desire_to_play_rises",
+    "player_proposes_match",
+    "teammate_agrees_to_play",
     "lead_records_booking_intent",
 )
 
 PROMOTION_STEPS = (
-    "sofia_announces_priority_session",
-    "red_accepts_priority_session",
-    "blue_accepts_priority_session",
+    "sofia_announces_event",
+    "player_accepts_event",
+    "teammate_accepts_event",
     "lead_records_promotion_intent",
 )
 
@@ -227,7 +227,7 @@ class Orchestrator:
                     "key": interaction_key,
                     "step": 0,
                     "status": "running",
-                    "participants": ["red-captain", "blue-captain"],
+                    "participants": ["andy-bogard", "terry-bogard"],
                     "createdAt": observed_at,
                 },
             )
@@ -319,6 +319,23 @@ class Orchestrator:
             world = self.ensure_world(now)
             return project_world(world)
 
+    def _match_players(self) -> Tuple[str, str]:
+        players = self.scenario.get("players")
+        if not isinstance(players, list) or len(players) != 2:
+            raise RuntimeError("hourly match requires a booker and a teammate")
+        return str(players[0]), str(players[1])
+
+    def _need_players(self) -> Tuple[str, str]:
+        return (
+            str(self.needs_scenario["initiator"]),
+            str(self.needs_scenario["candidate"]),
+        )
+
+    def _player_name(self, world: Dict[str, Any], actor_id: str) -> str:
+        actor = world["actors"].get(actor_id, {})
+        name = actor.get("name") if isinstance(actor, dict) else None
+        return name if isinstance(name, str) and name else actor_id
+
     def _execute_step(
         self,
         world: Dict[str, Any],
@@ -330,44 +347,47 @@ class Orchestrator:
     ) -> None:
         key = occurrence["key"]
         pod_id = occurrence["podId"]
+        booker, teammate = self._match_players()
+        booker_name = self._player_name(world, booker)
+        teammate_name = self._player_name(world, teammate)
         actor_id = "lead"
         detail = step
 
-        if step == "red_proposes":
-            actor_id = "red-captain"
-            detail = "Red proposed a match on the scenario-owned pod."
+        if step == "player_wants_to_play":
+            actor_id = booker
+            detail = f"{booker_name} wants to play and will book a court for {teammate_name}."
             self._message(
                 key,
                 observed_at,
-                "red-captain",
-                ["blue-captain"],
-                "Court 1 this hour?",
+                booker,
+                [teammate],
+                f"I want to play this hour. I will book and invite you, {teammate_name}.",
                 "proposal",
             )
-            world["actors"]["red-captain"]["state"] = "waiting_for_reply"
+            world["actors"][booker]["state"] = "waiting_for_reply"
 
-        elif step == "blue_agrees":
-            actor_id = "blue-captain"
-            detail = "Blue agreed to the proposed match."
+        elif step == "teammate_agrees":
+            actor_id = teammate
+            detail = f"{teammate_name} agreed to accept {booker_name}'s invitation."
             self._message(
                 key,
                 observed_at,
-                "blue-captain",
-                ["red-captain"],
-                "Yes. See you on Court 1.",
+                teammate,
+                [booker],
+                "Yes. Book it and send the invitation. I will accept.",
                 "agreement",
             )
-            world["actors"]["blue-captain"]["state"] = "agreed"
+            world["actors"][teammate]["state"] = "agreed"
 
         elif step == "booking_created":
-            actor_id = "red-captain"
+            actor_id = booker
             request = {
                 "type": "book_match",
                 "arguments": {"podId": pod_id, "occurrenceKey": key},
             }
             self.validator.validate(request)
             booking, created = preview.create_booking(
-                key, pod_id, occurrence["startsAt"], "red-captain"
+                key, pod_id, occurrence["startsAt"], booker
             )
             if crash_after_remote == step:
                 raise SimulatedCrash("fake preview committed booking before checkpoint")
@@ -379,53 +399,53 @@ class Orchestrator:
                 {"state": "reserved", "bookingId": booking["id"]}
             )
 
-        elif step == "blue_invited":
-            actor_id = "red-captain"
+        elif step == "teammate_invited":
+            actor_id = booker
             self.validator.validate(
                 {"type": "invite_player", "arguments": {"podId": pod_id}}
             )
-            invitation = preview.invite(key, "blue-captain")
+            invitation = preview.invite(key, teammate)
             if crash_after_remote == step:
                 raise SimulatedCrash("fake preview committed invitation before checkpoint")
             occurrence["invitationId"] = invitation["id"]
-            detail = f"Blue invitation {invitation['id']} recorded."
+            detail = f"{teammate_name} invitation {invitation['id']} recorded."
 
-        elif step == "blue_accepts":
-            actor_id = "blue-captain"
+        elif step == "teammate_accepts":
+            actor_id = teammate
             self.validator.validate(
                 {"type": "accept_invitation", "arguments": {"podId": pod_id}}
             )
-            preview.accept(key, "blue-captain")
+            preview.accept(key, teammate)
             if crash_after_remote == step:
                 raise SimulatedCrash("fake preview committed acceptance before checkpoint")
-            detail = "Blue accepted the invitation."
+            detail = f"{teammate_name} accepted the invitation."
 
-        elif step == "red_checks_in":
-            actor_id = "red-captain"
+        elif step == "booker_checks_in":
+            actor_id = booker
             self.validator.validate(
                 {"type": "check_in", "arguments": {"podId": pod_id}}
             )
             preview.check_in(key, actor_id)
             if crash_after_remote == step:
-                raise SimulatedCrash("fake preview committed Red check-in before checkpoint")
+                raise SimulatedCrash("fake preview committed booker check-in before checkpoint")
             world["actors"][actor_id].update({"location": pod_id, "state": "playing"})
-            detail = "Red checked in."
+            detail = f"{booker_name} checked in."
 
-        elif step == "blue_checks_in":
-            actor_id = "blue-captain"
+        elif step == "invitee_checks_in":
+            actor_id = teammate
             self.validator.validate(
                 {"type": "check_in", "arguments": {"podId": pod_id}}
             )
             preview.check_in(key, actor_id)
             if crash_after_remote == step:
-                raise SimulatedCrash("fake preview committed Blue check-in before checkpoint")
+                raise SimulatedCrash("fake preview committed invitee check-in before checkpoint")
             world["actors"][actor_id].update({"location": pod_id, "state": "playing"})
             world["pods"][pod_id]["state"] = "occupied"
-            detail = "Blue checked in; the match is live."
+            detail = f"{teammate_name} checked in; the match is live."
 
         elif step == "assert_match":
             event = preview.event(key)
-            expected = {"red-captain", "blue-captain"}
+            expected = {booker, teammate}
             participants = set(event["participants"])
             checked_in = set(event["checkedIn"])
             passed = expected.issubset(participants) and expected.issubset(checked_in)
@@ -448,7 +468,7 @@ class Orchestrator:
                 detail = "Hourly match assertion failed."
             else:
                 occurrence["status"] = "complete"
-                detail = "Hourly match passed: one booking and both captains checked in."
+                detail = "Hourly match passed: the booking, invitation, and both check-ins are recorded."
             self._upsert_world_booking(world, event, "current")
 
         event = {
@@ -473,33 +493,36 @@ class Orchestrator:
         observed_at: str,
     ) -> None:
         key = interaction["key"]
+        booker, teammate = self._need_players()
+        booker_name = self._player_name(world, booker)
+        teammate_name = self._player_name(world, teammate)
         actor_id = "lead"
 
-        if step == "red_need_rises":
-            actor_id = "red-captain"
+        if step == "desire_to_play_rises":
+            actor_id = booker
             need = world["needs"][actor_id]
             before = int(need["desireToPlay"])
             need["desireToPlay"] = min(100, before + int(need["driftPerBeat"]))
             detail = (
-                f"Red desire-to-play rose from {before} to "
+                f"{booker_name} desire-to-play rose from {before} to "
                 f"{need['desireToPlay']} (threshold {need['threshold']})."
             )
             world["actors"][actor_id]["state"] = "motivated"
 
-        elif step == "red_proposes_from_need":
-            actor_id = "red-captain"
+        elif step == "player_proposes_match":
+            actor_id = booker
             need = world["needs"][actor_id]
             if int(need["desireToPlay"]) < int(need["threshold"]):
-                raise RuntimeError("Red's desire to play has not crossed its threshold")
+                raise RuntimeError("desire to play has not crossed its threshold")
             text = (
-                "I feel like playing. Blue, are you free for a 30-minute "
-                "morning match in the next two weeks?"
+                f"I want to play. {teammate_name}, are you free for a 30-minute "
+                "morning match in the next two weeks? I will book it and invite you."
             )
             self._message(
                 key,
                 observed_at,
                 actor_id,
-                ["blue-captain"],
+                [teammate],
                 text,
                 "need_driven_proposal",
             )
@@ -507,26 +530,29 @@ class Orchestrator:
                 f"{key}:message:need_driven_proposal:{actor_id}"
             )
             world["actors"][actor_id]["state"] = "waiting_for_reply"
-            world["actors"]["blue-captain"]["state"] = "considering"
-            detail = "Red asked Blue for a match because desire-to-play crossed its threshold."
+            world["actors"][teammate]["state"] = "considering"
+            detail = (
+                f"{booker_name} asked {teammate_name} to play because "
+                "desire-to-play crossed its threshold."
+            )
 
-        elif step == "blue_agrees_from_availability":
-            actor_id = "blue-captain"
+        elif step == "teammate_agrees_to_play":
+            actor_id = teammate
             availability = self._needs_availability()
-            overlap = set(availability["red-captain"]["localWindows"]) & set(
-                availability["blue-captain"]["localWindows"]
+            overlap = set(availability[booker]["localWindows"]) & set(
+                availability[teammate]["localWindows"]
             )
             if not overlap:
-                raise RuntimeError("captains have no overlapping availability")
+                raise RuntimeError("players have no overlapping availability")
             text = (
-                "Yes. I can play a 30-minute morning match in that window. "
-                "Please find us the nearest valid slot."
+                f"Yes. Book a 30-minute morning match in that window and invite me. "
+                "I will accept."
             )
             self._message(
                 key,
                 observed_at,
                 actor_id,
-                ["red-captain"],
+                [booker],
                 text,
                 "availability_agreement",
             )
@@ -535,8 +561,8 @@ class Orchestrator:
             )
             interaction["agreedWindow"] = sorted(overlap)[0]
             world["actors"][actor_id]["state"] = "agreed"
-            world["actors"]["red-captain"]["state"] = "agreed"
-            detail = "Blue found overlapping availability and agreed to the match."
+            world["actors"][booker]["state"] = "agreed"
+            detail = f"{teammate_name} found overlapping availability and agreed to accept the invitation."
 
         elif step == "lead_records_booking_intent":
             intent_id = f"intent:{key}"
@@ -544,10 +570,10 @@ class Orchestrator:
                 "schemaVersion": 1,
                 "id": intent_id,
                 "status": "agreed",
-                "reason": "red_desire_to_play",
+                "reason": "desire_to_play",
                 "createdAt": observed_at,
-                "participants": ["red-captain", "blue-captain"],
-                "requestedBy": "red-captain",
+                "participants": [booker, teammate],
+                "requestedBy": booker,
                 "constraints": {
                     "durationMinutes": 30,
                     "daysAhead": [0, 14],
@@ -557,7 +583,7 @@ class Orchestrator:
                 "evidence": {
                     "proposalMessageId": interaction["proposalMessageId"],
                     "agreementMessageId": interaction["agreementMessageId"],
-                    "need": deepcopy(world["needs"]["red-captain"]),
+                    "need": deepcopy(world["needs"][booker]),
                 },
                 "remoteWrites": 0,
             }
@@ -575,7 +601,7 @@ class Orchestrator:
             world["bookingIntents"] = [
                 row for row in world["bookingIntents"] if row.get("id") != intent_id
             ] + [summary]
-            detail = f"Lead recorded booking intent {intent_id}; no product write occurred."
+            detail = f"Lead recorded booking intent {intent_id}; the booker can invite the teammate. No product write occurred."
 
         event = {
             "id": f"{key}:{step}",
@@ -600,14 +626,16 @@ class Orchestrator:
     ) -> None:
         key = interaction["key"]
         campaign = self.promotion_scenario
+        players = campaign["participants"]
+        booker, teammate = str(players[0]), str(players[1])
         actor_id = campaign["owner"]
 
-        if step == "sofia_announces_priority_session":
+        if step == "sofia_announces_event":
             self._message(
                 key,
                 observed_at,
                 actor_id,
-                deepcopy(campaign["participants"]),
+                deepcopy(players),
                 campaign["message"],
                 "owner_announcement",
             )
@@ -624,39 +652,39 @@ class Orchestrator:
             world["campaigns"] = [
                 row for row in world.get("campaigns", []) if row.get("id") != key
             ] + [campaign_summary]
-            detail = "Sofia announced a priority session for the next legal court slot."
+            detail = "Sofia announced an event players can accept."
 
-        elif step == "red_accepts_priority_session":
-            actor_id = "red-captain"
+        elif step == "player_accepts_event":
+            actor_id = booker
             self._message(
                 key,
                 observed_at,
                 actor_id,
                 [campaign["owner"]],
-                "I am in for the next legal 30-minute slot.",
+                "I want that session. I will book it and invite my teammate.",
                 "promotion_response",
             )
-            interaction["redResponseMessageId"] = (
+            interaction["playerResponseMessageId"] = (
                 f"{key}:message:promotion_response:{actor_id}"
             )
             world["actors"][actor_id]["state"] = "promotion_ready"
-            detail = "Red accepted Sofia's priority-session announcement."
+            detail = f"{self._player_name(world, booker)} accepted Sofia's event and will invite a teammate."
 
-        elif step == "blue_accepts_priority_session":
-            actor_id = "blue-captain"
+        elif step == "teammate_accepts_event":
+            actor_id = teammate
             self._message(
                 key,
                 observed_at,
                 actor_id,
-                [campaign["owner"], "red-captain"],
-                "I can join the next legal 30-minute slot too.",
+                [campaign["owner"], booker],
+                "I want that session too. Send me the invitation and I will accept.",
                 "promotion_response",
             )
-            interaction["blueResponseMessageId"] = (
+            interaction["teammateResponseMessageId"] = (
                 f"{key}:message:promotion_response:{actor_id}"
             )
             world["actors"][actor_id]["state"] = "promotion_ready"
-            detail = "Blue accepted Sofia's priority-session announcement."
+            detail = f"{self._player_name(world, teammate)} accepted Sofia's event."
 
         elif step == "lead_records_promotion_intent":
             actor_id = "lead"
@@ -667,8 +695,8 @@ class Orchestrator:
                 "status": "agreed",
                 "reason": "owner_priority_announcement",
                 "createdAt": observed_at,
-                "participants": deepcopy(campaign["participants"]),
-                "requestedBy": campaign["owner"],
+                "participants": deepcopy(players),
+                "requestedBy": booker,
                 "constraints": {
                     "durationMinutes": campaign["durationMinutes"],
                     "daysAhead": deepcopy(campaign["daysAhead"]),
@@ -677,8 +705,8 @@ class Orchestrator:
                 },
                 "evidence": {
                     "announcementMessageId": interaction["announcementMessageId"],
-                    "redResponseMessageId": interaction["redResponseMessageId"],
-                    "blueResponseMessageId": interaction["blueResponseMessageId"],
+                    "playerResponseMessageId": interaction["playerResponseMessageId"],
+                    "teammateResponseMessageId": interaction["teammateResponseMessageId"],
                 },
                 "remoteWrites": 0,
             }
@@ -699,7 +727,7 @@ class Orchestrator:
                     "createdAt": observed_at,
                 }
             ]
-            detail = f"Lead recorded promotion booking intent {intent_id}; no product write occurred."
+            detail = f"Lead recorded event intent {intent_id}; the booker can invite the teammate. No product write occurred."
 
         event = {
             "id": f"{key}:{step}",

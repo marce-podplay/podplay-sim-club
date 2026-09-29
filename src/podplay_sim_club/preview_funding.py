@@ -1,9 +1,10 @@
-"""Idempotent virtual-credit seed for the two Preview Club captains."""
+"""Idempotent virtual-credit seed for Preview Club players."""
 
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
 from .firebase_auth import FirebaseAuthenticator
+from .players import actor_auth_cache
 from .identity_registry import ActorIdentity
 from .preview_readiness import inspect_preview_readiness
 from .preview_readonly import PreviewReadError, PreviewReadonlyClient
@@ -36,7 +37,7 @@ def build_funding_plan(
             raise PreviewReadError("preview virtual-credit seed is invalid")
         identity = identities[actor_id]
         auth = FirebaseAuthenticator(
-            root / "secrets" / "actor-auth" / f"{actor_id}.json"
+            actor_auth_cache(root, actor_id)
         ).authenticate(identity.email, identity.password, firebase_api_key)
         actor_clients[actor_id] = PreviewReadonlyClient(read_policy, auth.id_token)
         current = float(readiness["actors"][actor_id]["virtualCredits"])

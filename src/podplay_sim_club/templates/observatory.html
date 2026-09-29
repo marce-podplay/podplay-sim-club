@@ -38,6 +38,8 @@
     .fact strong { display:block; color:var(--text); font-weight:500; }
     .next-action { color:var(--warn); }
     .source-note { margin-top:12px; color:var(--dim); font-size:12px; }
+    .report-button { margin:8px 8px 0 0; border:1px solid var(--warn); background:transparent; color:var(--warn); padding:7px 10px; font:inherit; cursor:pointer; }
+    .report-button:hover, .report-button:focus-visible { background:var(--panel-deep); outline:none; }
     .offline { margin-top:12px; padding:10px 12px; border:2px solid var(--warn); color:var(--warn); background:var(--panel); }
     .person, .pod, .signal, .booking { padding:5px 0; }
     .person button { color:var(--text); border:0; padding:0; background:transparent; font:inherit; text-decoration:underline dotted; cursor:pointer; }
@@ -83,7 +85,7 @@
 <main>
   <header>
     <div><h1>PODPLAY SIM CLUB // OBSERVATORY</h1><span id="source" class="dim">PR PREVIEW · remote snapshot</span></div>
-    <div><span id="connection" class="live">● LOCAL UI</span> <span id="clock" class="dim"></span></div>
+    <div><span id="connection" class="live">● LOCAL UI</span> <span id="clock-label" class="dim">PREVIEW TIME · NOW</span> <span id="clock" class="dim"></span></div>
   </header>
   <div id="offline" class="offline" hidden>LOCAL OBSERVATORY OFFLINE · restart <code>./club serve</code>. Displayed data may be frozen.</div>
 
@@ -138,12 +140,16 @@
     return `<div class="fact"><span class="${checked?'live':'dim'}">${checked?'●':'·'} ${esc(label)}</span><strong>${esc(status)}</strong></div>`;
   }
 
-  function formatTime(instant, timeZone) {
+  const DEFAULT_DISPLAY_TIME_ZONE = 'America/New_York';
+  const DISPLAY_LOCALE = 'en-US';
+  let displayTimeZone = DEFAULT_DISPLAY_TIME_ZONE;
+
+  function formatTime(instant) {
     if (!instant) return 'unknown';
     const options = {weekday:'short', month:'short', day:'numeric', year:'numeric', hour:'numeric', minute:'2-digit', timeZoneName:'short'};
-    if (timeZone) options.timeZone = timeZone;
-    try { return new Intl.DateTimeFormat('en-US', options).format(new Date(instant)); }
-    catch (_error) { return instant; }
+    options.timeZone = displayTimeZone;
+    try { return new Intl.DateTimeFormat(DISPLAY_LOCALE, options).format(new Date(instant)); }
+    catch (_error) { return 'unknown'; }
   }
 
   function snapshotAge(instant) {
@@ -151,6 +157,16 @@
     if (seconds < 60) return `${seconds}s old`;
     if (seconds < 3600) return `${Math.floor(seconds / 60)}m old`;
     return `${Math.floor(seconds / 3600)}h old`;
+  }
+
+  function setDisplayTimeZone(preview) {
+    const previewZone = preview && preview.venue && preview.venue.timezone;
+    displayTimeZone = typeof previewZone === 'string' && previewZone ? previewZone : DEFAULT_DISPLAY_TIME_ZONE;
+    document.getElementById('clock-label').textContent = `PREVIEW TIME · ${displayTimeZone}`;
+  }
+
+  function renderClock() {
+    document.getElementById('clock').textContent = formatTime(new Date());
   }
 
   function renderPreview(preview, previewMatches) {
@@ -164,9 +180,15 @@
         </button>
       </div>`).join('') || '<div class="dim">· no preview matches recorded</div>');
     window.matchRows = rows;
-    if (rows.length && (typeof window.selectedMatch !== 'number' || !rows[window.selectedMatch])) {
+    const activeOccurrenceKey = previewMatches && previewMatches.activeOccurrenceKey;
+    if (rows.length && (
+      window.activeOccurrenceKey !== activeOccurrenceKey ||
+      typeof window.selectedMatch !== 'number' ||
+      !rows[window.selectedMatch]
+    )) {
       window.selectedMatch = Math.max(0, rows.findIndex(match => match.active));
     }
+    window.activeOccurrenceKey = activeOccurrenceKey;
     renderMatchDetail(rows[window.selectedMatch], window.previewSnapshot);
     if (!preview) {
       setHtml('preview-hero', '<span class="dim">· no preview snapshot; run ./club preview match-status</span>');
@@ -177,7 +199,7 @@
     setHtml('preview-hero', `
       <div class="preview-result ${resultClass}">${esc(preview.result)}</div>
       <div class="preview-meta">PR #${esc(preview.pullRequest)} · active product event ${esc(preview.event.eventId)} · ${esc(preview.event.status)} · select any event below for its own participants</div>`);
-    document.getElementById('preview-source').textContent = `Snapshot refreshed ${preview.observedAt} (${snapshotAge(preview.observedAt)}). Use match-status to refresh it; this view does not poll the preview API.`;
+    document.getElementById('preview-source').textContent = `Snapshot refreshed ${formatTime(preview.observedAt)} (${snapshotAge(preview.observedAt)}). Use match-status to refresh it; this view does not poll the preview API.`;
   }
 
   function showMatch(index) {
@@ -197,7 +219,7 @@
         <div class="fact"><span class="dim">BOOKING</span><strong>${esc(match.label || 'Preview booking')}</strong></div>
         <div class="fact"><span class="dim">REFERENCE</span><strong class="reference">${esc(match.eventCode || 'pending')}</strong></div>
         <div class="fact"><span class="dim">EVENT ID</span><strong>${esc(match.eventId || 'not created')}</strong></div>
-        <div class="fact"><span class="dim">SLOT</span><strong>${esc(formatTime(match.startTime, venue.timezone))}</strong><span class="dim">to ${esc(formatTime(match.endTime, venue.timezone))}</span></div>
+        <div class="fact"><span class="dim">SLOT</span><strong>${esc(formatTime(match.startTime))}</strong><span class="dim">to ${esc(formatTime(match.endTime))}</span></div>
         <div class="fact"><span class="dim">LOCATION</span><strong>${esc(venue.areaName || 'refresh status for venue')}</strong><span class="dim">${venue.podName ? ` / ${esc(venue.podName)}` : ''}</span></div>
       </div>
       <div><span class="dim">ASSIGNED PLAYERS FOR THIS EVENT</span>${people.map(person => `<div class="person-row"><strong>${esc(person.label || person.actorId)}</strong> <span class="dim">(${esc(person.role)})</span><br><span class="reference">${esc(person.actorId)}</span> · invite ${esc(person.invitationStatus || 'owner')}${person.invitationCode ? ` (${esc(person.invitationCode)})` : ''} · check-in ${esc(person.attendance || 'not refreshed')}</div>`).join('')}</div>
@@ -220,10 +242,11 @@
       const payload = message.payload || {};
       const link = payload.inviteLink && payload.inviteLink.status === 'available' ? payload.inviteLink.url : '';
       const recipients = Array.isArray(message.toLabels) && message.toLabels.length ? message.toLabels.join(', ') : 'All club';
+      const reactions = message.kind === 'tournament_result_requested' ? `<div class="fact"><span class="warn">PLAYER REACTIONS</span><br><button class="report-button" type="button" onclick="reportWinner('Bogard-Higashi')">ANDY: BOGARD-HIGASHI WON</button><button class="report-button" type="button" onclick="reportWinner('Japan Team')">ANDY: JAPAN TEAM WON</button><button class="report-button" type="button" onclick="acknowledgeResultRequest('terry-bogard')">TERRY: ACKNOWLEDGE</button><button class="report-button" type="button" onclick="acknowledgeResultRequest('kyo-captain')">KYO: ACKNOWLEDGE</button><button class="report-button" type="button" onclick="acknowledgeResultRequest('benimaru')">BENIMARU: ACKNOWLEDGE</button><span id="result-reaction-status" class="copy-status" aria-live="polite"></span></div>` : '';
       return `<div class="stream-item">
-        <span class="stream-meta">${esc(message.observedAt || 'time unknown')} · <strong class="stream-kind">${esc(message.kind || 'signal')}</strong></span>
+        <span class="stream-meta">${esc(formatTime(message.observedAt))} · <strong class="stream-kind">${esc(message.kind || 'signal')}</strong></span>
         <span class="stream-route">FROM ${esc(message.fromLabel || message.from || 'System')} → TO ${esc(recipients)}</span>
-        <span class="stream-body">${esc(signalText(message))}${link ? `<br><a class="stream-link" href="${esc(link)}" target="_blank" rel="noreferrer">${esc(link)}</a>` : ''}</span>
+        <span class="stream-body">${esc(signalText(message))}${link ? `<br><a class="stream-link" href="${esc(link)}" target="_blank" rel="noreferrer">${esc(link)}</a>` : ''}</span>${reactions}
       </div>`;
     }).join('');
     setHtml('message-stream', html || '<div class="stream-empty">· actor messages will appear here after a runtime tick</div>');
@@ -245,10 +268,44 @@
     </div>`).join('') || '<div class="dim">· no active character agreement</div>');
   }
 
+  async function reportWinner(winner) {
+    if (!window.confirm(`Record Andy Bogard's attested winner as ${winner}? This cannot be inferred or undone from this panel.`)) return;
+    const status = document.getElementById('result-reaction-status');
+    status.textContent = 'recording…';
+    try {
+      const response = await fetch('/api/tournament/report', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({reporter:'andy-bogard', winner}),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      status.textContent = 'winner report recorded';
+      await refresh();
+    } catch (_error) {
+      status.textContent = 'report not recorded';
+    }
+  }
+
+  async function acknowledgeResultRequest(actorId) {
+    const status = document.getElementById('result-reaction-status');
+    status.textContent = 'recording reaction…';
+    try {
+      const response = await fetch('/api/tournament/acknowledge', {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({actorId}),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      status.textContent = 'reaction recorded';
+      await refresh();
+    } catch (_error) {
+      status.textContent = 'reaction not recorded';
+    }
+  }
+
   function render(previewState) {
     const preview = previewState.previewMatch;
     window.previewSnapshot = preview;
-    document.getElementById('clock').textContent = preview ? preview.observedAt || '' : '';
+    setDisplayTimeZone(preview);
+    renderClock();
     renderPreview(preview, previewState.previewMatches);
     renderStream(previewState.messages);
     renderStorylines(previewState.storylines);
@@ -276,7 +333,7 @@
       document.getElementById('source').textContent = 'FROZEN VIEW · restart ./club serve';
     }
   }
-  refresh(); setInterval(refresh, 2000);
+  refresh(); setInterval(refresh, 2000); setInterval(renderClock, 1000);
 </script>
 </body>
 </html>

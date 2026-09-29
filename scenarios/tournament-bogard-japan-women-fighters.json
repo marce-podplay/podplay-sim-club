@@ -6,10 +6,10 @@
     {
       "id": "semi-final",
       "name": "Bogard-Higashi vs Japan Team",
-      "participants": ["red-captain", "blue-captain", "kyo-captain", "benimaru"],
+      "participants": ["andy-bogard", "terry-bogard", "kyo-captain", "benimaru"],
       "teams": ["Bogard-Higashi", "Japan Team"],
       "durationMinutes": 60,
-      "resultReporter": "red-captain"
+      "resultReporter": "andy-bogard"
     },
     {
       "id": "final",

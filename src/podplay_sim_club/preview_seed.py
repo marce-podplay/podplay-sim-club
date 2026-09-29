@@ -7,6 +7,7 @@ from typing import Any, Dict, Tuple
 from urllib.parse import urlencode
 
 from .firebase_auth import FirebaseAuthenticator
+from .players import actor_auth_cache
 from .identity_registry import ActorIdentity, IdentityRegistry
 from .preview_readonly import PreviewReadError, PreviewReadonlyClient, collection_items
 from .preview_write import PreviewIdentityWriter, PreviewWriteError
@@ -168,7 +169,7 @@ def apply_identity_seed(
             raise PreviewWriteError(f"PodPlay user ID is missing for {actor_id}")
 
         actor_auth = FirebaseAuthenticator(
-            root / "secrets" / "actor-auth" / f"{actor_id}.json"
+            actor_auth_cache(root, actor_id)
         ).authenticate(identity.email, identity.password, firebase_api_key)
         actor_profile = PreviewReadonlyClient(read_policy, actor_auth.id_token).get(
             "/apis/v2/users/current"

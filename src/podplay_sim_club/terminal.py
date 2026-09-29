@@ -50,7 +50,7 @@ def render(view: Dict[str, Any]) -> str:
     pod_lines = []
     for pod_id in sorted(pods):
         pod = pods[pod_id]
-        actor_order = ("red-captain", "blue-captain", "sofia", "alex", "riley")
+        actor_order = tuple(people)
         occupants = [
             f"[{people[actor_id]['glyph']}]"
             for actor_id in actor_order
@@ -95,12 +95,15 @@ def render_needs(view: Dict[str, Any]) -> str:
         "",
         "NEEDS",
     ]
-    for actor_id in ("red-captain", "blue-captain"):
-        need = needs.get(actor_id, {})
+    people = view.get("people", {})
+    for actor_id, need in needs.items():
+        if not isinstance(need, dict):
+            continue
         pressure = int(need.get("desireToPlay", 0))
         threshold = int(need.get("threshold", 0))
         state = "READY" if pressure >= threshold else "quiet"
-        lines.append(f"- {actor_id}: desire-to-play {pressure}/{threshold}  {state}")
+        name = people.get(actor_id, {}).get("name", actor_id)
+        lines.append(f"- {name}: desire-to-play {pressure}/{threshold}  {state}")
 
     lines.extend(["", "LATEST NEED SIGNALS"])
     need_signals = [
@@ -108,13 +111,13 @@ def render_needs(view: Dict[str, Any]) -> str:
         for signal in view.get("signals", [])
         if signal.get("kind")
         in {
-            "RED_NEED_RISES",
-            "RED_PROPOSES_FROM_NEED",
-            "BLUE_AGREES_FROM_AVAILABILITY",
+            "DESIRE_TO_PLAY_RISES",
+            "PLAYER_PROPOSES_MATCH",
+            "TEAMMATE_AGREES_TO_PLAY",
             "LEAD_RECORDS_BOOKING_INTENT",
-            "SOFIA_ANNOUNCES_PRIORITY_SESSION",
-            "RED_ACCEPTS_PRIORITY_SESSION",
-            "BLUE_ACCEPTS_PRIORITY_SESSION",
+            "SOFIA_ANNOUNCES_EVENT",
+            "PLAYER_ACCEPTS_EVENT",
+            "TEAMMATE_ACCEPTS_EVENT",
             "LEAD_RECORDS_PROMOTION_INTENT",
         }
     ]

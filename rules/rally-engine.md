@@ -14,8 +14,8 @@ not a character and not a product adapter.
 - The lead may ask a short-lived actor model to interpret one role. The model
   can propose a message, an intent, a question, or a pass; the deterministic
   action boundary validates and persists it.
-- Preview writes are never an emergent model action. They need an existing,
-  explicit write gate and current user authorization.
+- Preview writes are never an emergent model action. They must use the approved
+  PR preview target and the deterministic, read-back-verified workflow.
 - On completion, Rally Engine writes one immutable, secret-free summary under
   `state/runs/`. It includes tick timing, tournament state, fixture plan/event
   references, remote-write count, and the channel message kinds that explain
@@ -24,12 +24,13 @@ not a character and not a product adapter.
 ## Two-Then-One tournament
 
 1. Sofia announces interest in Bogard-Higashi versus Japan Team.
-2. The first real product event is created only if it starts within 30 minutes;
-   otherwise the intent stays blocked and the club channel explains why.
+2. The first real product event uses the nearest real contiguous 60-minute
+   slot at the approved venue; a later start does not invalidate the fixture.
 3. Once the event's real end time has passed, Rally Engine asks Andy (or another
    named participant) who won. Check-in or elapsed time never implies a winner.
-4. A reported winner unlocks Sofia's announcement and planning of the final
-   against Women Fighters Team.
+4. A reported winner unlocks Sofia's final announcement on the next tick. The
+   following coordinator tick plans live W37 availability, creates the final's
+   free Open Play, and persists its read-back before announcing success.
 
 ## Model choice
 

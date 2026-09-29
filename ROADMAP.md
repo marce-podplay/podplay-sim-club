@@ -5,8 +5,8 @@
 - Durable two-hour/20-minute loop contract and actor handoff rules.
 - Two-Then-One tournament scenario: Bogard-Higashi vs Japan Team, then the
   reported winner vs Women Fighters Team.
-- Immediate-fixture policy: a planned tournament event must begin within 30
-  minutes or remain blocked.
+- Nearest-fixture policy: a planned tournament event uses the nearest real
+  contiguous slot at its approved venue.
 - Ticket-scoped, private payment lifecycle ledger for preview actors.
 
 ## Next — prove one complete run

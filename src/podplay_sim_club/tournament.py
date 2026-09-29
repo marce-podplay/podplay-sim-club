@@ -42,10 +42,7 @@ def run_tick(root: Path, now: Optional[datetime] = None) -> Dict[str, Any]:
             _record_owner_intent(storage, ledger, key, semi, observed_at)
             intent = ledger["intents"].get(semi_state["intentId"], {})
             event_start = intent.get("event", {}).get("startTime") if isinstance(intent.get("event"), dict) else None
-            if isinstance(event_start, str) and (parse_instant(event_start) - instant).total_seconds() > 30 * 60:
-                semi_state.update({"status": "blocked_immediate_window", "blockedAt": observed_at, "reason": "fixture_is_not_within_30_minutes"})
-                action = _message(storage, key, observed_at, "sofia", semi["participants"], "tournament_announcement_superseded", "The earlier tournament announcement is superseded: no legal 60-minute fixture was available within 30 minutes. Rally Engine will wait for an immediate slot; the distant event is not an active tournament fixture.")
-            elif intent.get("status") == "players_registered":
+            if intent.get("status") == "players_registered":
                 semi_state["status"] = "scheduled"
                 semi_state["eventId"] = intent.get("event", {}).get("eventId")
                 action = _message(storage, key, observed_at, "sofia", semi["participants"], "tournament_fixture_confirmed", "The first fixture is published and every named player is registered. Play the scheduled session, then Andy will report the winner.")
@@ -57,7 +54,7 @@ def run_tick(root: Path, now: Optional[datetime] = None) -> Dict[str, Any]:
             ended = isinstance(end_time, str) and parse_instant(end_time) <= instant
             if ended:
                 semi_state["status"] = "awaiting_result"
-                action = _message(storage, key, observed_at, semi["resultReporter"], ["sofia", "lead"], "tournament_result_requested", "Andy, how did Bogard-Higashi vs Japan Team go? Reply with the winning team only; no score is required.")
+                action = _message(storage, key, observed_at, "lead", semi["participants"], "tournament_result_requested", "Bogard-Higashi vs Japan Team has ended. Andy, report the winning team only; no score is required. Teammates may acknowledge the request, but only Andy's report advances the tournament.")
             else:
                 action = {"actorId": "lead", "action": "pass", "detail": "first fixture remains scheduled; wait for its real end time", "observedAt": observed_at}
         elif semi_state["status"] == "reported":
@@ -68,11 +65,16 @@ def run_tick(root: Path, now: Optional[datetime] = None) -> Dict[str, Any]:
                 round_copy = {**final, "participants": participants}
                 intent_id = _record_owner_intent(storage, ledger, key, round_copy, observed_at)
                 final_state.update({"status": "awaiting_event", "intentId": intent_id, "winner": winner})
-                action = _message(storage, key, observed_at, "sofia", participants, "tournament_final_announcement", f"Sofia announces the final: {winner} vs Women Fighters Team. The final becomes official once its free Open Play is published.")
+                action = _message(storage, key, observed_at, "sofia", participants, "tournament_final_announcement", f"Sofia announces the final: {winner} vs Women Fighters Team. The coordinator will create its free Open Play fixture on the next tick.")
+            elif final_state["status"] == "awaiting_event":
+                intent = ledger["intents"].get(final_state["intentId"], {})
+                if intent.get("status") == "event_created":
+                    final_state.update({"status": "event_created", "eventId": intent.get("event", {}).get("eventId")})
+                    action = _message(storage, key, observed_at, "sofia", intent.get("participants", []), "tournament_final_fixture_created", "The Women Fighters final is published. Players may now register for the official fixture.")
+                else:
+                    action = {"actorId": "coordinator", "action": "create_open_play", "detail": "create the announced Women Fighters final from its owner Open Play intent", "observedAt": observed_at}
             else:
                 action = {"actorId": "lead", "action": "pass", "detail": "final is already being prepared", "observedAt": observed_at}
-        elif semi_state["status"] == "blocked_immediate_window":
-            action = {"actorId": "lead", "action": "pass", "detail": "tournament waits for a new 60-minute fixture within the configured lead window", "observedAt": observed_at}
         else:
             action = {"actorId": "lead", "action": "pass", "detail": "tournament awaits a human-reported winner", "observedAt": observed_at}
         state["lastTickAt"] = observed_at
@@ -81,22 +83,63 @@ def run_tick(root: Path, now: Optional[datetime] = None) -> Dict[str, Any]:
     return {"tick": state["tick"], "action": action, "remoteWrites": 0, "state": state}
 
 
-def report_winner(root: Path, winner: str, now: Optional[datetime] = None) -> Dict[str, Any]:
-    """Store a player-reported winner; this intentionally does not infer results."""
+def report_winner(
+    root: Path,
+    winner: str,
+    reporter_actor_id: str,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """Store an attested captain report; this intentionally does not infer results."""
     storage = Storage(root)
     scenario = storage.load_json(root / "scenarios" / SCENARIO_FILE)
     permitted = set(scenario["rounds"][0]["teams"])
     if winner not in permitted:
         raise ValueError("winner must be Bogard-Higashi or Japan Team")
+    expected_reporter = scenario["rounds"][0]["resultReporter"]
+    if reporter_actor_id != expected_reporter:
+        raise ValueError("only the designated result reporter can report this fixture")
     observed_at = isoformat(now or parse_instant(None))
     with storage.writer_lock():
         state = storage.load_json(storage.state / STATE_FILE, default=None)
         if not isinstance(state, dict) or state.get("rounds", {}).get("semi-final", {}).get("status") != "awaiting_result":
             raise ValueError("the first fixture is not waiting for a player report")
         state["rounds"]["semi-final"].update({"status": "reported", "winner": winner, "reportedAt": observed_at})
-        storage.append_jsonl(storage.channel_path("club"), {"id": f"tournament:{scenario['id']}:semi-final:reported", "occurrenceKey": f"tournament:{scenario['id']}", "channel": "club", "from": "red-captain", "to": ["sofia", "lead"], "kind": "tournament_result_reported", "text": f"Andy reports that {winner} won the first fixture. No score recorded.", "observedAt": observed_at, "remoteWrites": 0})
+        storage.append_jsonl(storage.channel_path("club"), {"id": f"tournament:{scenario['id']}:semi-final:reported", "occurrenceKey": f"tournament:{scenario['id']}", "channel": "club", "from": reporter_actor_id, "to": ["sofia", "lead"], "kind": "tournament_result_reported", "text": f"Andy reports that {winner} won the first fixture. No score recorded.", "observedAt": observed_at, "remoteWrites": 0})
         storage.write_json(storage.state / STATE_FILE, state)
     return state
+
+
+def acknowledge_result_request(
+    root: Path, actor_id: str, now: Optional[datetime] = None
+) -> Dict[str, Any]:
+    """Let an event participant acknowledge the request without supplying a result."""
+    storage = Storage(root)
+    scenario = storage.load_json(root / "scenarios" / SCENARIO_FILE)
+    semi = scenario["rounds"][0]
+    if actor_id not in semi["participants"]:
+        raise ValueError("only a semi-final participant can acknowledge this request")
+    if actor_id == semi["resultReporter"]:
+        raise ValueError("the designated reporter must provide the winner")
+    observed_at = isoformat(now or parse_instant(None))
+    message_id = f"tournament:{scenario['id']}:semi-final:result-request-ack:{actor_id}"
+    with storage.writer_lock():
+        state = storage.load_json(storage.state / STATE_FILE, default=None)
+        if not isinstance(state, dict) or state.get("rounds", {}).get("semi-final", {}).get("status") != "awaiting_result":
+            raise ValueError("the first fixture is not waiting for a player report")
+        messages = storage.read_jsonl(storage.channel_path("club"))
+        if not any(message.get("id") == message_id for message in messages):
+            storage.append_jsonl(storage.channel_path("club"), {
+                "id": message_id,
+                "occurrenceKey": f"tournament:{scenario['id']}",
+                "channel": "club",
+                "from": actor_id,
+                "to": [semi["resultReporter"], "lead"],
+                "kind": "tournament_result_acknowledged",
+                "text": "Acknowledged the result request; awaiting Andy's official winner report.",
+                "observedAt": observed_at,
+                "remoteWrites": 0,
+            })
+    return {"status": "acknowledged", "actorId": actor_id}
 
 
 def _team_players(scenario: Dict[str, Any], team: str) -> list:
@@ -106,7 +149,7 @@ def _team_players(scenario: Dict[str, Any], team: str) -> list:
 
 def _record_owner_intent(storage: Storage, ledger: Dict[str, Any], key: str, round_spec: Dict[str, Any], observed_at: str) -> str:
     intent_id = f"intent:{key}:{round_spec['id']}"
-    constraints = {"durationMinutes": round_spec["durationMinutes"], "daysAhead": [0, 0], "maxDelayMinutes": 30, "localWindows": ["00:00-24:00"], "slotPolicy": "within_30_minutes_or_wait", "freeToParticipants": True}
+    constraints = {"durationMinutes": round_spec["durationMinutes"], "daysAhead": [0, 0], "localWindows": ["00:00-24:00"], "slotPolicy": "nearest_real_contiguous_slot", "freeToParticipants": True}
     if intent_id not in ledger["intents"]:
         intent = {"schemaVersion": 1, "id": intent_id, "status": "agreed", "reason": "owner_tournament_fixture", "journey": "owner_open_play", "createdAt": observed_at, "participants": deepcopy(round_spec["participants"]), "requestedBy": "sofia", "constraints": constraints, "evidence": {"tournamentOccurrenceKey": key, "round": round_spec["id"]}, "promotionOccurrenceKey": key, "promotionKind": "tournament_owner_announcement", "remoteWrites": 0}
         save_intent(storage, ledger, intent)

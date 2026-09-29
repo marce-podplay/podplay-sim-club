@@ -10,7 +10,7 @@ import tempfile
 import threading
 import unittest
 from unittest.mock import patch
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -60,6 +60,7 @@ from podplay_sim_club.server import ObservatoryServer
 from podplay_sim_club.storage import Storage
 from podplay_sim_club.target_policy import TargetPolicy, TargetPolicyError
 from podplay_sim_club.terminal import render, render_needs
+from podplay_sim_club.tournament import acknowledge_result_request, report_winner, run_tick as run_tournament_tick
 
 
 FIXED_NOW = datetime(2026, 9, 23, 15, 5, tzinfo=timezone.utc)
@@ -112,6 +113,45 @@ class SimClubTestCase(unittest.TestCase):
             self.assertNotEqual(side["captainId"], side["teammateId"])
             self.assertTrue(set(side["guestEligible"]).issubset(set(team["members"]) - {side["captainId"], side["teammateId"]}))
 
+    def test_only_designated_captain_can_attest_tournament_winner(self):
+        storage = Storage(self.root)
+        storage.write_json(
+            storage.state / "tournament.json",
+            {"schemaVersion": 1, "id": "bogard-japan-women-fighters-001", "rounds": {"semi-final": {"status": "awaiting_result"}}},
+        )
+
+        with self.assertRaisesRegex(ValueError, "designated result reporter"):
+            report_winner(self.root, "Japan Team", "kyo-captain", now=FIXED_NOW)
+
+        state = report_winner(self.root, "Japan Team", "andy-bogard", now=FIXED_NOW)
+        self.assertEqual("reported", state["rounds"]["semi-final"]["status"])
+        self.assertEqual("Japan Team", state["rounds"]["semi-final"]["winner"])
+
+    def test_team_member_can_acknowledge_but_not_attest_tournament_result(self):
+        storage = Storage(self.root)
+        storage.write_json(
+            storage.state / "tournament.json",
+            {"schemaVersion": 1, "id": "bogard-japan-women-fighters-001", "rounds": {"semi-final": {"status": "awaiting_result"}}},
+        )
+        reaction = acknowledge_result_request(self.root, "kyo-captain", now=FIXED_NOW)
+        self.assertEqual({"status": "acknowledged", "actorId": "kyo-captain"}, reaction)
+        with self.assertRaisesRegex(ValueError, "designated reporter"):
+            acknowledge_result_request(self.root, "andy-bogard", now=FIXED_NOW)
+
+    def test_next_tournament_tick_requests_owner_creation_of_reported_final(self):
+        storage = Storage(self.root)
+        storage.write_json(
+            storage.state / "tournament.json",
+            {"schemaVersion": 1, "id": "bogard-japan-women-fighters-001", "rounds": {"semi-final": {"status": "reported", "winner": "Japan Team"}}},
+        )
+        first = run_tournament_tick(self.root, now=FIXED_NOW)
+        second = run_tournament_tick(self.root, now=FIXED_NOW)
+
+        self.assertEqual("awaiting_event", first["state"]["rounds"]["final"]["status"])
+        self.assertEqual("Japan Team", first["state"]["rounds"]["final"]["winner"])
+        self.assertEqual("coordinator", second["action"]["actorId"])
+        self.assertEqual("create_open_play", second["action"]["action"])
+
     def test_team_challenge_records_four_named_players_without_remote_writes(self):
         from podplay_sim_club.team_challenges import plan_challenge
 
@@ -123,7 +163,7 @@ class SimClubTestCase(unittest.TestCase):
 
         self.assertEqual("customer_team_signup", intent["journey"])
         self.assertEqual(
-            ["red-captain", "blue-captain", "kyo-captain", "benimaru"],
+            ["andy-bogard", "terry-bogard", "kyo-captain", "benimaru"],
             intent["participants"],
         )
         self.assertEqual("owner_open_play", intent["fallbackJourney"])
@@ -146,7 +186,7 @@ class SimClubTestCase(unittest.TestCase):
         preview = json.loads((self.root / "state" / "fake-preview.json").read_text())
         self.assertEqual(1, len(preview["bookings"]))
         self.assertEqual(
-            ["blue-captain", "red-captain"],
+            ["andy-bogard", "terry-bogard"],
             sorted(preview["bookings"][0]["checkedIn"]),
         )
 
@@ -173,7 +213,7 @@ class SimClubTestCase(unittest.TestCase):
         self.assertEqual("agreed", intent["status"])
         self.assertEqual(0, intent["remoteWrites"])
         self.assertEqual(
-            ["red-captain", "blue-captain"], intent["participants"]
+            ["andy-bogard", "terry-bogard"], intent["participants"]
         )
         preview = json.loads((self.root / "state" / "fake-preview.json").read_text())
         self.assertEqual([], preview["bookings"])
@@ -215,7 +255,7 @@ class SimClubTestCase(unittest.TestCase):
 
         self.assertEqual(0, first["remoteWrites"])
         self.assertEqual(
-            ["sofia", "red-captain", "blue-captain", "alex", "riley", "lead"],
+            ["sofia", "andy-bogard", "terry-bogard", "alex", "riley", "lead"],
             [turn["actorId"] for turn in first["turns"]],
         )
         self.assertEqual("intent", first["turns"][-1]["action"])
@@ -301,7 +341,7 @@ class SimClubTestCase(unittest.TestCase):
     def test_fresh_preview_starts_new_season_and_preserves_actor_journal(self):
         orchestrator = self.orchestrator()
         orchestrator.run_beat(turns=10, now=FIXED_NOW)
-        journal = self.root / "state" / "actors" / "red-captain" / "journal.jsonl"
+        journal = self.root / "state" / "actors" / "andy-bogard" / "journal.jsonl"
         original_journal = journal.read_text()
 
         orchestrator.reset_fake_preview()
@@ -327,7 +367,7 @@ class SimClubTestCase(unittest.TestCase):
         orchestrator.run_beat(turns=10, now=FIXED_NOW)
         frame = render(orchestrator.world_view(FIXED_NOW))
         self.assertIn("PREVIEW CLUB // WORLD SIGNAL", frame)
-        self.assertIn("POD-1 [R] ⇄ [B] occupied", frame)
+        self.assertIn("POD-1 [A] ⇄ [T] occupied", frame)
         self.assertIn("BOOKING TRACE", frame)
 
     def test_observatory_serves_preview_snapshot_and_health(self):
@@ -371,7 +411,7 @@ class SimClubTestCase(unittest.TestCase):
         )
         orchestrator.storage.append_jsonl(
             orchestrator.storage.channel_path("club"),
-            {"id": "signal-1", "kind": "invite_sent", "from": "red-captain", "to": ["blue-captain"], "observedAt": "2026-09-25T12:00:00Z"},
+            {"id": "signal-1", "kind": "invite_sent", "from": "andy-bogard", "to": ["terry-bogard"], "observedAt": "2026-09-25T12:00:00Z"},
         )
         orchestrator.storage.write_json(
             orchestrator.storage.state / "booking-intents.json",
@@ -384,7 +424,7 @@ class SimClubTestCase(unittest.TestCase):
                         "status": "agreed",
                         "reason": "team_rivalry_doubles",
                         "journey": "customer_team_signup",
-                        "participants": ["red-captain", "blue-captain", "kyo-captain", "benimaru"],
+                        "participants": ["andy-bogard", "terry-bogard", "kyo-captain", "benimaru"],
                         "constraints": {"durationMinutes": 60},
                         "nextAction": "seed_japan_team_then_plan_team_signup",
                     }
@@ -412,6 +452,10 @@ class SimClubTestCase(unittest.TestCase):
                 },
             },
         )
+        orchestrator.storage.write_json(
+            orchestrator.storage.state / "tournament.json",
+            {"schemaVersion": 1, "rounds": {"semi-final": {"status": "awaiting_result"}}},
+        )
         server = ObservatoryServer(orchestrator, host="127.0.0.1", port=0)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -421,6 +465,22 @@ class SimClubTestCase(unittest.TestCase):
                 health = json.load(response)
             with urlopen(f"http://{host}:{port}/api/preview", timeout=2) as response:
                 preview = json.load(response)
+            request = Request(
+                f"http://{host}:{port}/api/tournament/acknowledge",
+                data=json.dumps({"actorId": "kyo-captain"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlopen(request, timeout=2) as response:
+                acknowledgement = json.load(response)
+            request = Request(
+                f"http://{host}:{port}/api/tournament/report",
+                data=json.dumps({"reporter": "andy-bogard", "winner": "Japan Team"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlopen(request, timeout=2) as response:
+                captain_report = json.load(response)
             with urlopen(f"http://{host}:{port}/", timeout=2) as response:
                 page = response.read().decode("utf-8")
         finally:
@@ -433,6 +493,9 @@ class SimClubTestCase(unittest.TestCase):
         self.assertEqual(1, len(preview["previewMatches"]["matches"]))
         self.assertEqual("EVT-EVENTLIV", preview["previewMatches"]["matches"][0]["eventCode"])
         self.assertEqual("Andy Bogard", preview["previewMatches"]["matches"][0]["participants"][0]["label"])
+        self.assertNotIn("captainAction", preview)
+        self.assertEqual({"status": "acknowledged", "actorId": "kyo-captain"}, acknowledgement)
+        self.assertEqual({"status": "reported", "winner": "Japan Team"}, captain_report)
         self.assertEqual(
             ["Andy Bogard", "Terry Bogard", "Kyo Kusanagi", "Benimaru Nikaido"],
             preview["storylines"][0]["participants"],
@@ -445,6 +508,7 @@ class SimClubTestCase(unittest.TestCase):
         self.assertIn("SELECTED EVENT / BOOKING", page)
         self.assertIn("CURRENT STORYLINES", page)
         self.assertIn('id="toggle-stream"', page)
+        self.assertIn("/api/tournament/report", page)
         self.assertIn("if (element.innerHTML !== html)", page)
         self.assertNotIn("LOCAL FAKE", page)
         self.assertNotIn("CHARACTER NEEDS", page)
@@ -691,7 +755,7 @@ class PreviewConnectionTestCase(unittest.TestCase):
             self.assertNotIn(first["sofia"].password, repr(first["sofia"]))
             team = registry.ensure(("kyo-captain", "benimaru"))
             self.assertEqual({"kyo-captain", "benimaru"}, set(team))
-            self.assertEqual({"sofia", "red-captain", "blue-captain"}, set(registry.ensure()))
+            self.assertEqual({"sofia", "andy-bogard", "terry-bogard"}, set(registry.ensure()))
 
     def test_invite_sent_protocol_records_product_readback_and_optional_link(self):
         policy = TargetPolicy.from_config(
@@ -712,13 +776,13 @@ class PreviewConnectionTestCase(unittest.TestCase):
             record = record_invite_sent(
                 storage, policy, occurrence_key="pod-1@2026-09-25T12",
                 event_id="event-1", invitation=invitation,
-                sender_actor_id="red-captain", recipient_actor_id="blue-captain",
+                sender_actor_id="andy-bogard", recipient_actor_id="terry-bogard",
                 observed_at="2026-09-25T12:00:00Z",
             )
             record_invite_sent(
                 storage, policy, occurrence_key="pod-1@2026-09-25T12",
                 event_id="event-1", invitation=invitation,
-                sender_actor_id="red-captain", recipient_actor_id="blue-captain",
+                sender_actor_id="andy-bogard", recipient_actor_id="terry-bogard",
                 observed_at="2026-09-25T12:00:01Z",
             )
 
@@ -1087,9 +1151,9 @@ class PreviewConnectionTestCase(unittest.TestCase):
         self.assertNotIn("owner", body)
 
     def test_booking_occurrence_key_is_stable_and_slot_specific(self):
-        first = occurrence_key("pod-1", "2026-09-26T12:00:00Z", "red-captain")
-        second = occurrence_key("pod-1", "2026-09-26T12:00:00Z", "red-captain")
-        other = occurrence_key("pod-1", "2026-09-26T12:30:00Z", "red-captain")
+        first = occurrence_key("pod-1", "2026-09-26T12:00:00Z", "andy-bogard")
+        second = occurrence_key("pod-1", "2026-09-26T12:00:00Z", "andy-bogard")
+        other = occurrence_key("pod-1", "2026-09-26T12:30:00Z", "andy-bogard")
 
         self.assertEqual(first, second)
         self.assertNotEqual(first, other)
@@ -1124,7 +1188,7 @@ class PreviewConnectionTestCase(unittest.TestCase):
             policy, "red-token", lambda request, timeout: requests.append(request) or Response()
         )
         actor = ActorIdentity(
-            actor_id="blue-captain",
+            actor_id="terry-bogard",
             email="blue@example.test",
             first_name="Blue",
             last_name="Captain",

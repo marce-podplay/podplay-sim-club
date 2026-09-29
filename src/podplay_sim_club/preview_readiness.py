@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .firebase_auth import FirebaseAuthenticator
+from .players import BOOKER, actor_auth_cache
 from .identity_registry import ActorIdentity
 from .preview_readonly import PreviewReadError, PreviewReadonlyClient, collection_items
 from .preview_seed import build_seed_plan
@@ -15,7 +16,7 @@ from .target_policy import TargetPolicy
 
 
 READINESS_STATE = "preview-readiness.json"
-PLAYER_ACTORS = ("red-captain", "blue-captain")
+PLAYER_ACTORS = ("andy-bogard", "terry-bogard")
 
 
 def inspect_preview_readiness(
@@ -41,7 +42,7 @@ def inspect_preview_readiness(
     actor_clients: Dict[str, PreviewReadonlyClient] = {}
     for actor_id, identity in identities.items():
         auth = FirebaseAuthenticator(
-            root / "secrets" / "actor-auth" / f"{actor_id}.json"
+            actor_auth_cache(root, actor_id)
         ).authenticate(identity.email, identity.password, firebase_api_key)
         client = PreviewReadonlyClient(policy, auth.id_token)
         actor_clients[actor_id] = client
@@ -57,11 +58,11 @@ def inspect_preview_readiness(
             actor_id, identity, profile, payment, booking_settings, pod_id
         )
 
-    red_client = actor_clients.get("red-captain")
-    if red_client is None:
-        raise PreviewReadError("red-captain identity is required for readiness inspection")
+    booker_client = actor_clients.get(BOOKER)
+    if booker_client is None:
+        raise PreviewReadError("booking player identity is required for readiness inspection")
     candidate = find_candidate_session(
-        red_client,
+        booker_client,
         pod_id,
         str(pod.get("timezone") or "UTC"),
         observed_at,

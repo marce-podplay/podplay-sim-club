@@ -10,6 +10,8 @@ import string
 import tempfile
 from typing import Any, Dict, Iterable
 
+from .players import LEGACY_ACTOR_IDS, canonical_actor_id
+
 
 class IdentityRegistryError(ValueError):
     pass
@@ -28,8 +30,8 @@ class ActorIdentity:
 
 ACTOR_NAMES = {
     "sofia": ("Sofia", "Preview Club"),
-    "red-captain": ("Red", "Captain PP-7444"),
-    "blue-captain": ("Blue", "Captain PP-7444"),
+    "andy-bogard": ("Andy", "Bogard"),
+    "terry-bogard": ("Terry", "Bogard"),
 }
 
 # These identities are deliberately opt-in.  Normal Preview Club readiness
@@ -53,10 +55,10 @@ class IdentityRegistry:
         self.path = path
 
     def ensure(self, actor_ids: Iterable[str] = ACTOR_NAMES.keys()) -> Dict[str, ActorIdentity]:
-        requested_ids = tuple(actor_ids)
+        requested_ids = tuple(canonical_actor_id(actor_id) for actor_id in actor_ids)
         data = self._read()
         actors = data.setdefault("actors", {})
-        changed = False
+        changed = self._migrate_legacy_keys(actors)
         for actor_id in requested_ids:
             names = {**ACTOR_NAMES, **TEAM_ACTOR_NAMES}
             if actor_id not in names:
@@ -78,6 +80,14 @@ class IdentityRegistry:
         identities = self._identities(data)
         return {actor_id: identities[actor_id] for actor_id in requested_ids}
 
+    def _migrate_legacy_keys(self, actors: Dict[str, Any]) -> bool:
+        changed = False
+        for old, new in LEGACY_ACTOR_IDS.items():
+            if old in actors and new not in actors:
+                actors[new] = actors.pop(old)
+                changed = True
+        return changed
+
     def record_verified(
         self,
         actor_id: str,
@@ -86,8 +96,12 @@ class IdentityRegistry:
         preview_origin: str,
         tenant_id: str,
     ) -> None:
+        actor_id = canonical_actor_id(actor_id)
         data = self._read()
-        actor = data.get("actors", {}).get(actor_id)
+        actors = data.setdefault("actors", {})
+        if self._migrate_legacy_keys(actors):
+            self._write(data)
+        actor = actors.get(actor_id)
         if not isinstance(actor, dict):
             raise IdentityRegistryError(f"actor is missing from registry: {actor_id}")
         actor.update(

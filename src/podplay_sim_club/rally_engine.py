@@ -8,6 +8,7 @@ from .storage import Storage
 from .time import isoformat, parse_instant
 from .tournament import run_tick as run_tournament_tick
 from .booking_intents import load_intent_ledger
+from .social_engine import tick as run_social_tick
 
 
 STATE_FILE = "rally-engine.json"
@@ -27,13 +28,13 @@ def tick(root: Path, hours: int = 2, now: Optional[datetime] = None) -> Dict[str
             state = {"schemaVersion": 1, "id": scenario["id"], "startedAt": isoformat(instant), "endsAt": isoformat(instant + timedelta(hours=hours)), "ticks": 0, "status": "active"}
         if state.get("status") == "complete":
             _write_run_summary(storage, state)
-            return {"status": "complete", "state": state, "remoteWrites": 0}
-        if parse_instant(state["endsAt"]) <= instant:
-            state.update({"status": "complete", "completedAt": isoformat(instant), "lastAction": "session window ended"})
+            state.update({"status": "monitoring", "resumedAt": isoformat(instant), "lastAction": "tournament monitoring resumed"})
+        if state.get("status") == "active" and parse_instant(state["endsAt"]) <= instant:
+            state.update({"status": "monitoring", "completedAt": isoformat(instant), "lastAction": "session window ended; tournament monitoring continues"})
             storage.write_json(storage.state / STATE_FILE, state)
             _write_run_summary(storage, state)
-            return {"status": "complete", "state": state, "remoteWrites": 0}
         storage.write_json(storage.state / STATE_FILE, state)
+    social = run_social_tick(root, now=instant)
     result = run_tournament_tick(root, now=instant)
     with storage.writer_lock():
         state = storage.load_json(storage.state / STATE_FILE, default=state)
@@ -41,7 +42,7 @@ def tick(root: Path, hours: int = 2, now: Optional[datetime] = None) -> Dict[str
         state["lastTickAt"] = isoformat(instant)
         state["lastAction"] = result["action"]
         storage.write_json(storage.state / STATE_FILE, state)
-    return {"status": "active", "state": state, "action": result["action"], "remoteWrites": 0}
+    return {"status": state["status"], "state": state, "action": result["action"], "socialOffers": social["offers"], "remoteWrites": 0}
 
 
 def _write_run_summary(storage: Storage, state: Dict[str, Any]) -> None:

@@ -191,7 +191,7 @@ def read_back_event(
         raise PreviewReadError("booking event read-back does not match the planned occurrence")
     booked_by = event.get("bookedBy")
     if not isinstance(booked_by, dict) or booked_by.get("id") != plan["ownerUserId"]:
-        raise PreviewReadError("booking event owner does not match Red Captain")
+        raise PreviewReadError("booking event owner does not match the player who booked")
     return {
         "eventId": event_id,
         "type": event.get("type"),

@@ -1,29 +1,30 @@
 {
   "schemaVersion": 1,
   "id": "needs-match",
-  "interactionId": "red-blue-001",
-  "initiator": "red-captain",
-  "candidate": "blue-captain",
+  "interactionId": "andy-terry-001",
+  "teamId": "bogard-higashi",
+  "initiator": "andy-bogard",
+  "candidate": "terry-bogard",
   "need": "desireToPlay",
   "needs": {
-    "red-captain": {
+    "andy-bogard": {
       "initialPressure": 70,
       "threshold": 80,
       "driftPerBeat": 15
     },
-    "blue-captain": {
+    "terry-bogard": {
       "initialPressure": 45,
       "threshold": 80,
       "driftPerBeat": 5
     }
   },
   "availability": {
-    "red-captain": {
+    "andy-bogard": {
       "daysAhead": [0, 14],
       "localWindows": ["08:00-12:00"],
       "durationMinutes": 30
     },
-    "blue-captain": {
+    "terry-bogard": {
       "daysAhead": [0, 14],
       "localWindows": ["08:00-12:00"],
       "durationMinutes": 30

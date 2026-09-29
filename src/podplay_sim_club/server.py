@@ -1,4 +1,4 @@
-"""Read-only local observatory server."""
+"""Local observatory server with one attested captain-result action."""
 
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -8,8 +8,10 @@ import threading
 from typing import Optional
 
 from .actor_runtime import run_tick as run_actor_tick
+from .identity_registry import TEAM_ACTOR_NAMES
 from .orchestrator import Orchestrator
 from .preview_match_ledger import sanitized_match_index
+from .tournament import acknowledge_result_request, report_winner
 
 
 class ObservatoryServer:
@@ -60,6 +62,18 @@ class ObservatoryServer:
                         and isinstance(ledger.get("matches"), dict)
                         else {"activeOccurrenceKey": None, "matches": []}
                     )
+                    tournament = _tournament_fixture(orchestrator)
+                    if tournament is not None:
+                        match_index["matches"] = [
+                            match
+                            for match in match_index["matches"]
+                            if match.get("eventId") != tournament["match"]["eventId"]
+                        ]
+                        for match in match_index["matches"]:
+                            match["active"] = False
+                        match_index["matches"].append(tournament["match"])
+                        match_index["activeOccurrenceKey"] = tournament["match"]["occurrenceKey"]
+                        snapshot = tournament["snapshot"]
                     self._json(HTTPStatus.OK, {
                         "previewMatch": snapshot if isinstance(snapshot, dict) else None,
                         "previewMatches": _with_known_venue(orchestrator, match_index),
@@ -74,6 +88,33 @@ class ObservatoryServer:
                     )
                     return
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
+
+            def do_POST(self):  # noqa: N802
+                if self.path not in {"/api/tournament/report", "/api/tournament/acknowledge"}:
+                    self._json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if length < 1 or length > 1024:
+                        raise ValueError("invalid request length")
+                    payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                    if not isinstance(payload, dict):
+                        raise ValueError("invalid request")
+                    if self.path == "/api/tournament/report":
+                        state = report_winner(
+                            orchestrator.storage.root,
+                            payload.get("winner"),
+                            payload.get("reporter"),
+                        )
+                        result = {"status": state["rounds"]["semi-final"]["status"], "winner": state["rounds"]["semi-final"]["winner"]}
+                    else:
+                        result = acknowledge_result_request(
+                            orchestrator.storage.root, payload.get("actorId")
+                        )
+                except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid_captain_report"})
+                    return
+                self._json(HTTPStatus.OK, result)
 
             def log_message(self, fmt, *args):
                 print(f"observatory: {fmt % args}")
@@ -153,10 +194,12 @@ def _recent_messages(orchestrator: Orchestrator):
 def _actor_directory(orchestrator: Orchestrator):
     directory = {
         "sofia": "Sofia Alvarez", "alex": "Alex Morgan", "riley": "Riley Chen",
-        "lead": "Lead Coordinator", "red-captain": "Andy Bogard",
-        "blue-captain": "Terry Bogard", "kyo-captain": "Kyo Kusanagi",
+        "lead": "Lead Coordinator", "andy-bogard": "Andy Bogard",
+        "terry-bogard": "Terry Bogard", "kyo-captain": "Kyo Kusanagi",
         "benimaru": "Benimaru Nikaido",
     }
+    directory.update({actor_id: " ".join(names) for actor_id, names in TEAM_ACTOR_NAMES.items()})
+    directory.update({"king-captain": "King", "mai": "Mai Shiranui"})
     roster = orchestrator.storage.load_json(
         orchestrator.storage.root / "characters" / "roster.json", default={}
     )
@@ -229,6 +272,79 @@ def _with_known_venue(orchestrator: Orchestrator, match_index):
                 actor_id = participant.get("actorId")
                 participant["label"] = directory.get(actor_id, actor_id)
     return match_index
+
+
+def _tournament_fixture(orchestrator):
+    """Project the active tournament fixture without replacing historical matches."""
+    ledger = orchestrator.storage.load_json(
+        orchestrator.storage.state / "booking-intents.json", default={}
+    )
+    if not isinstance(ledger, dict):
+        return None
+    intents = ledger.get("intents", {})
+    final = intents.get("intent:tournament:bogard-japan-women-fighters-001:final")
+    semi = intents.get("intent:tournament:bogard-japan-women-fighters-001:semi-final")
+    intent = final if isinstance(final, dict) and final.get("status") in {"event_created", "players_registered"} else semi
+    if not isinstance(intent, dict) or intent.get("status") not in {
+        "event_created", "players_registered"
+    }:
+        return None
+    event = intent.get("event")
+    plan = intent.get("previewPlan")
+    if not isinstance(event, dict) or not isinstance(plan, dict):
+        return None
+    event_id = event.get("eventId")
+    occurrence_key = plan.get("occurrenceKey")
+    if not isinstance(event_id, str) or not isinstance(occurrence_key, str):
+        return None
+    participants = []
+    for signup in intent.get("signups", []):
+        if not isinstance(signup, dict) or not isinstance(signup.get("actorId"), str):
+            continue
+        participants.append(
+            {
+                "actorId": signup["actorId"],
+                "role": "registered tournament player",
+                "invitationStatus": "REGISTERED",
+                "attendance": "not refreshed",
+            }
+        )
+    venue = {
+        "areaName": plan.get("areaName"),
+        "podName": plan.get("podName"),
+        "timezone": "America/New_York",
+    }
+    evidence = intent.get("evidence")
+    round_name = evidence.get("round", "fixture") if isinstance(evidence, dict) else "fixture"
+    match = {
+        "occurrenceKey": occurrence_key,
+        "occurrenceCode": f"TOURNAMENT-{str(round_name).upper()}",
+        "active": True,
+        "phase": "scheduled",
+        "eventId": event_id,
+        "eventCode": f"EVT-{''.join(char for char in event_id if char.isalnum())[:8].upper()}",
+        "label": event.get("name") or "Tournament fixture",
+        "eventStatus": event.get("status") or "PUBLISHED",
+        "startTime": event.get("startTime") or plan.get("startTime"),
+        "endTime": event.get("endTime") or plan.get("endTime"),
+        "podId": plan.get("podId"),
+        "venue": venue,
+        "participants": participants,
+    }
+    return {
+        "match": match,
+        "snapshot": {
+            "schemaVersion": 1,
+            "result": "SCHEDULED",
+            "pullRequest": plan.get("pullRequest"),
+            "observedAt": plan.get("observedAt"),
+            "event": {
+                "eventId": event_id,
+                "status": event.get("status") or "PUBLISHED",
+            },
+            "venue": venue,
+        },
+    }
 
 
 def serve(
