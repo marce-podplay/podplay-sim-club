@@ -175,6 +175,16 @@ cannot inspect. If the product response explicitly exposes a same-preview-origin
 invite link, it is stored as `inviteLink.url`; otherwise the record says
 `not_exposed_by_product`. No link is guessed or manufactured.
 
+For player-created share invitations, PodPlay returns `redeemUrl` while the
+share dialog opens. `capture_share_invitation_link` is a player action that
+validates that response. With explicit preview authorization, the adapter keeps
+the bearer URL in ignored `state/share-invitations.json` with mode `0600`; it is
+not copied into the shared channel, journals, or committed files. The local
+observatory can show this retained link to the operator. The recipient still has
+to independently accept the product invitation. A captured-but-unsent link whose
+booking has ended becomes `EXPIRED_UNSENT`; King reports the missed window and
+Riley records a fresh request rather than reusing it.
+
 `characters/roster.json` separates stable technical actor IDs from personas.
 Andy Bogard (`andy-bogard`) and Terry Bogard (`terry-bogard`) play for
 Bogard-Higashi. When Andy wants to play, he books and invites Terry. Joe Higashi is their future
@@ -369,6 +379,8 @@ booking:
 ./club preview match-status
 ./club preview check-in --dry-run
 ./club preview check-in --apply --confirm-origin "$preview_origin"
+./club preview training-check-in --dry-run --intent intent:training:women-fighters-training-001 --actor mai
+./club preview training-check-in --apply --confirm-origin "$preview_origin" --intent intent:training:women-fighters-training-001 --actor mai
 ```
 
 `preview book` stores its occurrence plan before the one allowed `ORDER`, searches
@@ -377,8 +389,11 @@ afterward. A retry reuses the existing event; the writer object refuses a second
 request in the same run. `preview join` then reconciles one leader-paid Blue
 invitation, runs a non-persisting acceptance preview, and accepts through Blue's
 own token. `preview match-status` is a zero-write assertion that reports waiting,
-ready-for-check-in, or pass. `preview check-in` reads both statuses but refuses
-to write before the saved event start time.
+ready-for-check-in, or pass. `preview check-in` and the per-player
+`preview training-check-in` path use the Club arrival window: it opens one hour
+before the scheduled start and closes only after the scheduled end, so a late
+player can still check in. Neither command infers attendance; `--apply` records
+only the selected player's product check-in and reads it back.
 
 Sanitized progress lives in the ignored occurrence ledger
 `state/preview-matches.json`. An existing `state/preview-manual-match.json` is
@@ -480,6 +495,16 @@ substitutes for the other.
 6. Private actor credentials and auth caches may exist locally for named
    players. Reuse them to log in; never expose, copy into state, or recreate an
    identity just because a session is missing.
+   Browser sessions are isolated: a successful API login or login in one
+   automation browser does not authenticate another browser profile. Verify the
+   player UI actually leaves `/login` and reaches `/book` before treating that
+   browser session as usable.
+7. Use `./club preview session-check` to test the seeded owner, players, and
+   front desk (Sofia, Andy, Terry, and Riley). It creates a short-lived Firebase
+   session for each identity, reads `/users/current`, then discards that token
+   and writes a secret-free local result under `state/runs/`. It does not create,
+   modify, or log out a browser profile; browser login remains a separate
+   player-facing interaction. Add `--actor <id>` to narrow the check.
 
 The September W37 probe demonstrated that Open Pod can expose shared-table
 availability and a player booking can reach a zero-total preview order through

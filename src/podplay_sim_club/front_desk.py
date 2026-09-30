@@ -75,6 +75,8 @@ def _handle_request(storage: Storage, messages: list, request: Any, observed_at:
         return {"actorId": "riley", "action": "pass", "detail": "request disappeared", "observedAt": observed_at}
     if request.get("kind") == "new_event_request":
         return _new_event_request(storage, request, observed_at)
+    if request.get("kind") == "share_invitation_expired":
+        return _expired_share_invitation(storage, request, observed_at)
     request_id = request.get("id")
     intent_id = request.get("intentId")
     if not isinstance(request_id, str) or not isinstance(intent_id, str):
@@ -108,6 +110,35 @@ def _new_event_request(storage: Storage, request: Dict[str, Any], observed_at: s
             "evidence": {"clubRequestId": request_id}, "remoteWrites": 0,
         })
     return _reply(storage, request, observed_at, "I logged the new-session request. The lead may plan a court, but nothing will publish until the owner promotes it.", "new_event_requested", intent_id=intent_id)
+
+
+def _expired_share_invitation(storage: Storage, request: Dict[str, Any], observed_at: str) -> Dict[str, Any]:
+    """Turn a missed booking window into one fresh, non-published request."""
+    request_id = request.get("id")
+    requester = request.get("from")
+    participants = request.get("participants")
+    duration = request.get("durationMinutes")
+    if (
+        not isinstance(request_id, str)
+        or not isinstance(requester, str)
+        or not isinstance(participants, list)
+        or not all(isinstance(actor_id, str) for actor_id in participants)
+        or not isinstance(duration, int)
+        or duration < 30
+        or duration % 30
+    ):
+        return _reply(storage, request, observed_at, "I need the named players and duration before I can reopen this session.", "request_missing_session_details")
+    intent_id = f"intent:rebooking:{request_id}"
+    ledger = load_intent_ledger(storage)
+    if intent_id not in ledger["intents"]:
+        save_intent(storage, ledger, {
+            "schemaVersion": 1, "id": intent_id, "status": "requested",
+            "reason": "expired_unsent_share_invitation", "journey": "customer_training",
+            "createdAt": observed_at, "requestedBy": requester, "bookerActorId": requester, "participants": list(participants),
+            "constraints": {"durationMinutes": duration, "daysAhead": [0, 14], "localWindows": ["00:00-24:00"], "slotPolicy": "nearest_valid_low_contention"},
+            "evidence": {"expiredShareInvitationRequestId": request_id}, "remoteWrites": 0,
+        })
+    return _reply(storage, request, observed_at, "I logged a fresh 30-minute Women Fighters request. The old booking stays in history; the lead must find a new free court before King can book and share a new invitation.", "rebooking_requested", intentId=intent_id)
 
 
 def _captains_agreed(messages: list, intent: Dict[str, Any], intent_id: str) -> bool:

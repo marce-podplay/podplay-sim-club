@@ -76,6 +76,8 @@ class ObservatoryServer:
                         match_index["matches"].append(tournament["match"])
                         match_index["activeOccurrenceKey"] = tournament["match"]["occurrenceKey"]
                         snapshot = tournament["snapshot"]
+                    match_index = _with_observed_bookings(orchestrator, match_index)
+                    match_index = _with_share_invitations(orchestrator, match_index)
                     match_index = _with_known_venue(orchestrator, match_index)
                     _attach_preview_links(match_index, preview_origin)
                     self._json(HTTPStatus.OK, {
@@ -84,6 +86,7 @@ class ObservatoryServer:
                         "previewMatches": match_index,
                         "messages": _recent_messages(orchestrator),
                         "storylines": _active_storylines(orchestrator),
+                        "clubState": _club_state(orchestrator),
                     })
                     return
                 if self.path == "/health":
@@ -287,6 +290,21 @@ def _active_storylines(orchestrator: Orchestrator):
     return rows
 
 
+def _club_state(orchestrator: Orchestrator):
+    """Expose the local engine clock separately from any stale remote snapshot."""
+    rally = orchestrator.storage.load_json(orchestrator.storage.state / "rally-engine.json", default={})
+    ledger = orchestrator.storage.load_json(orchestrator.storage.state / "booking-intents.json", default={})
+    recovery = next((row for row in ledger.get("intents", {}).values()
+                     if isinstance(row, dict) and row.get("reason") == "missed_session_recovery"), None) if isinstance(ledger, dict) else None
+    return {
+        "lastTickAt": rally.get("lastTickAt") if isinstance(rally, dict) else None,
+        "recovery": {
+            "status": recovery.get("status"),
+            "nextAction": recovery.get("nextAction"),
+        } if isinstance(recovery, dict) else None,
+    }
+
+
 def _with_known_venue(orchestrator: Orchestrator, match_index):
     """Attach the latest known venue to every record using the same pod."""
     directory = _actor_directory(orchestrator)
@@ -308,6 +326,127 @@ def _with_known_venue(orchestrator: Orchestrator, match_index):
             if isinstance(participant, dict):
                 actor_id = participant.get("actorId")
                 participant["label"] = directory.get(actor_id, actor_id)
+    return match_index
+
+
+def _with_observed_bookings(orchestrator: Orchestrator, match_index):
+    """Merge UI-confirmed player bookings without inventing an event id or attendance."""
+    observations = orchestrator.storage.load_json(
+        orchestrator.storage.state / "observed-bookings.json", default={}
+    )
+    rows = observations.get("bookings") if isinstance(observations, dict) else None
+    if not isinstance(rows, list):
+        return match_index
+    existing = {row.get("occurrenceKey") for row in match_index.get("matches", []) if isinstance(row, dict)}
+    selected = None
+    for row in rows:
+        if not isinstance(row, dict) or row.get("occurrenceKey") in existing:
+            continue
+        match_index["matches"].append(row)
+        if row.get("active") is True and isinstance(row.get("occurrenceKey"), str):
+            selected = row["occurrenceKey"]
+    if selected is not None and not match_index.get("activeOccurrenceKey"):
+        for match in match_index["matches"]:
+            if isinstance(match, dict):
+                match["active"] = match.get("occurrenceKey") == selected
+        match_index["activeOccurrenceKey"] = selected
+    match_index["matches"].sort(key=lambda row: (str(row.get("startTime") or ""), str(row.get("occurrenceKey") or "")))
+    return match_index
+
+
+def _with_share_invitations(orchestrator: Orchestrator, match_index):
+    """Attach explicitly retained preview share links and actual remaining seats."""
+    value = orchestrator.storage.load_json(
+        orchestrator.storage.state / "share-invitations.json", default={}
+    )
+    invitations = value.get("invitations") if isinstance(value, dict) else None
+    if not isinstance(invitations, dict):
+        return match_index
+    intents = orchestrator.storage.load_json(orchestrator.storage.state / "booking-intents.json", default={})
+    training_by_occurrence = {
+        row.get("booking", {}).get("occurrenceKey"): row
+        for row in intents.get("intents", {}).values()
+        if isinstance(row, dict) and row.get("journey") == "customer_training" and isinstance(row.get("booking"), dict)
+    } if isinstance(intents, dict) else {}
+    messages = orchestrator.storage.read_jsonl(orchestrator.storage.channel_path("club"))
+    for match in match_index.get("matches", []):
+        if not isinstance(match, dict):
+            continue
+        invitation = invitations.get(match.get("occurrenceKey"))
+        if not isinstance(invitation, dict):
+            continue
+        match["shareInvitation"] = {
+            key: invitation.get(key)
+            for key in ("redeemUrl", "maxRedeems", "redeemsRemaining", "capturedAt")
+        }
+        lifecycle = match.get("lifecycle") if isinstance(match.get("lifecycle"), dict) else {}
+        steps = lifecycle.get("steps") if isinstance(lifecycle.get("steps"), dict) else {}
+        # A retained link is useful evidence only until redemption.  Do not
+        # downgrade a read-back SHARE_REDEEMED or checked-in lifecycle when a
+        # dashboard snapshot is refreshed.
+        steps.setdefault("invitation", "LINK_CAPTURED")
+        lifecycle["steps"] = steps
+        match["lifecycle"] = lifecycle
+        training = training_by_occurrence.get(match.get("occurrenceKey"))
+        if isinstance(training, dict):
+            team_id = training.get("trainingTeamId")
+            if isinstance(team_id, str) and team_id:
+                team_label = " ".join(part.title() for part in team_id.split("-"))
+            else:
+                # The original King/Mai scenario predates trainingTeamId.
+                team_label = "Women Fighters"
+            match["label"] = f"{team_label} training"
+            # The generic occurrence ledger falls back to Andy/Terry for old
+            # two-player matches.  A known training intent is stronger local
+            # evidence, so replace that fallback rather than blending teams.
+            training_ids = {actor_id for actor_id in training.get("participants", []) if isinstance(actor_id, str)}
+            participants = [row for row in match.get("participants", []) if isinstance(row, dict) and row.get("actorId") in training_ids]
+            match["participants"] = participants
+            actor_ids = {row.get("actorId") for row in participants}
+            for actor_id in training.get("participants", []):
+                if actor_id not in actor_ids:
+                    participants.append({
+                        "actorId": actor_id,
+                        "role": "booking owner" if actor_id == training.get("bookerActorId") else "intended training partner",
+                        "bookingStatus": "BOOKED" if actor_id == training.get("bookerActorId") else "INVITATION_READY",
+                        "invitationStatus": "OWNER" if actor_id == training.get("bookerActorId") else "LINK_CAPTURED",
+                        "attendance": "NOT_OBSERVED",
+                    })
+            accepted = any(
+                isinstance(row, dict)
+                and row.get("kind") == "share_invitation_accepted"
+                and row.get("intentId") == training.get("id")
+                and row.get("from") in training_ids
+                and row.get("from") != training.get("bookerActorId")
+                for row in messages
+            )
+            if accepted:
+                if lifecycle.get("state") not in {"CHECKED_IN", "CHECK_IN_RECORDED"}:
+                    lifecycle["state"] = "INVITATION_ACCEPTED"
+                lifecycle["steps"]["acceptance"] = "ACCEPTED"
+                for participant in participants:
+                    if isinstance(participant, dict) and participant.get("actorId") != training.get("bookerActorId"):
+                        participant["bookingStatus"] = "ACCEPTED"
+                        participant["invitationStatus"] = "ACCEPTED"
+            observation = training.get("eventObservation")
+            if isinstance(observation, dict) and observation.get("outcome") == "missed_session":
+                lifecycle["state"] = "MISSED_SESSION"
+                lifecycle["steps"]["checkIn"] = "NO_CHECKINS_OBSERVED"
+                lifecycle["steps"]["play"] = "NOT_PLAYED"
+                observed_players = observation.get("participants")
+                if isinstance(observed_players, dict):
+                    for participant in participants:
+                        if not isinstance(participant, dict):
+                            continue
+                        evidence = observed_players.get(participant.get("actorId"))
+                        if isinstance(evidence, dict) and evidence.get("checkIn") == "NOT_CHECKED_IN":
+                            participant["attendance"] = "NOT_CHECKED_IN"
+            elif participants and all(
+                row.get("attendance") == "CHECKED_IN" for row in participants if isinstance(row, dict)
+            ):
+                lifecycle["state"] = "CHECKED_IN"
+                lifecycle["steps"]["checkIn"] = "CHECKED_IN"
+                lifecycle["steps"].setdefault("play", "NOT_RECORDED")
     return match_index
 
 

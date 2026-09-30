@@ -94,6 +94,10 @@ class IdentityRegistry:
                 changed = True
         return changed
 
+    def stored(self) -> Dict[str, ActorIdentity]:
+        """Return identities already on disk. This does not create a password."""
+        return self._identities(self._read())
+
     def record_verified(
         self,
         actor_id: str,

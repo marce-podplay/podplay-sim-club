@@ -113,6 +113,7 @@ def sanitized_match_index(ledger: JsonObject) -> JsonObject:
                 "endTime": plan.get("endTime"),
                 "podId": plan.get("podId"),
                 "participants": _participants(match, blue_invitation),
+                "lifecycle": _lifecycle(match),
             }
         )
     rows.sort(key=lambda row: (str(row.get("startTime") or ""), row["occurrenceKey"]))
@@ -153,6 +154,7 @@ def _participants(match: JsonObject, blue_invitation: JsonObject) -> list:
                 {
                     "actorId": actor_id,
                     "role": participant.get("role", "participant"),
+                    "bookingStatus": participant.get("bookingStatus", "BOOKED"),
                     "invitationStatus": participant.get("invitationStatus"),
                     "attendance": participant.get("attendance", "not refreshed"),
                     "invitationCode": _short_code(
@@ -166,16 +168,42 @@ def _participants(match: JsonObject, blue_invitation: JsonObject) -> list:
         {
             "actorId": "andy-bogard",
             "role": "booking owner",
+            "bookingStatus": "BOOKED",
             "attendance": "not refreshed",
         },
         {
             "actorId": "terry-bogard",
             "role": "invited player",
+            "bookingStatus": "BOOKED",
             "invitationStatus": blue_invitation.get("status", "unknown"),
             "attendance": blue_invitation.get("checkInStatus", "not refreshed"),
             "invitationCode": _short_code("INV", blue_invitation.get("invitationId")),
         },
     ]
+
+
+def _lifecycle(match: JsonObject) -> JsonObject:
+    """Project only evidenced booking stages; elapsed time never means played."""
+    saved = match.get("lifecycle")
+    if isinstance(saved, dict):
+        return deepcopy(saved)
+    phase = str(match.get("phase") or "planned").upper()
+    participants = _participants(match, {})
+    invited = any(row.get("invitationStatus") for row in participants)
+    accepted = invited and all(
+        row.get("role") == "booking owner" or row.get("invitationStatus") in {"ACCEPTED", "REGISTERED"}
+        for row in participants
+    )
+    return {
+        "state": "ACCEPTED" if accepted else "INVITATION_SENT" if invited else phase,
+        "steps": {
+            "booking": "BOOKED" if phase not in {"PLANNED", "PENDING"} else "PLANNED",
+            "invitation": "SENT" if invited else "NOT_SENT",
+            "acceptance": "ACCEPTED" if accepted else "AWAITING_INVITEE",
+            "checkIn": "NOT_OBSERVED",
+            "play": "NOT_RECORDED",
+        },
+    }
 
 
 def _new_ledger(target_origin: str) -> JsonObject:

@@ -10,9 +10,11 @@ from .tournament import run_tick as run_tournament_tick
 from .booking_intents import load_intent_ledger
 from .social_engine import tick as run_social_tick
 from .front_desk import tick as run_front_desk_tick
-from .event_observation import observe_finished_events
+from .event_observation import observe_finished_events, observe_finished_training_sessions, reconcile_missed_training_recoveries
+from .result_requests import request_finished_event_result
 from .owner_engagement import tick as run_owner_engagement_tick
 from .club_rounds import tick as run_club_round
+from .training_sessions import next_booking_task
 
 
 STATE_FILE = "rally-engine.json"
@@ -85,7 +87,15 @@ def tick(root: Path, hours: int = 2, now: Optional[datetime] = None) -> Dict[str
         if after == before or at_end_of_queue:
             break
     observation = observe_finished_events(root, now=instant)
+    training_observation = observe_finished_training_sessions(root, now=instant)
+    training_recovery = reconcile_missed_training_recoveries(root, now=instant)
+    result_request = request_finished_event_result(root, now=instant)
     result = run_tournament_tick(root, now=instant)
+    training = next_booking_task(root)
+    if training.get("action") != "pass":
+        result = training
+    if result_request.get("action") != "pass":
+        result = result_request
     with storage.writer_lock():
         state = storage.load_json(storage.state / STATE_FILE, default=state)
         state["ticks"] = int(state.get("ticks", 0)) + 1
@@ -94,7 +104,7 @@ def tick(root: Path, hours: int = 2, now: Optional[datetime] = None) -> Dict[str
         state["schedulerCursor"] = cursor
         storage.write_json(storage.state / STATE_FILE, state)
         _write_interpretation_audit(storage, rounds, isoformat(instant))
-    return {"status": state["status"], "state": state, "action": result["action"], "socialOffers": social["offers"], "rounds": rounds, "ownerEngagement": owner_engagement, "player": player, "frontDesk": front_desk, "observation": observation, "remoteWrites": 0}
+    return {"status": state["status"], "state": state, "action": result["action"], "socialOffers": social["offers"], "rounds": rounds, "ownerEngagement": owner_engagement, "player": player, "frontDesk": front_desk, "observation": observation, "trainingObservation": training_observation, "trainingRecovery": training_recovery, "resultRequest": result_request, "training": training, "remoteWrites": 0}
 
 
 def _write_interpretation_audit(storage: Storage, rounds: list[Dict[str, Any]], observed_at: str) -> None:

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "women-fighters-training-001",
+  "journey": "customer_training",
+  "teamId": "women-fighters",
+  "captainActorId": "king-captain",
+  "teammateActorId": "mai",
+  "durationMinutes": 30,
+  "daysAhead": [0, 14],
+  "localWindows": ["00:00-24:00"],
+  "slotPolicy": "nearest_valid_low_contention"
+}

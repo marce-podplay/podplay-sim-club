@@ -86,6 +86,50 @@ def record_invite_sent(
     return record
 
 
+def record_training_check_in(
+    storage: Storage,
+    *,
+    occurrence_key: str,
+    event_id: str,
+    actor_id: str,
+    actor_label: str,
+    recipient_actor_ids: list[str],
+    observed_at: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Publish an idempotent local signal after a verified player check-in.
+
+    The product read-back remains the attendance evidence.  This record merely
+    makes that evidence visible to the club, and never asserts that a session
+    was played or completed.
+    """
+    if not all(isinstance(value, str) and value for value in (occurrence_key, event_id, actor_id, actor_label)):
+        raise ValueError("training check-in signal requires booking and actor details")
+    record = {
+        "protocolVersion": PROTOCOL_VERSION,
+        "id": f"notification:training_check_in:{event_id}:{actor_id}",
+        "channel": "club",
+        "kind": "training_check_in_recorded",
+        "occurrenceKey": occurrence_key,
+        "from": actor_id,
+        "to": [recipient for recipient in recipient_actor_ids if recipient != actor_id],
+        "text": f"{actor_label} checked in for the W37 training session. Attendance is recorded; play is not yet reported.",
+        "payload": {
+            "eventId": event_id,
+            "actorId": actor_id,
+            "attendance": "CHECKED_IN",
+            "readBack": True,
+        },
+        "observedAt": observed_at or datetime.now(timezone.utc).isoformat(),
+        "remoteWrites": 0,
+    }
+    with storage.writer_lock():
+        path = storage.channel_path("club")
+        if any(row.get("id") == record["id"] for row in storage.read_jsonl(path)):
+            return record
+        storage.append_jsonl(path, record)
+    return record
+
+
 def _product_invite_url(invitation: Dict[str, Any], policy: TargetPolicy) -> Optional[str]:
     """Return a URL only when it was explicitly supplied by the product."""
     candidates = [

@@ -2,6 +2,7 @@
   "schemaVersion": 1,
   "actions": {
     "book_match": {"roles": ["player"], "writesProduct": true},
+    "capture_share_invitation_link": {"roles": ["player"], "writesProduct": true, "persistsSecret": false},
     "invite_player": {"roles": ["player"], "writesProduct": true},
     "accept_invitation": {"roles": ["player"], "writesProduct": true},
     "check_in": {"roles": ["player", "podplay_admin"], "writesProduct": true},

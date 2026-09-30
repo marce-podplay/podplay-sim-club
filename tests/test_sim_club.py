@@ -19,12 +19,14 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 from podplay_sim_club.actions import ActionValidator, IllegalAction
 from podplay_sim_club.actor_runtime import run_tick
 from podplay_sim_club.booking_intents import load_intent_ledger, save_intent
-from podplay_sim_club.cli import main
+from podplay_sim_club.cli import _local_slot_claim, main
 from podplay_sim_club.config import ClubConfig, ConfigurationError, RunMode
 from podplay_sim_club.credentials import CredentialsError, PreviewCredentials
 from podplay_sim_club.communications import record_invite_sent
-from podplay_sim_club.firebase_auth import FirebaseAuthenticator
+from podplay_sim_club.firebase_auth import AuthSession, FirebaseAuthenticator
+from podplay_sim_club.player_login import session_check_record, verify_player_session
 from podplay_sim_club.identity_registry import ActorIdentity, IdentityRegistry
+from podplay_sim_club.preview_seed import load_preview_seed, seed_actor_ids
 from podplay_sim_club.fake_preview import FakePreview
 from podplay_sim_club.orchestrator import Orchestrator, SimulatedCrash
 from podplay_sim_club.preview import PreviewAdapter
@@ -41,6 +43,7 @@ from podplay_sim_club.preview_match_ledger import (
 from podplay_sim_club.preview_participation import (
     PreviewAcceptanceEvaluator,
     PreviewParticipationWriter,
+    check_in_window,
     classify_match_status,
 )
 from podplay_sim_club.preview_evaluation import (
@@ -220,6 +223,34 @@ class SimClubTestCase(unittest.TestCase):
         later = social_tick(self.root, now=datetime(2026, 9, 23, 15, 30, tzinfo=timezone.utc))
         self.assertFalse(any(offer.get("kind") == "stimulate_quiet_club" for offer in later["offers"]))
 
+    def test_captain_challenge_cooldown_does_not_block_a_distinct_teammate_offer(self):
+        from podplay_sim_club.social_engine import tick as social_tick
+
+        storage = Storage(self.root)
+        storage.write_json(storage.state / "social-engine.json", {
+            "schemaVersion": 1,
+            "lastTickAt": "2026-09-23T15:00:00Z",
+            "motives": {
+                "andy-bogard": {"desireToPlay": 100, "curiosity": 0, "frustration": 0},
+                "terry-bogard": {"desireToPlay": 40, "curiosity": 0, "frustration": 0},
+            },
+            # Old actor-wide records are retained only as history; they cannot
+            # suppress a different legal interaction after migration.
+            "cooldowns": {"andy-bogard": "2026-09-23T15:00:00Z"},
+            "interactionCooldowns": {
+                "andy-bogard:challenge_rival_captain:kyo-captain": "2026-09-23T15:00:00Z"
+            },
+            "interactionCooldownSemantics": "action-only",
+        })
+
+        result = social_tick(self.root, now=datetime(2026, 9, 23, 15, 5, tzinfo=timezone.utc))
+        offers = [offer for offer in result["offers"] if offer.get("actorId") == "andy-bogard"]
+        self.assertIn("invite_teammate", [offer["kind"] for offer in offers])
+        self.assertNotIn("challenge_rival_captain", [offer["kind"] for offer in offers])
+        state = storage.load_json(storage.state / "social-engine.json")
+        self.assertIn("legacyActorCooldowns", state)
+        self.assertNotIn("cooldowns", state)
+
     def test_rally_tick_runs_a_direct_captain_challenge_round_then_stops(self):
         from podplay_sim_club.rally_engine import tick
 
@@ -264,6 +295,130 @@ class SimClubTestCase(unittest.TestCase):
             self.assertIn(side["teammateId"], team["members"])
             self.assertNotEqual(side["captainId"], side["teammateId"])
             self.assertTrue(set(side["guestEligible"]).issubset(set(team["members"]) - {side["captainId"], side["teammateId"]}))
+
+    def test_women_fighters_training_requires_king_proposal_then_mai_acceptance(self):
+        from podplay_sim_club.training_sessions import accept, propose
+
+        invited = propose(self.root, "women-fighters-training.json", FIXED_NOW)
+        self.assertEqual("captain_invited", invited["status"])
+        self.assertEqual(["king-captain", "mai"], invited["participants"])
+        self.assertEqual(30, invited["constraints"]["durationMinutes"])
+        self.assertEqual(0, invited["remoteWrites"])
+
+        agreed = accept(
+            self.root, "women-fighters-training.json",
+            datetime(2026, 9, 23, 15, 10, tzinfo=timezone.utc),
+        )
+        self.assertEqual("agreed", agreed["status"])
+        self.assertEqual("king-captain", agreed["bookerActorId"])
+        self.assertEqual("plan_live_w37_availability_then_player_booking", agreed["nextAction"])
+        messages = Storage(self.root).read_jsonl(Storage(self.root).channel_path("club"))
+        self.assertEqual(["training_invitation", "training_acceptance"], [row["kind"] for row in messages])
+        from podplay_sim_club.training_sessions import next_booking_task
+        task = next_booking_task(self.root)
+        self.assertEqual("plan_training_booking", task["action"])
+        self.assertEqual(agreed["id"], task["intentId"])
+        self.assertEqual(
+            ["capture_share_invitation_link", "invite_player", "accept_invitation"],
+            task["playerActionsAfterBooking"],
+        )
+
+    def test_player_share_invitation_link_is_private_and_same_preview_only(self):
+        from podplay_sim_club.share_invitations import (
+            ShareInvitationError,
+            capture_share_invitation_link,
+            record_share_invitation,
+            redeem_share_invitation,
+        )
+
+        policy = TargetPolicy.from_config(
+            ClubConfig(
+                mode=RunMode.PREVIEW_READONLY,
+                preview_origin=PREVIEW_ORIGIN,
+                allowed_preview_origins=(PREVIEW_ORIGIN,),
+            )
+        )
+        response = {
+            "id": "open-invitation-1",
+            "redeemUrl": PREVIEW_ORIGIN + "/invitation?key=private-key",
+            "maxRedeems": 3,
+            "redeemsRemaining": 2,
+        }
+        self.assertEqual(response["redeemUrl"], capture_share_invitation_link(response, policy))
+        record = record_share_invitation(
+            Storage(self.root), policy, key="observed:king", owner_actor_id="king-captain", response=response,
+        )
+        path = Storage(self.root).state / "share-invitations.json"
+        self.assertEqual(0o600, path.stat().st_mode & 0o777)
+        self.assertEqual(2, record["redeemsRemaining"])
+        with self.assertRaises(ShareInvitationError):
+            capture_share_invitation_link({"redeemUrl": "https://example.invalid/invitation?key=x"}, policy)
+
+        write_policy = TargetPolicy.from_config(
+            ClubConfig(
+                mode=RunMode.PREVIEW_WRITE,
+                preview_origin=PREVIEW_ORIGIN,
+                allowed_preview_origins=(PREVIEW_ORIGIN,),
+                preview_write_confirmation=PREVIEW_ORIGIN,
+            )
+        )
+
+        class Response:
+            status = 201
+            def __enter__(self): return self
+            def __exit__(self, *args): return None
+            def geturl(self): return PREVIEW_ORIGIN + "/apis/v2/events/invitations"
+            def read(self): return b'{"invitation":{"id":"invite-1"}}'
+
+        sent = []
+        redeem_share_invitation(
+            write_policy, "recipient-token", response["redeemUrl"],
+            transport=lambda request, _timeout: sent.append(request) or Response(),
+        )
+        self.assertEqual(
+            {"sharingKey": "private-key"},
+            json.loads(sent[0].data.decode("utf-8")),
+        )
+        self.assertNotIn("invitation?key=", sent[0].full_url)
+
+    def test_expired_unsent_share_invitation_notifies_mai_then_riley_opens_rebooking_request(self):
+        from podplay_sim_club.share_invitations import expire_unsent_booking_invitation
+        from podplay_sim_club.social_engine import tick as social_tick
+        from podplay_sim_club.front_desk import tick as front_desk_tick
+
+        storage = Storage(self.root)
+        key = "observed:king-training"
+        storage.write_json(storage.state / "share-invitations.json", {
+            "schemaVersion": 1,
+            "invitations": {key: {
+                "key": key, "ownerActorId": "king-captain", "invitationId": "open-1",
+                "redeemUrl": PREVIEW_ORIGIN + "/invitation?key=private", "maxRedeems": 1,
+                "redeemsRemaining": 1, "capturedAt": "2026-09-29T20:00:00Z",
+            }},
+        })
+        storage.write_json(storage.state / "observed-bookings.json", {
+            "schemaVersion": 1,
+            "bookings": [{
+                "occurrenceKey": key, "endTime": "2026-09-29T22:30:00Z",
+                "participants": [{"actorId": "king-captain"}, {"actorId": "mai", "invitationStatus": "LINK_CAPTURED_NOT_SENT"}],
+                "lifecycle": {"state": "BOOKED", "steps": {"invitation": "LINK_CAPTURED", "acceptance": "NOT_SENT"}},
+            }],
+        })
+
+        expired = expire_unsent_booking_invitation(
+            self.root, owner_actor_id="king-captain", now=datetime(2026, 9, 30, tzinfo=timezone.utc),
+        )
+        self.assertEqual("report_expired_share_invitation", expired["action"])
+        messages = storage.read_jsonl(storage.channel_path("club"))
+        self.assertEqual("share_invitation_expired", messages[-1]["kind"])
+        self.assertEqual(["mai", "riley"], messages[-1]["to"])
+        self.assertNotIn("invitation?key=", messages[-1]["text"])
+
+        social_tick(self.root, now=datetime(2026, 9, 30, tzinfo=timezone.utc))
+        response = front_desk_tick(self.root, now=datetime(2026, 9, 30, tzinfo=timezone.utc))
+        self.assertEqual("rebooking_requested", response["action"], response)
+        self.assertEqual(30, load_intent_ledger(storage)["intents"][response["intentId"]]["constraints"]["durationMinutes"])
+        self.assertEqual("EXPIRED_UNSENT", storage.load_json(storage.state / "observed-bookings.json")["bookings"][0]["lifecycle"]["state"])
 
     def test_only_designated_captain_can_attest_tournament_winner(self):
         storage = Storage(self.root)
@@ -877,6 +1032,45 @@ class PreviewConnectionTestCase(unittest.TestCase):
             self.assertEqual(0o600, cache.stat().st_mode & 0o777)
             self.assertNotIn("password", cache.read_text(encoding="utf-8"))
 
+    def test_player_login_summary_matches_the_registry_without_echoing_secrets(self):
+        identity = ActorIdentity("andy-bogard", "hidden@example.test", "Andy", "Bogard", "secret-value")
+        session = AuthSession("hidden@example.test", "cache", "token-value", "firebase-uid")
+        summary = verify_player_session(
+            "andy-bogard",
+            identity,
+            session,
+            {"id": "user-1", "email": "hidden@example.test", "roles": ["PLAYER"]},
+        )
+
+        self.assertEqual("user-1", summary["userId"])
+        self.assertEqual(["PLAYER"], summary["roles"])
+        self.assertNotIn("secret-value", json.dumps(summary))
+        self.assertNotIn("hidden@example.test", json.dumps(summary))
+        with self.assertRaises(PreviewReadError):
+            verify_player_session(
+                "andy-bogard",
+                identity,
+                session,
+                {"id": "user-1", "email": "other@example.test", "roles": ["PLAYER"]},
+            )
+
+    def test_session_check_covers_seeded_owner_players_and_front_desk_without_secrets(self):
+        self.assertEqual(
+            ("sofia", "andy-bogard", "terry-bogard", "riley"),
+            seed_actor_ids(load_preview_seed(REPO_ROOT)),
+        )
+        record = session_check_record([
+            {"actorId": "sofia", "roles": [], "emailMatched": True, "userId": "owner-id"},
+            {"actorId": "andy-bogard", "roles": ["PLAYER"], "emailMatched": True, "userId": "andy-id"},
+            {"actorId": "terry-bogard", "roles": ["PLAYER"], "emailMatched": True, "userId": "terry-id"},
+            {"actorId": "riley", "roles": ["ADMIN", "FRONT_DESK"], "emailMatched": True, "userId": "riley-id"},
+        ])
+        self.assertEqual("stateless_preview_session_check", record["mode"])
+        self.assertEqual("not_created_or_modified", record["browserSession"])
+        self.assertEqual(["sofia", "andy-bogard", "terry-bogard", "riley"], [row["actorId"] for row in record["actors"]])
+        self.assertNotIn("owner-id", json.dumps(record))
+        self.assertNotIn("riley-id", json.dumps(record))
+
     def test_preview_client_allows_get_but_rejects_other_origin(self):
         policy = TargetPolicy.from_config(
             ClubConfig(
@@ -1366,6 +1560,37 @@ class PreviewConnectionTestCase(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertNotEqual(first, other)
 
+    def test_local_slot_claim_serializes_only_an_unbooked_identical_plan(self):
+        candidate = {
+            "tableId": "w37-table-1",
+            "startTime": "2026-09-30T21:30:00Z",
+            "endTime": "2026-09-30T22:00:00Z",
+        }
+        ledger = {
+            "intents": {
+                "intent:training:japan-team:001": {
+                    "status": "preview_ready",
+                    "previewPlan": dict(candidate),
+                },
+                "intent:training:bogard-higashi:001": {
+                    "status": "agreed",
+                },
+            }
+        }
+
+        self.assertEqual(
+            {"id": "intent:training:japan-team:001"},
+            _local_slot_claim(ledger, "intent:training:bogard-higashi:001", candidate),
+        )
+
+        # A completed booking is represented by the product read-back, not a
+        # continuing local reservation. The next planner must query live
+        # availability and is free to select a different table or time.
+        ledger["intents"]["intent:training:japan-team:001"]["status"] = "booked"
+        self.assertIsNone(
+            _local_slot_claim(ledger, "intent:training:bogard-higashi:001", candidate)
+        )
+
     def test_participation_writer_uses_pending_leader_paid_invitation(self):
         policy = TargetPolicy.from_config(
             ClubConfig(
@@ -1492,6 +1717,16 @@ class PreviewConnectionTestCase(unittest.TestCase):
         owner["checkIn"]["status"] = "CHECKED_IN"
         blue["checkIn"]["status"] = "CHECKED_IN"
         self.assertEqual("PASS", classify_match_status(blue, owner, start, start))
+
+    def test_check_in_window_opens_one_hour_early_and_allows_late_arrival(self):
+        start = datetime(2026, 9, 30, 15, tzinfo=timezone.utc)
+        end = datetime(2026, 9, 30, 15, 30, tzinfo=timezone.utc)
+
+        self.assertEqual((False, "opens at 2026-09-30T14:00:00+00:00"), check_in_window(start, end, datetime(2026, 9, 30, 13, 59, 59, tzinfo=timezone.utc)))
+        self.assertEqual((True, "open"), check_in_window(start, end, datetime(2026, 9, 30, 14, tzinfo=timezone.utc)))
+        self.assertEqual((True, "open"), check_in_window(start, end, datetime(2026, 9, 30, 15, 29, 59, tzinfo=timezone.utc)))
+        self.assertEqual((True, "open"), check_in_window(start, end, end))
+        self.assertEqual((False, "closed at 2026-09-30T15:30:00+00:00"), check_in_window(start, end, datetime(2026, 9, 30, 15, 30, 1, tzinfo=timezone.utc)))
 
 
 def base64_url(value):

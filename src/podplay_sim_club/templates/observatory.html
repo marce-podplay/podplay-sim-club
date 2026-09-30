@@ -50,16 +50,15 @@
     .booking.current { border-color:var(--live); }
     #detail { margin-top:14px; min-height:44px; padding:10px 12px; border-left:3px solid var(--live); background:var(--panel); }
     .legend { margin-top:12px; color:var(--dim); }
-    .workspace { display:grid; grid-template-columns:minmax(280px,.75fr) minmax(510px,1.45fr) minmax(390px,1fr); gap:12px; margin-top:14px; align-items:start; }
+    .workspace { display:grid; grid-template-columns:minmax(360px,.85fr) minmax(620px,1.65fr); gap:12px; margin-top:14px; align-items:start; }
     .workspace > section { margin:0; }
     .event-list, .selected-event { min-height:520px; }
-    .message-drawer { min-height:520px; }
+    .message-drawer { min-height:0; margin-top:14px; }
     .drawer-toggle { border:1px solid var(--line); background:transparent; color:var(--live); padding:5px 8px; font:inherit; cursor:pointer; }
-    .workspace.drawer-collapsed { grid-template-columns:minmax(280px,.75fr) minmax(510px,1.45fr) 54px; }
+    .workspace.drawer-collapsed { grid-template-columns:minmax(360px,.85fr) minmax(620px,1.65fr); }
     .workspace.drawer-collapsed .drawer-content { display:none; }
     .workspace.drawer-collapsed .message-drawer { min-height:60px; padding:10px; }
-    .workspace.drawer-collapsed .message-drawer h2 { writing-mode:vertical-rl; margin:0; }
-    .workspace.drawer-collapsed .drawer-toggle { padding:4px; }
+    .workspace.drawer-collapsed .message-drawer h2 { margin:0; }
     .stream { min-height:0; }
     .stream-list { max-height:360px; overflow:auto; border-top:1px solid var(--line); }
     .stream-item { display:grid; grid-template-columns:1fr; gap:4px; padding:10px 4px; border-bottom:1px solid var(--line); }
@@ -76,6 +75,9 @@
     .reference { color:var(--cold); }
     .match-detail { min-height:0; }
     .detail-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+    .lifecycle { grid-column:1 / -1; border-top:2px solid var(--coral); padding-top:10px; }
+    .lifecycle-steps { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:7px; margin-top:8px; }
+    .lifecycle-step { background:var(--panel-deep); border:1px solid var(--line); padding:7px; min-height:65px; }
     .person-row { padding:8px 0; border-top:1px solid var(--line); }
     @media(max-width:980px){ .workspace,.workspace.drawer-collapsed{grid-template-columns:1fr;} .workspace.drawer-collapsed .message-drawer h2{writing-mode:initial;} .workspace.drawer-collapsed .drawer-content{display:block;} .workspace.drawer-collapsed .message-drawer{min-height:0;padding:14px;} }
     @media(max-width:760px){ .grid,.detail-grid{grid-template-columns:1fr;} .preview-result{font-size:19px;} }
@@ -101,11 +103,11 @@
     <div id="workspace" class="workspace">
       <section class="event-list"><h2>EVENTS / BOOKINGS</h2><div id="preview-matches" class="trace"></div></section>
       <section id="match-detail" class="selected-event match-detail"><h2>SELECTED EVENT / BOOKING</h2><div id="match-detail-body"><div class="dim">· select an event from the list</div></div></section>
-      <section class="message-drawer">
+    </div>
+    <section class="message-drawer">
         <h2 class="panel-heading"><span>MESSAGES <span class="dim">· shared channel</span></span><button id="toggle-stream" class="drawer-toggle" type="button" aria-expanded="true">HIDE</button></h2>
         <div class="drawer-content"><div id="stream-count" class="dim">0 signals</div><div id="message-stream" class="stream-list"><div class="stream-empty">· actor messages will appear here after a runtime tick</div></div></div>
-      </section>
-    </div>
+    </section>
     <div id="preview-source" class="source-note"></div>
   </div>
 
@@ -172,9 +174,39 @@
 
   function renderClock() {
     document.getElementById('clock').textContent = formatTime(new Date());
+    renderSessionClock();
   }
 
-  function renderPreview(preview, previewMatches) {
+  function durationLabel(milliseconds) {
+    const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const remainder = seconds % 60;
+    if (hours) return `${hours}h ${minutes}m`;
+    if (minutes) return `${minutes}m ${remainder}s`;
+    return `${remainder}s`;
+  }
+
+  function sessionClock(startTime, endTime) {
+    const start = new Date(startTime).getTime();
+    const end = new Date(endTime).getTime();
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return {text: 'SCHEDULE NOT AVAILABLE', className: 'dim'};
+    const now = Date.now();
+    if (now < start) return {text: `STARTS IN ${durationLabel(start - now)}`, className: 'warn'};
+    if (now < end) return {text: `${durationLabel(end - now)} REMAINING`, className: 'live'};
+    return {text: `ENDED ${durationLabel(now - end)} AGO`, className: 'dim'};
+  }
+
+  function renderSessionClock() {
+    const target = document.getElementById('session-clock');
+    const match = (window.matchRows || [])[window.selectedMatch];
+    if (!target || !match) return;
+    const state = sessionClock(match.startTime, match.endTime);
+    target.textContent = state.text;
+    target.className = state.className;
+  }
+
+  function renderPreview(preview, previewMatches, clubState) {
     const rows = previewMatches && Array.isArray(previewMatches.matches) ? previewMatches.matches : [];
     setHtml('preview-matches', rows.map(match => `
       <div class="booking ${match.active?'current':''}">
@@ -205,7 +237,10 @@
     setHtml('preview-hero', `
       <div class="preview-result ${resultClass}">${esc(preview.result)}</div>
       <div class="preview-meta">PR #${esc(preview.pullRequest)} · active product event ${esc(preview.event.eventId)} · ${esc(preview.event.status)} · select any event below for its own participants</div>`);
-    document.getElementById('preview-source').textContent = `Snapshot refreshed ${formatTime(preview.observedAt)} (${snapshotAge(preview.observedAt)}). Use match-status to refresh it; this view does not poll the preview API.`;
+    const localTick = clubState && clubState.lastTickAt ? ` Local club state updated ${formatTime(clubState.lastTickAt)}.` : '';
+    const recovery = clubState && clubState.recovery;
+    const recoveryNote = recovery ? ` Recovery: ${recovery.status} — ${recovery.nextAction}.` : '';
+    document.getElementById('preview-source').textContent = `Remote snapshot refreshed ${formatTime(preview.observedAt)} (${snapshotAge(preview.observedAt)}). Use match-status to refresh it; this view does not poll the preview API.${localTick}${recoveryNote}`;
   }
 
   function showMatch(index) {
@@ -220,16 +255,23 @@
     const people = Array.isArray(match.participants) ? match.participants : [];
     const currentSnapshot = preview && preview.event && preview.event.eventId === match.eventId ? preview : null;
     const venue = match.venue || (currentSnapshot && currentSnapshot.venue) || {};
+    const lifecycle = match.lifecycle || {};
+    const steps = lifecycle.steps || {};
+    const share = match.shareInvitation || null;
+    const stage = (label, value) => `<div class="lifecycle-step"><span class="dim">${esc(label)}</span><strong>${esc(value || 'NOT_OBSERVED')}</strong></div>`;
     setHtml('match-detail-body', `<div class="detail-grid">
       <div>
         <div class="fact"><span class="dim">BOOKING</span><strong>${esc(match.label || 'Preview booking')}</strong></div>
         <div class="fact"><span class="dim">REFERENCE</span><strong class="reference">${esc(match.eventCode || 'pending')}</strong></div>
-        <div class="fact"><span class="dim">EVENT ID</span><strong>${esc(match.eventId || 'not created')}</strong>${eventLink(match.eventUrl, 'Open this event in the preview')}</div>
+        <div class="fact"><span class="dim">EVENT ID</span><strong>${esc(match.eventId || 'not read back')}</strong>${eventLink(match.eventUrl, 'Open this event in the preview')}</div>
         <div class="fact"><span class="dim">SLOT</span><strong>${esc(formatTime(match.startTime))}</strong><span class="dim">to ${esc(formatTime(match.endTime))}</span></div>
+        <div class="fact"><span class="dim">SESSION CLOCK</span><strong id="session-clock" class="dim">loading…</strong></div>
         <div class="fact"><span class="dim">LOCATION</span><strong>${esc(venue.areaName || 'refresh status for venue')}</strong><span class="dim">${venue.podName ? ` / ${esc(venue.podName)}` : ''}</span></div>
       </div>
-      <div><span class="dim">ASSIGNED PLAYERS FOR THIS EVENT</span>${people.map(person => `<div class="person-row"><strong>${esc(person.label || person.actorId)}</strong> <span class="dim">(${esc(person.role)})</span><br><span class="reference">${esc(person.actorId)}</span> · invite ${esc(person.invitationStatus || 'owner')}${person.invitationCode ? ` (${esc(person.invitationCode)})` : ''} · check-in ${esc(person.attendance || 'not refreshed')}</div>`).join('')}</div>
+      <div><span class="dim">PARTICIPANT EVIDENCE</span>${people.map(person => `<div class="person-row"><strong>${esc(person.label || person.actorId)}</strong> <span class="dim">(${esc(person.role)})</span><br><span class="reference">${esc(person.actorId)}</span> · booking ${esc(person.bookingStatus || 'NOT_OBSERVED')} · invite ${esc(person.invitationStatus || 'NOT_SENT')}${person.invitationCode ? ` (${esc(person.invitationCode)})` : ''} · check-in ${esc(person.attendance || 'NOT_OBSERVED')}</div>`).join('')}</div>
+      <div class="lifecycle"><span class="dim">BOOKING LIFECYCLE</span><strong class="${lifecycle.state === 'BOOKED' ? 'live' : 'warn'}">${esc(lifecycle.state || 'PLANNED')}</strong><div class="lifecycle-steps">${stage('BOOKING', steps.booking)}${stage('INVITATION', steps.invitation)}${stage('ACCEPTANCE', steps.acceptance)}${stage('CHECK-IN', steps.checkIn)}${stage('PLAY', steps.play)}</div>${share && share.redeemUrl ? `<div class="fact"><span class="dim">SHARE INVITATION · ${Number.isInteger(share.redeemsRemaining) ? `${esc(share.redeemsRemaining)} of ${esc(share.maxRedeems)} REDEMPTIONS REMAIN` : 'REDEMPTION LIMIT NOT READ BACK'}</span><a class="stream-link" href="${esc(share.redeemUrl)}" target="_blank" rel="noreferrer">Open share invitation</a></div>` : ''}</div>
     </div>`);
+    renderSessionClock();
   }
 
   function signalText(message) {
@@ -312,7 +354,7 @@
     window.previewSnapshot = preview;
     setDisplayTimeZone(preview);
     renderClock();
-    renderPreview(preview, previewState.previewMatches);
+    renderPreview(preview, previewState.previewMatches, previewState.clubState);
     renderStream(previewState.messages);
     renderStorylines(previewState.storylines);
     const serverLink = document.getElementById('preview-server');

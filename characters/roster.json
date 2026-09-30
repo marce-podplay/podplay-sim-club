@@ -78,9 +78,9 @@
     {"id": "ryo-sakazaki", "name": "Ryo Sakazaki", "role": "future_player", "teamIds": ["art-of-fighting"], "affinities": ["robert-garcia", "takuma-sakazaki"], "captainOf": ["art-of-fighting"]},
     {"id": "robert-garcia", "name": "Robert Garcia", "role": "future_player", "teamIds": ["art-of-fighting"], "affinities": ["ryo-sakazaki", "takuma-sakazaki"]},
     {"id": "takuma-sakazaki", "name": "Takuma Sakazaki", "role": "future_player", "teamIds": ["art-of-fighting"], "affinities": ["ryo-sakazaki", "robert-garcia"]},
-    {"id": "king", "name": "King", "role": "future_player", "teamIds": ["women-fighters"], "affinities": ["mai-shiranui", "yuri-sakazaki"], "captainOf": ["women-fighters"]},
-    {"id": "mai-shiranui", "name": "Mai Shiranui", "role": "future_player", "teamIds": ["women-fighters"], "affinities": ["king", "yuri-sakazaki"]},
-    {"id": "yuri-sakazaki", "name": "Yuri Sakazaki", "role": "future_player", "teamIds": ["women-fighters"], "affinities": ["king", "mai-shiranui"]},
+    {"id": "king", "actorId": "king-captain", "name": "King", "role": "future_player", "teamIds": ["women-fighters"], "affinities": ["mai-shiranui", "yuri-sakazaki"], "captainOf": ["women-fighters"]},
+    {"id": "mai-shiranui", "actorId": "mai", "name": "Mai Shiranui", "role": "future_player", "teamIds": ["women-fighters"], "affinities": ["king", "yuri-sakazaki"]},
+    {"id": "yuri-sakazaki", "actorId": "yuri", "name": "Yuri Sakazaki", "role": "future_player", "teamIds": ["women-fighters"], "affinities": ["king", "mai-shiranui"]},
     {"id": "kim-kaphwan", "name": "Kim Kaphwan", "role": "future_player", "teamIds": ["korea-team"], "affinities": ["chang-koehan", "choi-bounge"], "captainOf": ["korea-team"]},
     {"id": "chang-koehan", "name": "Chang Koehan", "role": "future_player", "teamIds": ["korea-team"], "affinities": ["kim-kaphwan", "choi-bounge"]},
     {"id": "choi-bounge", "name": "Choi Bounge", "role": "future_player", "teamIds": ["korea-team"], "affinities": ["kim-kaphwan", "chang-koehan"]}

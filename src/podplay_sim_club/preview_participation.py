@@ -1,7 +1,7 @@
 """Reconciled invitation and acceptance operations for one Preview Club match."""
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -15,6 +15,7 @@ from .target_policy import TargetPolicy
 
 ACCEPTED_STATUSES = {"ACCEPTED", "CHECKED_IN", "COMPLETE"}
 INVITER_INVITATION_ID = "00000000-0000-0000-0000-000000000000"
+CHECK_IN_EARLY_WINDOW = timedelta(hours=1)
 
 
 class _RejectRedirects(HTTPRedirectHandler):
@@ -242,6 +243,26 @@ def check_in_status(invitation: Dict[str, Any]) -> str:
     }:
         raise PreviewReadError("invitation check-in read-back has an unexpected shape")
     return check_in["status"]
+
+
+def check_in_window(
+    start_time: datetime, end_time: datetime, now: datetime
+) -> tuple[bool, str]:
+    """Apply Preview Club's local arrival policy without claiming product state.
+
+    Players may arrive during the hour before their session or any time before
+    its scheduled end.  This deliberately permits late check-ins.
+    """
+    if start_time.tzinfo is None or end_time.tzinfo is None or now.tzinfo is None:
+        raise ValueError("check-in times must be timezone-aware")
+    if end_time <= start_time:
+        raise ValueError("check-in window has an invalid session duration")
+    opens_at = start_time - CHECK_IN_EARLY_WINDOW
+    if now < opens_at:
+        return False, f"opens at {opens_at.isoformat()}"
+    if now > end_time:
+        return False, f"closed at {end_time.isoformat()}"
+    return True, "open"
 
 
 def classify_match_status(

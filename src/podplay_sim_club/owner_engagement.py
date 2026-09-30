@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from .booking_intents import load_intent_ledger, save_intent
 from .storage import Storage
 from .time import isoformat, parse_instant
 
@@ -17,6 +18,9 @@ def tick(root: Path, now: Optional[datetime] = None) -> Dict[str, Any]:
     storage = Storage(root)
     instant = now or parse_instant(None)
     observed_at = isoformat(instant)
+    follow_up = _encourage_team_training(storage, observed_at)
+    if follow_up is not None:
+        return follow_up
     scenario = storage.load_json(root / "scenarios" / "social-engine.json")
     promotion = scenario.get("quietClubPromotion") if isinstance(scenario, dict) else None
     if not isinstance(promotion, dict):
@@ -64,3 +68,38 @@ def tick(root: Path, now: Optional[datetime] = None) -> Dict[str, Any]:
 
 def _pass(observed_at: str, detail: str) -> Dict[str, Any]:
     return {"actorId": "sofia", "action": "pass", "detail": detail, "observedAt": observed_at, "remoteWrites": 0}
+
+
+def _encourage_team_training(storage: Storage, observed_at: str) -> Optional[Dict[str, Any]]:
+    """Let Sofia turn an evidenced session into a local training nudge once.
+
+    This is promotion, not a booking or a challenge.  Captains must still
+    create any future agreement and the normal player booking flow applies.
+    """
+    with storage.writer_lock():
+        ledger = load_intent_ledger(storage)
+        source = next((intent for intent in ledger["intents"].values() if isinstance(intent, dict)
+                       and intent.get("journey") == "customer_training"
+                       and isinstance(intent.get("resultRequest"), dict)
+                       and intent["resultRequest"].get("status") == "requested"
+                       and not intent.get("teamTrainingPromotionAt")), None)
+        if source is None:
+            return None
+        targets = ["andy-bogard", "terry-bogard", "kyo-captain", "benimaru"]
+        source["teamTrainingPromotionAt"] = observed_at
+        source["teamTrainingPromotionTargets"] = targets
+        save_intent(storage, ledger, source, make_active=False)
+        storage.append_jsonl(storage.channel_path("club"), {
+            "id": f"{source['id']}:team-training-promotion",
+            "occurrenceKey": "owner:post-training-promotion",
+            "channel": "club", "from": "sofia", "to": targets,
+            "kind": "owner_team_training_nudge",
+            "inReplyTo": f"event:{source['resultRequest'].get('eventId')}:result-requested",
+            "text": "While Women Fighters' result is awaiting a report, Bogard-Higashi and Japan Team should each arrange a training session. After the current training result is reported, I can promote a team challenge—but captains decide whether to arrange it.",
+            "observedAt": observed_at, "remoteWrites": 0,
+        })
+    return {
+        "actorId": "sofia", "action": "encourage_team_training",
+        "detail": "asked Bogard-Higashi and Japan Team to arrange training before any promoted challenge",
+        "targets": targets, "observedAt": observed_at, "remoteWrites": 0,
+    }
