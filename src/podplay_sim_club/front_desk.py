@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 
 from .booking_intents import load_intent_ledger, save_intent
 from .preview_readiness import may_start_early
+from .protocol import append_protocol_facts_locked, conversation_id_for, make_message, reply_causation
 from .storage import Storage
 from .time import isoformat, parse_instant
 
@@ -153,6 +154,27 @@ def _captains_agreed(messages: list, intent: Dict[str, Any], intent_id: str) -> 
 
 def _reply(storage: Storage, request: Dict[str, Any], observed_at: str, text: str, action: str, **extra: Any) -> Dict[str, Any]:
     request_id = request["id"]
-    row = {"id": f"{request_id}:riley", "channel": "club", "from": "riley", "to": [request.get("from")], "kind": "staff_reply", "inReplyTo": request_id, "text": text, "observedAt": observed_at}
+    recipient = request.get("from")
+    conversation_id = request.get("conversationId") or conversation_id_for(f"request:{request_id}")
+    speech_act = (
+        "propose" if action == "propose_reschedule"
+        else "acknowledge" if action in {"new_event_requested", "rebooking_requested"}
+        else "clarify"
+    )
+    row = {
+        "id": f"{request_id}:riley", "channel": "club", "from": "riley", "to": [recipient],
+        "kind": "staff_reply", "conversationId": conversation_id, "speechAct": speech_act,
+        "inReplyTo": request_id, "text": text, "observedAt": observed_at,
+    }
     storage.append_jsonl(storage.channel_path("club"), row)
+    if isinstance(recipient, str) and recipient:
+        append_protocol_facts_locked(storage, [make_message(
+            message_id=row["id"], conversation_id=conversation_id,
+            correlation_id=f"request:{request_id}", sender_actor_id="riley",
+            recipient_actor_ids=[recipient], speech_act=speech_act,
+            content_code=f"front_desk.{action}", occurred_at=observed_at,
+            in_reply_to=request_id, causation_id=reply_causation(request_id),
+            grounding="acknowledged" if speech_act == "acknowledge" else "addressed",
+            parameters={"intentRef": extra.get("intent_id") or extra.get("intentId")},
+        )])
     return {"actorId": "riley", "action": action, "requestId": request_id, "detail": text, "observedAt": observed_at, **extra}

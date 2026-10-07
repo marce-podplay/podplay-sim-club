@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://podplay.local/schemas/belief.schema.json",
+  "title": "Preview Club Actor Belief",
+  "type": "object",
+  "required": ["schemaVersion", "beliefId", "actorId", "subject", "status", "expectedValue", "observedValue", "sourceEvidenceRef", "observedAt", "expiresAt", "transitions", "lastReducedFactId"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "beliefId": {"type": "string", "pattern": "^belief:"}, "actorId": {"type": "string"}, "subject": {"type": "string"},
+    "status": {"enum": ["unknown", "expected", "observed", "contradicted", "stale"]},
+    "expectedValue": {}, "observedValue": {}, "sourceEvidenceRef": {"type": ["string", "null"]},
+    "observedAt": {"type": "string", "format": "date-time"}, "expiresAt": {"type": ["string", "null"], "format": "date-time"},
+    "transitions": {"type": "array", "items": {"type": "object"}},
+    "lastReducedFactId": {"type": "string"}
+  },
+  "additionalProperties": false
+}

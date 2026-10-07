@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 
 from .storage import Storage
 from .target_policy import TargetPolicy
+from .event_lifecycle import record_check_in_locked
 
 
 PROTOCOL_VERSION = 1
@@ -94,6 +95,7 @@ def record_training_check_in(
     actor_id: str,
     actor_label: str,
     recipient_actor_ids: list[str],
+    intent_id: Optional[str] = None,
     observed_at: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Publish an idempotent local signal after a verified player check-in.
@@ -110,6 +112,7 @@ def record_training_check_in(
         "channel": "club",
         "kind": "training_check_in_recorded",
         "occurrenceKey": occurrence_key,
+        "intentId": intent_id,
         "from": actor_id,
         "to": [recipient for recipient in recipient_actor_ids if recipient != actor_id],
         "text": f"{actor_label} checked in for the W37 training session. Attendance is recorded; play is not yet reported.",
@@ -127,6 +130,12 @@ def record_training_check_in(
         if any(row.get("id") == record["id"] for row in storage.read_jsonl(path)):
             return record
         storage.append_jsonl(path, record)
+        if isinstance(intent_id, str) and intent_id:
+            record_check_in_locked(
+                storage, occurrence_key=occurrence_key, intent_id=intent_id,
+                actor_id=actor_id, status="CHECKED_IN", occurred_at=record["observedAt"],
+                evidence_ref=f"evidence:preview:event:{event_id}:check-in:{actor_id}",
+            )
     return record
 
 

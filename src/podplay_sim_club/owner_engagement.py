@@ -21,6 +21,9 @@ def tick(root: Path, now: Optional[datetime] = None) -> Dict[str, Any]:
     follow_up = _encourage_team_training(storage, observed_at)
     if follow_up is not None:
         return follow_up
+    challenge_promotion = _promote_agreed_team_challenge(storage, observed_at)
+    if challenge_promotion is not None:
+        return challenge_promotion
     scenario = storage.load_json(root / "scenarios" / "social-engine.json")
     promotion = scenario.get("quietClubPromotion") if isinstance(scenario, dict) else None
     if not isinstance(promotion, dict):
@@ -102,4 +105,53 @@ def _encourage_team_training(storage: Storage, observed_at: str) -> Optional[Dic
         "actorId": "sofia", "action": "encourage_team_training",
         "detail": "asked Bogard-Higashi and Japan Team to arrange training before any promoted challenge",
         "targets": targets, "observedAt": observed_at, "remoteWrites": 0,
+    }
+
+
+def _promote_agreed_team_challenge(storage: Storage, observed_at: str) -> Optional[Dict[str, Any]]:
+    """Let Sofia amplify one captain-agreed challenge without arranging it.
+
+    The challenge must already exist because two captains communicated their
+    agreement.  Sofia's promotion makes that social opportunity visible to its
+    named players; the guarded lead bridge still owns availability, booking,
+    and any product invitation writes.
+    """
+    with storage.writer_lock():
+        ledger = load_intent_ledger(storage)
+        source = next((
+            intent for intent in ledger["intents"].values()
+            if isinstance(intent, dict)
+            and intent.get("journey") == "customer_team_signup"
+            and intent.get("status") in {"agreed", "preview_ready"}
+            and not intent.get("ownerChallengePromotionAt")
+        ), None)
+        if source is None:
+            return None
+        participants = [actor for actor in source.get("participants", []) if isinstance(actor, str)]
+        challenger = source.get("challenger") if isinstance(source.get("challenger"), dict) else {}
+        opponent = source.get("opponent") if isinstance(source.get("opponent"), dict) else {}
+        challenger_captain = challenger.get("captainActorId")
+        opponent_captain = opponent.get("captainActorId")
+        if len(participants) < 2 or not isinstance(challenger_captain, str) or not isinstance(opponent_captain, str):
+            return None
+        source["ownerChallengePromotionAt"] = observed_at
+        source["ownerChallengePromotionTargets"] = participants
+        save_intent(storage, ledger, source, make_active=False)
+        challenger_name = challenger.get("teamName", "the challenger")
+        opponent_name = opponent.get("teamName", "the opponent")
+        storage.append_jsonl(storage.channel_path("club"), {
+            "id": f"{source['id']}:owner-challenge-promotion",
+            "occurrenceKey": "owner:captain-agreed-challenge",
+            "channel": "club", "from": "sofia", "to": participants,
+            "kind": "owner_challenge_promotion",
+            "intentId": source["id"],
+            "inReplyTo": f"{source['id']}:agreement",
+            "text": f"{challenger_name} and {opponent_name} have captain agreement for a team match. Keep your partners ready: once the lead confirms one legal court, the initiating captain can book and the named teammates will be added.",
+            "observedAt": observed_at, "remoteWrites": 0,
+        })
+    return {
+        "actorId": "sofia", "action": "promote_captain_agreed_challenge",
+        "detail": "amplified a captain-agreed team challenge without creating a booking",
+        "intentId": source["id"], "targets": participants,
+        "observedAt": observed_at, "remoteWrites": 0,
     }

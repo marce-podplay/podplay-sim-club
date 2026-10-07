@@ -6,11 +6,50 @@ leave inspectable evidence when something does not work. Preview Club is a
 clearly marked group of simulated users inside a PR-specific copy of PingPod
 staging, not a separate tenant.
 
-The current implementation is the dependency-free **fake-world plus read-only
-preview readiness milestone**. Direct calls are limited to
+The current implementation is the dependency-free **durable local world plus
+guarded PR-preview adapter milestone**. Direct calls are limited to
 the explicitly allowlisted PR-preview API and Firebase authentication. Signup
 may cause the preview application to create a Stripe test customer or send
 normal staging email; the simulator does not call those services directly.
+
+## Documentation map
+
+- [Knowledge base](kb/README.md): capability boundaries, theoretical basis,
+  state/evidence model, and evolution plan.
+- [Runtime rules](rules/): executable actor, lead, and Rally Engine contracts.
+- [Product research lab](product-research/README.md): read-only discovery tasks
+  and evidence awaiting promotion into a runtime rule.
+- [Roadmap](ROADMAP.md): current delivery sequence.
+- [Arcade](arcade/README.md): isolated deterministic game/replay model.
+
+## Capability facts and projections
+
+New capability protocols append validated, secret-free facts and maintain
+rebuildable projections under ignored local state. Validate or replay them with:
+
+```console
+./club state facts
+./club state rebuild
+```
+
+The existing world predates this journal, so zero facts is a valid initial
+result. Historical files remain compatibility projections until each capability
+has an explicit migration; they are not backfilled as if newly observed.
+
+New intent-driven training and team-challenge journeys also project one
+canonical event plus one independent participation record per actor. A stable
+occurrence key is assigned before slot planning, survives rescheduling, and
+links booking, invitation, check-in, observation, and attested-result evidence.
+The observatory prefers that complete projection for overlapping new events;
+older events continue through compatibility readers without fabricated facts.
+
+The self-asset capability projects typed actor beliefs from strictly sanitized
+evidence. Its player-owned Preview adapter performs GET requests only and keeps
+virtual credits, package entitlements, membership assignment, payment
+readiness, understood benefits, and fictional expectations separate. Explicit
+zero and an empty package list remain observations; missing fields, failed
+requests, and incompatible responses remain unknown. Raw responses and product
+identifiers are never persisted.
 
 ## What works now
 
@@ -31,12 +70,12 @@ normal staging email; the simulator does not call those services directly.
 - cross-origin request and redirect rejection in the GET-only HTTP client;
 - Firebase password/refresh authentication with a private local token cache;
 - an origin-locked, GET-only preview inspector for tenant, identity, areas, and pods.
-- an idempotent dry run and exact-confirmation signup path for three persistent actors.
+- an idempotent dry run and exact-confirmation signup path for four persistent core actors, with opt-in team fixtures.
 - a GET-only actor, booking-limit, payment-state, waiver, and future-slot readiness report.
 
-Actors are deterministic fixtures in this milestone. A later milestone will
-replace one actor turn at a time with a short-lived model invocation while
-keeping the same validated action boundary.
+Actor eligibility and product boundaries are deterministic. A bounded character
+interpretation may select only `accept`, `ask`, or `pass` from legal offers; it
+cannot choose product coordinates, credentials, outcomes, or writes.
 
 ## Start
 
@@ -217,18 +256,18 @@ The dry run is read-only. The apply command uses the existing exact-origin gate
 and creates or reuses only Kyo and Benimaru alongside the original core actors.
 
 The lead records the rivalry agreement before either customer booking or owner
-event work. This is intentionally local: the current preview adapter supports
-ordinary two-player bookings and Open Play signups, not a four-player team
-signup contract.
+event work. The team-signup adapter maps a captain-agreed four-player intent to
+one player-owned booking and verified named participants; it remains guarded by
+the same exact-origin and read-back boundaries.
 
 ```console
 ./club challenge --scenario andy-vs-kyo-doubles.json
 ```
 
 It writes one idempotent `customer_team_signup` intent with all four named
-players and a visible `owner_open_play` fallback. The next adapter milestone is
-to map that intent to the real team-signup UI/API; until then it reports zero
-remote writes rather than approximating a doubles match with separate bookings.
+players and a visible `owner_open_play` fallback. A separate preview command may
+then plan/apply that socially authorized intent; local conversation alone still
+performs zero remote writes.
 
 A season is the lifetime of one PR-specific preview database. Code can be
 redeployed without starting a new season. Recreating the database from the
@@ -281,6 +320,7 @@ Then run:
 ```console
 ./club preview inspect
 ./club preview readiness
+./club preview discover-assets --actor andy-bogard --actor terry-bogard
 ./club preview booking-preview
 ./club preview plan-intent
 ./club preview create-open-play --dry-run
@@ -299,6 +339,16 @@ membership and booking limits, and searches for the nearest legal slot at least
 30 minutes from now, through day +14. The grid rate is not treated as the final checkout
 total because locking fees and tax may be added later. Its sanitized result is
 saved in the ignored file `state/preview-readiness.json`.
+
+`preview discover-assets` authenticates only as the existing selected actors;
+it never creates an identity and never uses the admin token. Each actor reads
+their expanded current-user membership, payment summary, and owned packages.
+The adapter immediately reduces those responses into immutable, secret-free
+per-subject evidence under `state/evidence/` and belief facts/projections under
+`state/journal/` and `state/projections/`. One endpoint failure produces an
+unknown/error belief for that subject without discarding successful reads from
+the others. Transaction history, coupon discovery, quote evaluation, checkout,
+and all product writes are outside this command.
 
 Nearest-slot selection is a temporary operator-controlled bootstrap path. The
 long-running simulation is intended to create bookings only after changing
@@ -505,6 +555,28 @@ substitutes for the other.
    and writes a secret-free local result under `state/runs/`. It does not create,
    modify, or log out a browser profile; browser login remains a separate
    player-facing interaction. Add `--actor <id>` to narrow the check.
+
+### Agent-browser player login
+
+When a controlled agent browser needs a real player session, start a one-time
+loopback handoff rather than printing or copying actor credentials:
+
+```bash
+./club preview browser-credential-handoff --actor king-captain
+```
+
+It binds only to `127.0.0.1`, lasts two minutes by default, permits requests
+only from the exact configured PR Preview origin, and serves each of `email`
+and `password` once. An agent-browser DevTools console can fetch one field at a
+time and dispatch the normal input events on the visible Preview login form;
+the console command contains a loopback port, actor id, and field name, never
+the credential. The command never prints credentials or writes them to
+simulator state. A successful login must still visibly reach the player
+product surface (normally `/book`). Log out through the product UI before
+changing actors. The complete secret-preserving console procedure is in
+[`kb/agent-browser-player-login.md`](kb/agent-browser-player-login.md). This
+command is an explicit browser-session handoff, not a Rally Engine capability
+and not a Preview product write.
 
 The September W37 probe demonstrated that Open Pod can expose shared-table
 availability and a player booking can reach a zero-total preview order through

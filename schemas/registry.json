@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "schemas": {
+    "fact": {"path": "schemas/fact.schema.json", "canonicalStore": "state/journal/facts.jsonl", "status": "active"},
+    "message": {"path": "schemas/message.schema.json", "canonicalStore": "state/projections/conversations.json", "status": "active_for_new_protocols"},
+    "commitment": {"path": "schemas/commitment.schema.json", "canonicalStore": "state/projections/commitments.json", "status": "active_for_new_protocols"},
+    "capability": {"path": "schemas/capability.schema.json", "canonicalStore": "capabilities/catalog.json", "status": "initial"},
+    "belief": {"path": "schemas/belief.schema.json", "canonicalStore": "state/projections/beliefs.json", "status": "active_for_local_facts"},
+    "event": {"path": "schemas/event.schema.json", "canonicalStore": "state/projections/events.json", "status": "active_for_new_occurrences"},
+    "participation": {"path": "schemas/participation.schema.json", "canonicalStore": "state/projections/participation.json", "status": "active_for_new_occurrences"},
+    "evidence": {"path": "schemas/evidence.schema.json", "canonicalStore": "state/evidence", "status": "active_for_sanitized_records"}
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://podplay.local/schemas/commitment.schema.json",
+  "title": "Preview Club Social Commitment",
+  "type": "object",
+  "required": ["commitmentId", "kind", "debtorActorId", "creditorActorId", "beneficiaryActorIds", "content", "status", "proposedAt"],
+  "properties": {
+    "commitmentId": {"type": "string"},
+    "kind": {"type": "string"},
+    "debtorActorId": {"type": "string"},
+    "creditorActorId": {"type": "string"},
+    "beneficiaryActorIds": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "content": {"type": "object"},
+    "status": {"enum": ["proposed", "accepted", "rejected", "countered", "expired", "satisfied", "violated", "canceled"]},
+    "proposedAt": {"type": "string", "format": "date-time"},
+    "acceptedAt": {"type": ["string", "null"], "format": "date-time"},
+    "expiresAt": {"type": ["string", "null"], "format": "date-time"},
+    "terminalAt": {"type": ["string", "null"], "format": "date-time"},
+    "satisfactionEvidenceRef": {"type": ["string", "null"]},
+    "conversationId": {"type": ["string", "null"]},
+    "correlationId": {"type": ["string", "null"]},
+    "transitions": {"type": "array", "items": {"type": "object"}},
+    "lastReducedFactId": {"type": ["string", "null"]}
+  },
+  "additionalProperties": false
+}

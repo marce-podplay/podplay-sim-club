@@ -138,12 +138,13 @@ def summarize_payment(value: Any) -> Dict[str, Any]:
     has_payment_method = bool(
         isinstance(payment_element, dict) and payment_element.get("id")
     ) or bool(value.get("preferredCard")) or bool(value.get("preferredBankAccount"))
-    credits = value.get("virtualCredits", 0)
-    if not isinstance(credits, (int, float)):
+    credits = value.get("virtualCredits")
+    if credits is not None and not isinstance(credits, (int, float)):
         raise PreviewReadError("virtual-credit balance has an unexpected shape")
     return {
         "hasPaymentMethod": has_payment_method,
-        "virtualCredits": float(credits),
+        # Absence is unknown. Only an explicit numeric zero is a zero balance.
+        "virtualCredits": float(credits) if credits is not None else None,
     }
 
 
@@ -157,6 +158,7 @@ def find_candidate_session(
     safety_lead_minutes: int = 30,
     allowed_local_windows: Optional[List[str]] = None,
     required_duration_minutes: Optional[int] = None,
+    required_guest_count: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     try:
         local_now = _utc(now).astimezone(ZoneInfo(timezone_name))
@@ -173,6 +175,7 @@ def find_candidate_session(
             timezone_name=timezone_name,
             allowed_local_windows=allowed_local_windows,
             required_duration_minutes=required_duration_minutes,
+            required_guest_count=required_guest_count,
         )
         if candidate is not None:
             return candidate
@@ -248,6 +251,7 @@ def select_candidate_session(
     timezone_name: Optional[str] = None,
     allowed_local_windows: Optional[List[str]] = None,
     required_duration_minutes: Optional[int] = None,
+    required_guest_count: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     if required_duration_minutes is not None:
         _validate_half_hour_duration(required_duration_minutes)
@@ -305,6 +309,9 @@ def select_candidate_session(
         ]
         if not valid_tables:
             continue
+        guest_option = _guest_option(session, required_guest_count)
+        if required_guest_count is not None and guest_option is None:
+            continue
         default_table = session.get("defaultTable")
         default_id = default_table.get("id") if isinstance(default_table, dict) else None
         selected_table = next(
@@ -322,6 +329,9 @@ def select_candidate_session(
             "tableType": selected_table.get("type"),
             "rate": float(selected_table["rate"]),
         }
+        if guest_option is not None:
+            item["sessionGuestsId"] = guest_option["id"]
+            item["guestCount"] = guest_option["count"]
         candidates.append((start_instant, item))
     if not candidates:
         return None
@@ -366,7 +376,10 @@ def _candidate_from_slots(slots: List[Dict[str, Any]]) -> Dict[str, Any]:
     first["startTime"] = slots[0]["startTime"]
     first["endTime"] = slots[-1]["endTime"]
     first["items"] = [
-        {"sessionId": slot["sessionId"], "tableId": slot["tableId"]}
+        {
+            **{"sessionId": slot["sessionId"], "tableId": slot["tableId"]},
+            **({"sessionGuestsId": slot["sessionGuestsId"]} if isinstance(slot.get("sessionGuestsId"), str) else {}),
+        }
         for slot in slots
     ]
     first["durationMinutes"] = sum(
@@ -375,6 +388,24 @@ def _candidate_from_slots(slots: List[Dict[str, Any]]) -> Dict[str, Any]:
     )
     first["rate"] = sum(float(slot["rate"]) for slot in slots)
     return first
+
+
+def _guest_option(session: Dict[str, Any], required_guest_count: Optional[int]) -> Optional[Dict[str, Any]]:
+    """Select the smallest advertised guest option that fits the whole team."""
+    if required_guest_count is None:
+        return None
+    if not isinstance(required_guest_count, int) or required_guest_count < 0:
+        raise PreviewReadError("required guest count must be a non-negative integer")
+    available = session.get("availableGuests")
+    rows = available.get("items") if isinstance(available, dict) else []
+    choices = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict) or not isinstance(row.get("id"), str):
+            continue
+        count = row.get("guests", row.get("max"))
+        if isinstance(count, int) and count >= required_guest_count:
+            choices.append({"id": row["id"], "count": count})
+    return min(choices, key=lambda row: row["count"]) if choices else None
 
 
 def _parse_session_time(value: str) -> datetime:

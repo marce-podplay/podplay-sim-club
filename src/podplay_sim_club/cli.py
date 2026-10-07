@@ -81,7 +81,8 @@ from .preview_write import PreviewWriteError
 from .server import serve
 from .storage import Storage
 from .target_policy import TargetPolicy, TargetPolicyError
-from .team_challenges import TeamChallengeError, plan_challenge
+from .team_challenges import TeamChallengeError, plan_challenge, resolve_booking_owner
+from .result_requests import report_finished_event_result
 from .training_sessions import TrainingSessionError, accept as accept_training, propose as propose_training
 from .share_invitations import (
     ShareInvitationError,
@@ -90,6 +91,19 @@ from .share_invitations import (
     redeem_share_invitation,
 )
 from .front_desk import mark_rescheduled, pending_reschedule
+from .arcade import ArcadeError, attach_training_replay, simulate_and_store
+from .asset_discovery import AssetDiscoveryError, discover_player_assets
+from .browser_handoff import BrowserHandoffError, serve_browser_credential_handoff
+from .team_signup import PreviewTeamMemberWriter
+from .facts import load_facts
+from .event_lifecycle import (
+    ensure_planned_locked,
+    record_booked_locked,
+    record_invitation_locked,
+    record_window_locked,
+)
+from .projections import rebuild_projections
+from .self_assets import SelfAssetValidationError
 from .terminal import render, render_needs
 from .time import parse_instant
 
@@ -159,7 +173,7 @@ def build_parser() -> argparse.ArgumentParser:
     needs_subcommands.add_parser("status", help="show needs and booking intents")
 
     runtime = subparsers.add_parser(
-        "runtime", help="run bounded, durable actor turns without preview writes"
+        "runtime", help="run bounded, durable actor turns (Preview writes require an explicit confirmed flag)"
     )
     runtime_subcommands = runtime.add_subparsers(dest="runtime_command", required=True)
     runtime_tick = runtime_subcommands.add_parser(
@@ -173,9 +187,19 @@ def build_parser() -> argparse.ArgumentParser:
     tournament_report.add_argument("--winner", required=True, choices=["Bogard-Higashi", "Japan Team"])
     tournament_report.add_argument("--reporter", required=True, choices=["andy-bogard"], help="player attesting to the result")
     tournament_report.add_argument("--now", help="override runtime clock with an ISO instant")
+    event_report = runtime_subcommands.add_parser(
+        "report-event-result", help="record the requested booking captain's no-score event result attestation"
+    )
+    event_report.add_argument("--intent", required=True, help="completed training or challenge intent ID")
+    event_report.add_argument("--reporter", required=True, help="the captain named in the result request")
+    event_report.add_argument("--winner", required=True, help="one named participant or roster team")
+    event_report.add_argument("--now", help="override runtime clock with an ISO instant")
     rally_tick = runtime_subcommands.add_parser("rally-tick", help="run one bounded Rally Engine actor tick")
     rally_tick.add_argument("--hours", type=int, default=2, help="session lifetime on first tick (default: 2)")
     rally_tick.add_argument("--now", help="override runtime clock with an ISO instant")
+    rally_tick.add_argument("--plan-preview", action="store_true", help="allow one authenticated live availability and booking evaluation")
+    rally_tick.add_argument("--apply-preview", action="store_true", help="allow one guarded player-owned booking adapter invocation")
+    rally_tick.add_argument("--confirm-origin", help="required with --apply-preview; exact Preview origin")
 
     serve_parser = subparsers.add_parser("serve", help="serve the local observatory")
     serve_parser.add_argument("--host", default="127.0.0.1")
@@ -225,6 +249,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     preview_subcommands.add_parser(
         "readiness", help="inspect actors, payment state, and one legal future slot"
+    )
+    preview_assets = preview_subcommands.add_parser(
+        "discover-assets",
+        help="read and persist sanitized customer assets using each player's own identity",
+    )
+    preview_assets.add_argument(
+        "--actor",
+        action="append",
+        required=True,
+        help="existing actor id to inspect; repeat for more than one",
+    )
+    preview_browser_handoff = preview_subcommands.add_parser(
+        "browser-credential-handoff",
+        help="serve one existing actor's login fields locally for the exact Preview browser origin",
+    )
+    preview_browser_handoff.add_argument("--actor", required=True, help="existing actor id")
+    preview_browser_handoff.add_argument(
+        "--port", type=int, default=0, help="loopback port; default selects an ephemeral port"
+    )
+    preview_browser_handoff.add_argument(
+        "--lifetime", type=int, default=120, help="one-time handoff lifetime in seconds"
     )
     preview_venues = preview_subcommands.add_parser(
         "scan-venues", help="read-only scan of today's venues for contiguous available sessions"
@@ -317,6 +362,12 @@ def build_parser() -> argparse.ArgumentParser:
     preview_signup_mode.add_argument("--apply", action="store_true")
     preview_signup.add_argument("--confirm-origin", help="required with --apply; must equal the exact preview origin")
     preview_signup.add_argument("--intent", help="owner Open Play intent ID; defaults to the active intent")
+    preview_team_signup = preview_subcommands.add_parser("team-signup", help="book and reconcile one agreed captain-led team challenge")
+    preview_team_signup_mode = preview_team_signup.add_mutually_exclusive_group(required=True)
+    preview_team_signup_mode.add_argument("--dry-run", action="store_true")
+    preview_team_signup_mode.add_argument("--apply", action="store_true")
+    preview_team_signup.add_argument("--confirm-origin", help="required with --apply; exact preview origin")
+    preview_team_signup.add_argument("--intent", required=True, help="agreed customer_team_signup intent ID")
     preview_book.add_argument(
         "--intent",
         help="execute this preview_ready character intent instead of an operator-created plan",
@@ -327,11 +378,12 @@ def build_parser() -> argparse.ArgumentParser:
     preview_share.add_argument("--intent", required=True, help="booked customer-training intent")
     preview_redeem_share = preview_subcommands.add_parser(
         "redeem-training-invitation",
-        help="redeem and accept the retained player share invitation for a booked training intent",
+        help="redeem and accept a retained player share invitation for a booked intent",
     )
     preview_redeem_share.add_argument("--apply", action="store_true", required=True)
     preview_redeem_share.add_argument("--confirm-origin", required=True, help="exact preview origin")
-    preview_redeem_share.add_argument("--intent", required=True, help="booked customer-training intent")
+    preview_redeem_share.add_argument("--intent", required=True, help="booked intent with a retained share invitation")
+    preview_redeem_share.add_argument("--recipient", help="named recipient; required when the booking has multiple teammates")
     preview_join = preview_subcommands.add_parser(
         "join", help="invite and reconcile Terry Bogard into the selected match"
     )
@@ -398,6 +450,10 @@ def build_parser() -> argparse.ArgumentParser:
     reset.add_argument("--confirm", action="store_true", required=True)
 
     subparsers.add_parser("test", help="run the dependency-free unit tests")
+    state = subparsers.add_parser("state", help="validate facts or rebuild capability projections")
+    state_subcommands = state.add_subparsers(dest="state_command", required=True)
+    state_subcommands.add_parser("rebuild", help="replay the fact journal into deterministic projections")
+    state_subcommands.add_parser("facts", help="validate and summarize the secret-free fact journal")
     challenge = subparsers.add_parser(
         "challenge", help="record a durable no-write team challenge from a roster scenario"
     )
@@ -412,6 +468,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     training.add_argument(
         "--accept", action="store_true", help="record the named teammate's acceptance after the captain proposal")
+    arcade = subparsers.add_parser("arcade", help="run a local-only deterministic Club Arcade match")
+    arcade.add_argument("--occurrence", required=True, help="local Arcade occurrence key; never a product event mutation")
+    arcade.add_argument("--left", required=True, help="one or two comma-separated player actor IDs")
+    arcade.add_argument("--right", required=True, help="one or two comma-separated player actor IDs")
+    arcade.add_argument("--season", default="season-001", help="public local season seed component")
+    arcade_replay = subparsers.add_parser("arcade-replay", help="attach a fictional local Arcade replay to a booked training")
+    arcade_replay.add_argument("--intent", required=True, help="booked customer-training intent ID")
+    arcade_replay.add_argument("--season", default="season-001", help="public local season seed component")
     return parser
 
 
@@ -428,6 +492,27 @@ def main(argv: Optional[list] = None) -> int:
             check=False,
         )
         return result.returncode
+
+    if args.command == "state":
+        if args.state_command == "facts":
+            facts = load_facts(root)
+            print(f"PREVIEW CLUB FACT JOURNAL // {len(facts)} VALID FACTS")
+            if facts:
+                print(f"last: {facts[-1]['factId']} // {facts[-1]['type']}")
+            return 0
+        if args.state_command == "rebuild":
+            result = rebuild_projections(root)
+            print(
+                "PREVIEW CLUB PROJECTIONS // REBUILT // "
+                f"{result['metadata']['factCount']} FACTS // "
+                f"{len(result['conversations']['conversations'])} CONVERSATIONS // "
+                f"{len(result['commitments']['commitments'])} COMMITMENTS // "
+                f"{len(result['events']['events'])} EVENTS // "
+                f"{len(result['participation']['participation'])} PARTICIPATIONS // "
+                f"{len(result['beliefs']['beliefs'])} BELIEFS"
+            )
+            return 0
+        raise AssertionError(f"unhandled state command {args.state_command}")
 
     if args.command == "challenge":
         try:
@@ -463,6 +548,33 @@ def main(argv: Optional[list] = None) -> int:
         print("writes: 0")
         return 0
 
+    if args.command == "arcade":
+        try:
+            left = [value.strip() for value in args.left.split(",") if value.strip()]
+            right = [value.strip() for value in args.right.split(",") if value.strip()]
+            match = simulate_and_store(root, occurrence_key=args.occurrence, left=left, right=right, season_id=args.season)
+        except ArcadeError as exc:
+            print(f"ERROR arcade: {exc}", file=sys.stderr)
+            return 2
+        print("PREVIEW CLUB ARCADE // SIMULATED // LOCAL ONLY")
+        print(f"occurrence: {match['occurrenceKey']}; game: {match['game']}")
+        print(f"score: {match['score']['left']}–{match['score']['right']}; winner: {', '.join(match['winner'])}")
+        print(f"rallies: {len(match['rallies'])}; writes: 0")
+        return 0
+
+    if args.command == "arcade-replay":
+        try:
+            match = attach_training_replay(root, intent_id=args.intent, season_id=args.season)
+        except ArcadeError as exc:
+            print(f"ERROR arcade replay: {exc}", file=sys.stderr)
+            return 2
+        print("PREVIEW CLUB ARCADE REPLAY // ATTACHED // LOCAL FICTION ONLY")
+        print(f"intent: {args.intent}; occurrence: {match['occurrenceKey']}")
+        print(f"score: {match['score']['left']}–{match['score']['right']}; winner: {', '.join(match['winner'])}")
+        print("next: after the booked end, the named captain can confirm this replay result")
+        print("writes: 0")
+        return 0
+
     if args.command == "preview":
         if args.preview_command == "inspect":
             return inspect_preview(root)
@@ -472,6 +584,17 @@ def main(argv: Optional[list] = None) -> int:
             return check_preview_sessions(root, args.actor)
         if args.preview_command == "readiness":
             return inspect_readiness(root)
+        if args.preview_command == "discover-assets":
+            return discover_preview_assets(root, args.actor)
+        if args.preview_command == "browser-credential-handoff":
+            try:
+                serve_browser_credential_handoff(
+                    root, args.actor, port=args.port, lifetime_seconds=args.lifetime
+                )
+            except (BrowserHandoffError, IdentityRegistryError, TargetPolicyError) as exc:
+                print(f"ERROR browser credential handoff: {exc}", file=sys.stderr)
+                return 2
+            return 0
         if args.preview_command == "scan-venues":
             return scan_preview_venues(root, args.duration, args.within)
         if args.preview_command == "booking-preview":
@@ -489,11 +612,13 @@ def main(argv: Optional[list] = None) -> int:
         if args.preview_command == "share-invitation":
             return open_preview_share_invitation(root, args.intent, args.confirm_origin)
         if args.preview_command == "redeem-training-invitation":
-            return redeem_preview_training_invitation(root, args.intent, args.confirm_origin)
+            return redeem_preview_training_invitation(root, args.intent, args.confirm_origin, args.recipient)
         if args.preview_command == "create-open-play":
             return create_preview_open_play(root, args.apply, args.confirm_origin, args.intent)
         if args.preview_command == "signup-open-play":
             return signup_preview_open_play(root, args.apply, args.confirm_origin, args.intent)
+        if args.preview_command == "team-signup":
+            return signup_preview_team_challenge(root, args.apply, args.confirm_origin, args.intent)
         if args.preview_command == "join":
             return join_preview_match(
                 root, args.apply, args.confirm_origin, args.occurrence
@@ -629,15 +754,32 @@ def main(argv: Optional[list] = None) -> int:
             state = report_winner(root, args.winner, args.reporter, now=parse_instant(args.now) if args.now else None)
             print(f"PREVIEW CLUB TOURNAMENT RESULT // {state['rounds']['semi-final']['winner']} // no score")
             return 0
+        if args.runtime_command == "report-event-result":
+            result = report_finished_event_result(
+                root, args.intent, args.reporter, args.winner,
+                now=parse_instant(args.now) if args.now else None,
+            )
+            print(f"PREVIEW CLUB EVENT RESULT // {result['winner']} // captain attestation; no score")
+            return 0
         if args.runtime_command == "rally-tick":
-            result = run_rally_tick(root, hours=args.hours, now=parse_instant(args.now) if args.now else None)
-            print(f"RALLY ENGINE // {result['status'].upper()} // remote writes 0")
+            if args.apply_preview and not args.confirm_origin:
+                parser.error("runtime rally-tick --apply-preview requires --confirm-origin")
+            result = run_rally_tick(
+                root, hours=args.hours, now=parse_instant(args.now) if args.now else None,
+                plan_preview=args.plan_preview, apply_preview=args.apply_preview,
+                confirmation=args.confirm_origin,
+            )
+            print(f"RALLY ENGINE // {result['status'].upper()} // remote writes {result['remoteWrites']}")
             if result.get("action"):
                 action = result["action"]
                 if isinstance(action, dict):
                     print(f"- {action['actorId']}: {action['action']} — {action['detail']}")
                 else:
-                    detail = result.get("training", {}) if action == "plan_training_booking" else {}
+                    detail = (
+                        result.get("training", {}) if action == "plan_training_booking"
+                        else result.get("teamSignup", {}) if action in {"plan_team_signup_booking", "apply_team_signup_booking"}
+                        else result.get("bookingBridge", {})
+                    )
                     actor = detail.get("actorId", "lead") if isinstance(detail, dict) else "lead"
                     text = detail.get("detail", "no additional detail") if isinstance(detail, dict) else "no additional detail"
                     print(f"- {actor}: {action} — {text}")
@@ -766,6 +908,33 @@ def login_preview_players(root: Path, actor_ids: Optional[List[str]]) -> int:
             f"roles={roles} auth={summary['authSource']}"
         )
     print("writes: 0")
+    return 0
+
+
+def discover_preview_assets(root: Path, actor_ids: List[str]) -> int:
+    """Run the player-owned 4B probes and print only sanitized observations."""
+    try:
+        report = discover_player_assets(root, actor_ids)
+    except (
+        AssetDiscoveryError,
+        CredentialsError,
+        FirebaseAuthError,
+        IdentityRegistryError,
+        PreviewReadError,
+        SelfAssetValidationError,
+        TargetPolicyError,
+    ) as exc:
+        print(f"ERROR preview asset discovery: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"PLAYER SELF-ASSETS // PR #{report['pullRequest']} // READ ONLY")
+    print(f"observed: {report['observedAt']}")
+    for actor in report["actors"]:
+        print(f"- {actor['actorId']}")
+        for subject, row in actor["subjects"].items():
+            suffix = f" ({row['errorCode']})" if row.get("errorCode") else ""
+            print(f"  {subject}: {row['status']}{suffix}")
+    print("remote writes: 0")
     return 0
 
 
@@ -1067,9 +1236,7 @@ def evaluate_booking_preview(root: Path) -> int:
     try:
         credentials = PreviewCredentials.load(root)
         policy = TargetPolicy.from_config(credentials.config)
-        booker_actor_id = intent.get("bookerActorId") or intent.get("participants", [None])[0]
-        if not isinstance(booker_actor_id, str):
-            raise BookingIntentError("character intent has no verified player booker")
+        booker_actor_id = BOOKER
         identities = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure(
             ("andy-bogard", "terry-bogard", booker_actor_id)
         )
@@ -1093,13 +1260,13 @@ def evaluate_booking_preview(root: Path) -> int:
         )
         if not report["readyForBookingPreview"] or not report["candidateSession"]:
             raise PreviewEvaluationError("readiness gate must pass before booking preview")
-        booker = identities["andy-bogard"]
+        booker = identities[booker_actor_id]
         booker_auth = FirebaseAuthenticator(
-            actor_auth_cache(root, "andy-bogard")
+            actor_auth_cache(root, booker_actor_id)
         ).authenticate(booker.email, booker.password, credentials.firebase_api_key)
         candidate = report["candidateSession"]
         requested_credits = min(
-            float(report["actors"]["andy-bogard"]["virtualCredits"]), 25.0
+            float(report["actors"][booker_actor_id]["virtualCredits"]), 25.0
         )
         response = PreviewBookingEvaluator(policy, booker_auth.id_token).evaluate(
             candidate["sessionId"], candidate["tableId"], requested_credits
@@ -1158,17 +1325,27 @@ def plan_preview_intent(
         if not isinstance(duration, int) or duration < 30 or duration % 30:
             raise BookingIntentError("preview planning requires a positive 30-minute increment")
         journey = intent.get("journey", "customer_booking")
-        if journey not in {"customer_booking", "customer_training", "owner_open_play"}:
+        if journey not in {"customer_booking", "customer_training", "customer_team_signup", "owner_open_play"}:
             raise BookingIntentError("preview planning does not recognize the journey type")
 
         credentials = PreviewCredentials.load(root)
         policy = TargetPolicy.from_config(credentials.config)
-        booker_actor_id = intent.get("bookerActorId") or intent.get("participants", [None])[0]
+        booker_actor_id = resolve_booking_owner(intent)
         if not isinstance(booker_actor_id, str):
             raise BookingIntentError("character intent has no verified player booker")
-        identities = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure(
-            ("andy-bogard", "terry-bogard", booker_actor_id)
-        )
+        if intent.get("bookerActorId") != booker_actor_id:
+            # Migrate pre-field team agreements from their named initiating
+            # captain.  This is durable local compatibility state only.
+            intent["bookerActorId"] = booker_actor_id
+            save_intent(storage, ledger, intent)
+        planned_at = datetime.now(timezone.utc).isoformat()
+        with storage.writer_lock():
+            ledger = load_intent_ledger(storage)
+            selected_id, intent = select_intent(ledger, selected_id)
+            canonical_occurrence = ensure_planned_locked(storage, intent, planned_at)
+            save_intent(storage, ledger, intent)
+        identity_ids = tuple(dict.fromkeys(("andy-bogard", "terry-bogard", booker_actor_id, *intent.get("participants", []))))
+        identities = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure(identity_ids)
         if booker_actor_id not in identities:
             raise BookingIntentError("character intent has no verified player booker")
         admin_auth = FirebaseAuthenticator(
@@ -1201,6 +1378,7 @@ def plan_preview_intent(
             last_day_offset=int(constraints["daysAhead"][1]),
             allowed_local_windows=constraints["localWindows"],
             required_duration_minutes=duration,
+            required_guest_count=(len(intent.get("participants", [])) - 1 if journey == "customer_team_signup" else None),
         )
         candidate = None
         if may_start_early(intent):
@@ -1269,16 +1447,23 @@ def plan_preview_intent(
             else {"status": "OWNER_EVENT_PLANNED", "total": 0.0, "currency": None,
                   "errorCodes": [], "readyForOrder": True}
         )
+        if journey == "customer_team_signup":
+            evaluation = summarize_booking_preview(PreviewBookingEvaluator(policy, booker_auth.id_token).evaluate_team(
+                candidate["items"], requested_credits
+            ))
         intent["status"] = (
             "preview_ready" if evaluation["readyForOrder"] else "preview_blocked"
+        )
+        intent["nextAction"] = (
+            "apply_guarded_player_booking"
+            if evaluation["readyForOrder"]
+            else "address_preview_booking_blocker"
         )
         intent["previewPlan"] = {
             "pullRequest": policy.pull_request_number,
             "targetOrigin": policy.target_origin,
             "observedAt": report["observedAt"],
-            "occurrenceKey": occurrence_key(
-                report["location"]["podId"], candidate["startTime"], booker_actor_id
-            ),
+            "occurrenceKey": canonical_occurrence,
             "areaName": report["location"]["areaName"],
             "podName": report["location"]["podName"],
             "podId": report["location"]["podId"],
@@ -1295,6 +1480,15 @@ def plan_preview_intent(
         }
         intent["remoteWrites"] = 0
         save_intent(storage, ledger, intent)
+        with storage.writer_lock():
+            record_window_locked(
+                storage, occurrence_key=canonical_occurrence, intent_id=selected_id,
+                planned_window={
+                    "startTime": candidate["startTime"], "endTime": candidate["endTime"],
+                    "podRef": report["location"]["podId"], "durationMinutes": candidate["durationMinutes"],
+                },
+                occurred_at=report["observedAt"],
+            )
         _sync_world_intent_status(storage, intent)
     except (
         BookingIntentError,
@@ -1749,6 +1943,21 @@ def reschedule_preview(root: Path, apply: bool, confirmation: Optional[str], req
                 intent["event"].update({"startTime": plan["startTime"], "endTime": plan["endTime"]})
             intent["previewPlan"] = preview_plan
             save_intent(storage, ledger, intent)
+            occurrence = intent.get("occurrenceKey") or preview_plan.get("occurrenceKey")
+            if isinstance(occurrence, str):
+                with storage.writer_lock():
+                    record_window_locked(
+                        storage,
+                        occurrence_key=occurrence,
+                        intent_id=intent_id,
+                        planned_window={
+                            "startTime": plan["startTime"],
+                            "endTime": plan["endTime"],
+                            "podRef": pod_id,
+                            "durationMinutes": duration,
+                        },
+                        occurred_at=now.isoformat(),
+                    )
             mark_rescheduled(root, pending["requestId"], plan, now)
             storage.append_jsonl(storage.channel_path("club"), {
                 "id": f"{pending['requestId']}:riley-completed", "channel": "club", "from": "riley",
@@ -1777,21 +1986,27 @@ def book_preview_match(
         selected_intent = None
         intent_ledger = None
         if intent_id:
-            if plan_preview_intent(root, intent_id, announce=False) != 0:
-                raise PreviewWriteError("character intent is not ready for booking")
             intent_ledger = load_intent_ledger(storage)
             selected_intent_id, selected_intent = select_intent(intent_ledger, intent_id)
+            # A Rally bridge has already performed a live availability and
+            # quote evaluation before moving the intent to preview_ready.
+            # Re-running that plan here races the exact court we are about to
+            # order and can turn a verified plan into an unrelated network
+            # failure.  Unready intents still take the established planning
+            # path, preserving the direct CLI workflow.
+            if selected_intent.get("status") != "preview_ready":
+                if plan_preview_intent(root, intent_id, announce=False) != 0:
+                    raise PreviewWriteError("character intent is not ready for booking")
+                intent_ledger = load_intent_ledger(storage)
+                selected_intent_id, selected_intent = select_intent(intent_ledger, intent_id)
             if selected_intent.get("status") != "preview_ready":
                 raise PreviewWriteError("character intent is not preview_ready")
-            if selected_intent.get("journey", "customer_booking") not in {"customer_booking", "customer_training"}:
+            if selected_intent.get("journey", "customer_booking") not in {"customer_booking", "customer_training", "customer_team_signup"}:
                 raise PreviewWriteError("owner Open Play intents must use preview create-open-play")
         credentials = PreviewCredentials.load(root)
         read_policy = TargetPolicy.from_config(credentials.config)
         ledger = load_match_ledger(storage, read_policy.target_origin)
-        booker_actor_id = (
-            selected_intent.get("bookerActorId") or selected_intent.get("participants", [None])[0]
-            if selected_intent is not None else "andy-bogard"
-        )
+        booker_actor_id = resolve_booking_owner(selected_intent) if selected_intent is not None else BOOKER
         if not isinstance(booker_actor_id, str):
             raise PreviewWriteError("booking intent has no verified player booker")
         identities = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure((booker_actor_id,))
@@ -1906,8 +2121,9 @@ def book_preview_match(
             try:
                 items = plan.get("items")
                 additional_items = items[1:] if isinstance(items, list) else None
+                session_guests_id = plan.get("items", [{}])[0].get("sessionGuestsId") if isinstance(plan.get("items"), list) and plan["items"] else None
                 order = PreviewBookingWriter(write_policy, booker_auth.id_token).order(
-                    plan["sessionId"], plan["tableId"], plan["virtualCredits"], additional_items
+                    plan["sessionId"], plan["tableId"], plan["virtualCredits"], additional_items, session_guests_id
                 )
                 order_summary = summarize_order(order)
                 event_id = order_summary["eventId"]
@@ -1952,6 +2168,10 @@ def book_preview_match(
                 selected_intent.update(
                     {
                         "status": "booked",
+                        # `writes` is one only when this invocation issued a
+                        # new Preview ORDER.  Reconciliation of an existing
+                        # event remains a zero-write operation.
+                        "remoteWrites": int(selected_intent.get("remoteWrites", 0)) + writes,
                         "booking": {
                             "eventId": event_id,
                             "occurrenceKey": plan["occurrenceKey"],
@@ -1961,6 +2181,14 @@ def book_preview_match(
                 )
                 save_intent(storage, intent_ledger, selected_intent)
                 _sync_world_intent_status(storage, selected_intent)
+                with storage.writer_lock():
+                    record_booked_locked(
+                        storage, occurrence_key=plan["occurrenceKey"],
+                        intent_id=selected_intent_id, event_ref=event_id,
+                        booker_actor_id=booker_actor_id,
+                        occurred_at=selected_intent["booking"]["bookedAt"],
+                        evidence_ref=f"evidence:preview:event:{event_id}:booking-readback",
+                    )
         else:
             event = None
     except (
@@ -1993,6 +2221,177 @@ def book_preview_match(
     return 0
 
 
+def signup_preview_team_challenge(root: Path, apply: bool, confirmation: Optional[str], intent_id: str) -> int:
+    """Create one agreed team booking, then add only its named teammates.
+
+    The booking owner pays the advertised three guest places.  Each added
+    member is read back under their own token; no admin/on-behalf participant
+    write is used.  A partial run records completed members and is safe to
+    resume without duplicating them.
+    """
+    storage = Storage(root)
+    try:
+        if not apply:
+            if plan_preview_intent(root, intent_id, announce=False) != 0:
+                raise PreviewWriteError("team challenge booking did not become ready")
+        else:
+            # A prior attempt may have completed the guarded booking and then
+            # failed before adding a teammate.  Resume that exact event rather
+            # than planning or ordering a duplicate court.
+            existing_ledger = load_intent_ledger(storage)
+            _, existing_intent = select_intent(existing_ledger, intent_id)
+            if existing_intent.get("status") not in {"booked", "team_signup_in_progress", "team_members_registered"}:
+                if book_preview_match(root, True, confirmation, intent_id) != 0:
+                    raise PreviewWriteError("team challenge booking did not become ready")
+        ledger = load_intent_ledger(storage)
+        selected_id, intent = select_intent(ledger, intent_id)
+        permitted_statuses = {"booked", "team_members_registered"} if apply else {"preview_ready"}
+        if intent.get("journey") != "customer_team_signup" or intent.get("status") not in permitted_statuses:
+            raise PreviewWriteError("team signup requires an agreed customer_team_signup intent")
+        participants = [actor for actor in intent.get("participants", []) if isinstance(actor, str)]
+        if len(participants) < 2 or len(set(participants)) != len(participants):
+            raise PreviewWriteError("team signup requires two or more distinct named players")
+        owner = resolve_booking_owner(intent)
+        booking = intent.get("booking") if isinstance(intent.get("booking"), dict) else {}
+        event_id = booking.get("eventId")
+        if not isinstance(owner, str) or owner not in participants:
+            raise PreviewWriteError("team signup booking owner is missing")
+        if intent.get("bookerActorId") != owner:
+            intent["bookerActorId"] = owner
+            save_intent(storage, ledger, intent)
+        credentials = PreviewCredentials.load(root)
+        read_policy = TargetPolicy.from_config(credentials.config)
+        identities = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure(participants)
+        if any(not identities[actor].podplay_user_id for actor in participants):
+            raise PreviewWriteError("all named team players need verified Preview identities")
+        owner_identity = identities[owner]
+        owner_auth = FirebaseAuthenticator(actor_auth_cache(root, owner)).authenticate(
+            owner_identity.email, owner_identity.password, credentials.firebase_api_key
+        )
+        if not apply:
+            plan = intent.get("previewPlan") if isinstance(intent.get("previewPlan"), dict) else {}
+            if not isinstance(plan.get("items"), list) or any(not isinstance(item.get("sessionGuestsId"), str) for item in plan["items"] if isinstance(item, dict)):
+                raise PreviewWriteError("team challenge needs a W37 guest-capacity plan")
+            print(f"PREVIEW CLUB TEAM SIGNUP // DRY RUN // PR #{read_policy.pull_request_number}")
+            print(f"intent: {selected_id}; members: {len(participants)}; booking write: 1; team-member writes: {len(participants) - 1}")
+            print(f"slot: {plan.get('startTime')} to {plan.get('endTime')}")
+            return 0
+        if not isinstance(event_id, str):
+            raise PreviewWriteError("team signup event is missing")
+        owner_client = PreviewReadonlyClient(read_policy, owner_auth.id_token)
+        event = read_back_event(owner_client, event_id, {
+            "podId": intent["previewPlan"]["podId"], "startTime": intent["previewPlan"]["startTime"],
+            "endTime": intent["previewPlan"]["endTime"], "items": intent["previewPlan"]["items"],
+            # The product response must prove the socially designated captain
+            # owns this existing booking before teammates are added.  The
+            # durable preview plan deliberately never stores private user IDs.
+            "ownerUserId": owner_identity.podplay_user_id,
+        })
+        if event.get("eventId") != event_id:
+            raise PreviewWriteError("team challenge booking read-back did not match")
+        if not isinstance(event.get("teamSize"), int) or event["teamSize"] <= 1:
+            # A court booking with guest capacity is not a product team event.
+            # Its legal path is a retained signup share link redeemed by each
+            # socially named teammate, not the team-members endpoint.
+            intent["status"] = "booked"
+            intent["nextAction"] = "capture_shared_invitation_then_each_named_player_redeems"
+            save_intent(storage, ledger, intent)
+            print(f"PREVIEW CLUB TEAM SIGNUP // BOOKED SHARE ROUTE // PR #{read_policy.pull_request_number}")
+            print(f"intent: {selected_id}; named recipients: {len(participants) - 1}; next: capture one player share invitation")
+            return 0
+        rows = {row.get("actorId"): row for row in intent.get("teamSignups", []) if isinstance(row, dict)}
+        writes = 0
+        for actor in participants:
+            if actor == owner:
+                rows[actor] = {"actorId": actor, "status": "BOOKING_OWNER"}
+                continue
+            identity = identities[actor]
+            actor_auth = FirebaseAuthenticator(actor_auth_cache(root, actor)).authenticate(
+                identity.email, identity.password, credentials.firebase_api_key
+            )
+            actor_client = PreviewReadonlyClient(read_policy, actor_auth.id_token)
+            try:
+                existing = find_actor_invitation(actor_client, event_id, identity.podplay_user_id)
+            except PreviewReadError as exc:
+                # A private event is correctly invisible to a teammate until
+                # the owner adds them.  That is an absence of an invitation,
+                # not a failed post-add verification.
+                if "HTTP 403" not in str(exc):
+                    raise
+                existing = None
+            if isinstance(existing, dict):
+                prior = rows.get(actor) if isinstance(rows.get(actor), dict) else {}
+                rows[actor] = {
+                    "actorId": actor,
+                    "status": "ACCEPTED",
+                    "invitationId": existing.get("id"),
+                    "observedAt": prior.get("observedAt") or datetime.now(timezone.utc).isoformat(),
+                }
+                continue
+            if not apply:
+                rows[actor] = {"actorId": actor, "status": "WOULD_ADD"}
+                continue
+            write_policy = TargetPolicy.from_config(replace(
+                credentials.config, mode=RunMode.PREVIEW_WRITE, preview_write_confirmation=confirmation,
+            ))
+            result = PreviewTeamMemberWriter(write_policy, owner_auth.id_token).add_paid_by_leader(event_id, owner_identity.podplay_user_id, {
+                "fullName": f"{identity.first_name} {identity.last_name}", "email": identity.email, "userId": identity.podplay_user_id,
+            })
+            existing = find_actor_invitation(actor_client, event_id, identity.podplay_user_id)
+            if not isinstance(existing, dict):
+                raise PreviewWriteError("team-member ORDER was not readable by its named player")
+            rows[actor] = {
+                "actorId": actor,
+                "status": "ACCEPTED",
+                "invitationId": result.get("invitation", {}).get("id"),
+                "observedAt": datetime.now(timezone.utc).isoformat(),
+            }
+            writes += 1
+            intent["teamSignups"] = [rows[key] for key in participants]
+            intent["status"] = "team_signup_in_progress"
+            save_intent(storage, ledger, intent)
+        intent["teamSignups"] = [rows[key] for key in participants]
+        if apply and all(row.get("status") in {"BOOKING_OWNER", "ACCEPTED"} for row in intent["teamSignups"]):
+            intent["status"] = "team_members_registered"
+            intent["nextAction"] = "check_in_window_then_named_player_check_ins"
+            intent["remoteWrites"] = int(intent.get("remoteWrites", 0)) + writes
+        save_intent(storage, ledger, intent)
+        occurrence = intent.get("occurrenceKey") or booking.get("occurrenceKey")
+        if apply and isinstance(occurrence, str):
+            with storage.writer_lock():
+                for row in intent["teamSignups"]:
+                    actor = row.get("actorId")
+                    observed_at = row.get("observedAt")
+                    if (
+                        actor != owner
+                        and row.get("status") == "ACCEPTED"
+                        and isinstance(actor, str)
+                        and isinstance(observed_at, str)
+                    ):
+                        record_invitation_locked(
+                            storage,
+                            occurrence_key=occurrence,
+                            intent_id=selected_id,
+                            actor_id=actor,
+                            status="accepted",
+                            occurred_at=observed_at,
+                            evidence_ref=(
+                                f"evidence:preview:event:{event_id}:"
+                                f"participant:{actor}:invitation-readback"
+                            ),
+                        )
+        _sync_world_intent_status(storage, intent)
+        print(f"PREVIEW CLUB TEAM SIGNUP // {'APPLIED' if apply else 'DRY RUN'} // PR #{read_policy.pull_request_number}")
+        print(f"intent: {selected_id}; members: {len(participants)}; added: {writes}")
+        for row in intent["teamSignups"]:
+            print(f"- {row['actorId']}: {row['status']}")
+        return 0
+    except (BookingIntentError, CredentialsError, FirebaseAuthError, IdentityRegistryError, PreviewReadError,
+            PreviewWriteError, PreviewMatchLedgerError, TargetPolicyError, ValueError, KeyError) as exc:
+        print(f"ERROR preview team signup: {exc}", file=sys.stderr)
+        return 2
+
+
 def open_preview_share_invitation(root: Path, intent_id: str, confirmation: str) -> int:
     """Capture a booked player's share URL and announce availability without leaking it."""
     storage = Storage(root)
@@ -2006,14 +2405,14 @@ def open_preview_share_invitation(root: Path, intent_id: str, confirmation: str)
         _, intent = select_intent(ledger, intent_id)
         booking = intent.get("booking") if isinstance(intent.get("booking"), dict) else {}
         event_id, owner = booking.get("eventId"), intent.get("bookerActorId")
-        if intent.get("journey") != "customer_training" or intent.get("status") != "booked":
-            raise PreviewWriteError("share invitation requires a booked customer-training intent")
+        if intent.get("journey") not in {"customer_training", "customer_team_signup"} or intent.get("status") not in {"booked", "team_signup_in_progress", "team_members_registered"}:
+            raise PreviewWriteError("share invitation requires a booked player-owned intent")
         if not isinstance(event_id, str) or not isinstance(owner, str):
             raise PreviewWriteError("booked training intent is missing its event owner")
         participants = intent.get("participants")
-        recipient = next((actor_id for actor_id in participants if isinstance(actor_id, str) and actor_id != owner), None) if isinstance(participants, list) else None
-        if not isinstance(recipient, str):
-            raise PreviewWriteError("booked training intent is missing its invited teammate")
+        recipients = [actor_id for actor_id in participants if isinstance(actor_id, str) and actor_id != owner] if isinstance(participants, list) else []
+        if not recipients:
+            raise PreviewWriteError("booked intent is missing named invitation recipients")
         identities = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure((owner,))
         identity = identities[owner]
         auth = FirebaseAuthenticator(actor_auth_cache(root, owner)).authenticate(
@@ -2024,15 +2423,20 @@ def open_preview_share_invitation(root: Path, intent_id: str, confirmation: str)
         if not isinstance(key, str):
             raise PreviewWriteError("booked training intent is missing occurrence key")
         record = record_share_invitation(storage, read_policy, key=key, owner_actor_id=owner, response=response)
-        message_id = f"{intent_id}:share-invitation-ready"
+        if isinstance(record.get("maxRedeems"), int) and record["maxRedeems"] < len(recipients):
+            raise PreviewWriteError("product share invitation does not have enough redeem capacity for the named recipients")
         with storage.writer_lock():
             messages = storage.read_jsonl(storage.channel_path("club"))
-            if message_id not in {row.get("id") for row in messages if isinstance(row, dict)}:
+            existing_ids = {row.get("id") for row in messages if isinstance(row, dict)}
+            for recipient in recipients:
+                message_id = f"{intent_id}:share-invitation-ready:{recipient}"
+                if message_id in existing_ids:
+                    continue
                 storage.append_jsonl(storage.channel_path("club"), {
                     "id": message_id, "channel": "club", "from": owner, "to": [recipient],
                     "kind": "share_invitation_ready", "intentId": intent_id, "eventId": event_id,
                     "shareInvitationKey": key,
-                    "text": f"{TEAM_ACTOR_NAMES.get(recipient, (recipient,))[0]}, our W37 training booking is confirmed. I opened a private invitation for you; accept it through the player handoff when you are ready.",
+                    "text": f"{TEAM_ACTOR_NAMES.get(recipient, (recipient,))[0]}, our W37 booking is confirmed. I opened the player invitation; accept it through the player handoff when you are ready.",
                     "observedAt": datetime.now(timezone.utc).isoformat(), "remoteWrites": 1,
                 })
         print(f"PREVIEW CLUB SHARE INVITATION // CAPTURED // intent: {intent_id}; invitation: {record['invitationId']}; writes: 1")
@@ -2042,7 +2446,7 @@ def open_preview_share_invitation(root: Path, intent_id: str, confirmation: str)
         return 2
 
 
-def redeem_preview_training_invitation(root: Path, intent_id: str, confirmation: str) -> int:
+def redeem_preview_training_invitation(root: Path, intent_id: str, confirmation: str, recipient_arg: Optional[str] = None) -> int:
     """Let the named teammate redeem and accept a retained training link.
 
     The link is an opaque local credential held only in the ignored, mode-0600
@@ -2067,20 +2471,20 @@ def redeem_preview_training_invitation(root: Path, intent_id: str, confirmation:
         event_id = booking.get("eventId")
         occurrence = booking.get("occurrenceKey")
         if (
-            intent.get("journey") != "customer_training"
-            or intent.get("status") != "booked"
+            intent.get("journey") not in {"customer_training", "customer_team_signup"}
+            or intent.get("status") not in {"booked", "team_signup_in_progress", "team_members_registered"}
             or not isinstance(owner, str)
             or not isinstance(participants, list)
             or not isinstance(event_id, str)
             or not isinstance(occurrence, str)
         ):
-            raise PreviewWriteError("share redemption requires a booked customer-training intent")
-        recipient = next(
-            (actor_id for actor_id in participants if isinstance(actor_id, str) and actor_id != owner),
-            None,
-        )
+            raise PreviewWriteError("share redemption requires a booked player-owned intent")
+        eligible = [actor_id for actor_id in participants if isinstance(actor_id, str) and actor_id != owner]
+        recipient = recipient_arg or (eligible[0] if len(eligible) == 1 else None)
+        if recipient_arg is not None and recipient_arg not in eligible:
+            raise PreviewWriteError("share redemption recipient is not named on this booking")
         if not isinstance(recipient, str):
-            raise PreviewWriteError("booked training intent is missing its invited teammate")
+            raise PreviewWriteError("booking has multiple recipients; choose one named recipient")
         share_store = storage.load_json(
             storage.state / "share-invitations.json",
             default={"schemaVersion": 1, "invitations": {}},
@@ -2133,17 +2537,21 @@ def redeem_preview_training_invitation(root: Path, intent_id: str, confirmation:
             raise PreviewWriteError("booked training match is missing from the local match ledger")
         match = dict(match)
         match["phase"] = "joined"
-        match["participants"] = [
-            {"actorId": owner, "role": "booking owner", "bookingStatus": "BOOKED", "invitationStatus": "OWNER"},
-            {
-                "actorId": recipient,
-                "role": "accepted training player",
-                "bookingStatus": "BOOKED",
-                "invitationId": invitation_summary["invitationId"],
-                "invitationStatus": invitation_summary["status"],
-                "attendance": invitation_summary["checkInStatus"],
-            },
-        ]
+        participant_rows = {
+            row.get("actorId"): row for row in match.get("participants", [])
+            if isinstance(row, dict) and isinstance(row.get("actorId"), str)
+        }
+        participant_rows[owner] = {
+            "actorId": owner, "role": "booking owner",
+            "bookingStatus": "BOOKED", "invitationStatus": "OWNER",
+        }
+        participant_rows[recipient] = {
+            "actorId": recipient, "role": "accepted player",
+            "bookingStatus": "BOOKED", "invitationId": invitation_summary["invitationId"],
+            "invitationStatus": invitation_summary["status"],
+            "attendance": invitation_summary["checkInStatus"],
+        }
+        match["participants"] = [participant_rows[actor] for actor in [owner, *eligible] if actor in participant_rows]
         match["lifecycle"] = {
             "state": "ACCEPTED",
             "steps": {
@@ -2152,15 +2560,39 @@ def redeem_preview_training_invitation(root: Path, intent_id: str, confirmation:
             },
         }
         save_match(storage, match_ledger, match)
-        message_id = f"{intent_id}:share-invitation-accepted"
+        with storage.writer_lock():
+            intent_ledger = load_intent_ledger(storage)
+            _, current_intent = select_intent(intent_ledger, intent_id)
+            redemptions = {
+                row.get("actorId"): row for row in current_intent.get("shareRedemptions", [])
+                if isinstance(row, dict) and isinstance(row.get("actorId"), str)
+            }
+            redemptions[recipient] = {"actorId": recipient, "status": "ACCEPTED"}
+            current_intent["shareRedemptions"] = [redemptions[actor] for actor in eligible if actor in redemptions]
+            if current_intent.get("journey") == "customer_team_signup":
+                if all(redemptions.get(actor, {}).get("status") == "ACCEPTED" for actor in eligible):
+                    current_intent["status"] = "team_members_registered"
+                    current_intent["nextAction"] = "check_in_window_then_named_player_check_ins"
+                else:
+                    current_intent["status"] = "team_signup_in_progress"
+                    current_intent["nextAction"] = "await_remaining_named_player_redemptions"
+            save_intent(storage, intent_ledger, current_intent)
+            observed_at = datetime.now(timezone.utc).isoformat()
+            record_invitation_locked(
+                storage, occurrence_key=occurrence, intent_id=intent_id,
+                actor_id=recipient, status=str(invitation_summary["status"]),
+                occurred_at=observed_at,
+                evidence_ref=f"evidence:preview:event:{event_id}:participation:{recipient}",
+            )
+        message_id = f"{intent_id}:share-invitation-accepted:{recipient}"
         with storage.writer_lock():
             messages = storage.read_jsonl(storage.channel_path("club"))
             if message_id not in {row.get("id") for row in messages if isinstance(row, dict)}:
                 storage.append_jsonl(storage.channel_path("club"), {
                     "id": message_id, "channel": "club", "from": recipient, "to": [owner],
                     "kind": "share_invitation_accepted", "intentId": intent_id, "eventId": event_id,
-                    "inReplyTo": f"{intent_id}:share-invitation-ready",
-                    "text": f"{TEAM_ACTOR_NAMES.get(recipient, (recipient,))[0]} redeemed {TEAM_ACTOR_NAMES.get(owner, (owner,))[0]}'s training invitation and accepted the new W37 session.",
+                    "inReplyTo": f"{intent_id}:share-invitation-ready:{recipient}",
+                    "text": f"{TEAM_ACTOR_NAMES.get(recipient, (recipient,))[0]} redeemed {TEAM_ACTOR_NAMES.get(owner, (owner,))[0]}'s invitation and accepted the W37 session.",
                     "observedAt": datetime.now(timezone.utc).isoformat(), "remoteWrites": writes,
                 })
     except (BookingIntentError, CredentialsError, FirebaseAuthError, IdentityRegistryError,
@@ -2570,8 +3002,9 @@ def check_in_training_player(
                         occurrence_key=occurrence,
                         event_id=event_id,
                         actor_id=actor_id,
-                        actor_label=TEAM_ACTOR_NAMES.get(actor_id, (ACTOR_NAMES.get(actor_id, actor_id),))[0],
+                        actor_label=_actor_display_name(actor_id),
                         recipient_actor_ids=participants,
+                        intent_id=intent_id,
                     )
     except (ValueError, BookingIntentError, CredentialsError, FirebaseAuthError,
             IdentityRegistryError, PreviewMatchLedgerError, PreviewReadError,
@@ -2584,6 +3017,14 @@ def check_in_training_player(
     print(f"window: {start_time.isoformat()} minus 1 hour through {end_time.isoformat()}; {window_detail}")
     print(f"check-in: {status}; writes: {writes if apply else 0}")
     return 0
+
+
+def _actor_display_name(actor_id: str) -> str:
+    """Return a safe human label for either team or ordinary player identities."""
+    name = TEAM_ACTOR_NAMES.get(actor_id) or ACTOR_NAMES.get(actor_id)
+    if isinstance(name, tuple):
+        return " ".join(part for part in name if isinstance(part, str) and part)
+    return actor_id
 
 
 def list_preview_matches(root: Path) -> int:

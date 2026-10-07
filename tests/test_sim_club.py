@@ -31,6 +31,7 @@ from podplay_sim_club.fake_preview import FakePreview
 from podplay_sim_club.orchestrator import Orchestrator, SimulatedCrash
 from podplay_sim_club.preview import PreviewAdapter
 from podplay_sim_club.preview_booking import PreviewBookingWriter, occurrence_key
+from podplay_sim_club.team_signup import PreviewTeamMemberWriter
 from podplay_sim_club.preview_owner_event import PreviewOwnerEventWriter
 from podplay_sim_club.preview_event_signup import PreviewEventSignupWriter
 from podplay_sim_club.preview_match_ledger import (
@@ -202,6 +203,9 @@ class SimClubTestCase(unittest.TestCase):
         intent = load_intent_ledger(storage)["intents"][result["intent_id"]]
         self.assertEqual("requested", intent["status"])
         self.assertEqual(0, intent["remoteWrites"])
+        facts = storage.read_jsonl(storage.state / "journal" / "facts.jsonl")
+        self.assertEqual("communication.message", facts[-1]["type"])
+        self.assertEqual("acknowledge", facts[-1]["payload"]["speechAct"])
 
     def test_sofia_can_stimulate_a_quiet_club_without_creating_an_event(self):
         from podplay_sim_club.owner_engagement import tick as owner_tick
@@ -251,8 +255,14 @@ class SimClubTestCase(unittest.TestCase):
         self.assertIn("legacyActorCooldowns", state)
         self.assertNotIn("cooldowns", state)
 
-    def test_rally_tick_runs_a_direct_captain_challenge_round_then_stops(self):
+    def test_rally_tick_can_ground_a_post_training_captain_challenge_without_product_writes(self):
         from podplay_sim_club.rally_engine import tick
+        from podplay_sim_club.social_engine import record_completed_event
+
+        record_completed_event(
+            self.root, ["andy-bogard", "terry-bogard"], now=FIXED_NOW,
+            team_id="bogard-higashi", occurrence_key="training:rally-challenge:001",
+        )
 
         result = tick(self.root, now=FIXED_NOW)
         self.assertLessEqual(len(result["rounds"]), 2)
@@ -260,9 +270,11 @@ class SimClubTestCase(unittest.TestCase):
         self.assertTrue(result["rounds"][0]["messageSent"])
         self.assertTrue(any(turn["action"] == "challenge_rival_captain" for round_ in result["rounds"] for turn in round_["actorTurns"]))
         intents = load_intent_ledger(Storage(self.root))["intents"]
-        invited = [intent for intent in intents.values() if intent.get("reason") == "team_rivalry_doubles"]
+        invited = [intent for intent in intents.values() if intent.get("reason") == "recent_team_training_competition"]
         self.assertEqual(1, len(invited))
-        self.assertEqual("captain_invited", invited[0]["status"])
+        self.assertEqual("agreed", invited[0]["status"])
+        messages = Storage(self.root).read_jsonl(Storage(self.root).channel_path("club"))
+        self.assertIn("captain_challenge_acceptance", [row.get("kind") for row in messages])
         self.assertEqual(0, result["remoteWrites"])
 
     def test_rally_queue_resumes_after_each_ten_people_and_wraps_only_next_tick(self):
@@ -322,6 +334,213 @@ class SimClubTestCase(unittest.TestCase):
             ["capture_share_invitation_link", "invite_player", "accept_invitation"],
             task["playerActionsAfterBooking"],
         )
+
+    def test_lead_booking_bridge_requires_an_explicit_plan_then_confirmed_apply(self):
+        from podplay_sim_club.lead_booking_bridge import advance
+        from podplay_sim_club.training_sessions import next_booking_task
+
+        storage = Storage(self.root)
+        intent = {
+            "schemaVersion": 1, "id": "intent:training:bridge", "journey": "customer_training",
+            "status": "agreed", "bookerActorId": "king-captain",
+            "participants": ["king-captain", "mai"], "remoteWrites": 0,
+            "constraints": {"durationMinutes": 30},
+        }
+        ledger = load_intent_ledger(storage)
+        save_intent(storage, ledger, intent)
+        task = next_booking_task(self.root)
+        calls = []
+
+        def planner(root, intent_id, announce):
+            calls.append(("plan", intent_id, announce))
+            current_ledger = load_intent_ledger(Storage(root))
+            current = current_ledger["intents"][intent_id]
+            current.update({"status": "preview_ready", "previewPlan": {"startTime": "2026-10-06T18:00:00Z"}})
+            save_intent(Storage(root), current_ledger, current)
+            return 0
+
+        def booker(root, apply, confirmation, intent_id):
+            calls.append(("book", apply, confirmation, intent_id))
+            current_ledger = load_intent_ledger(Storage(root))
+            current = current_ledger["intents"][intent_id]
+            current.update({"status": "booked", "remoteWrites": 1, "booking": {"eventId": "event-bridge"}})
+            save_intent(Storage(root), current_ledger, current)
+            return 0
+
+        waiting = advance(self.root, task, now=FIXED_NOW, planner=planner, training_booker=booker, team_booker=booker)
+        self.assertEqual("awaiting_live_plan", waiting["action"])
+        self.assertEqual([], calls)
+
+        planned = advance(self.root, task, now=FIXED_NOW, plan_preview=True, planner=planner, training_booker=booker, team_booker=booker)
+        self.assertEqual("preview_plan_ready", planned["action"])
+        self.assertEqual([("plan", intent["id"], False)], calls)
+        apply_task = next_booking_task(self.root)
+        self.assertEqual("apply_training_booking", apply_task["action"])
+
+        awaiting_apply = advance(self.root, apply_task, now=FIXED_NOW, planner=planner, training_booker=booker, team_booker=booker)
+        self.assertEqual("awaiting_preview_apply", awaiting_apply["action"])
+        applied = advance(self.root, apply_task, now=FIXED_NOW, apply_preview=True, confirmation=PREVIEW_ORIGIN, planner=planner, training_booker=booker, team_booker=booker)
+        self.assertEqual("booking_read_back", applied["action"])
+        self.assertEqual(1, applied["remoteWrites"])
+        self.assertEqual(("book", True, PREVIEW_ORIGIN, intent["id"]), calls[-1])
+        bridge = storage.load_json(storage.state / "lead-booking-bridge.json")
+        self.assertEqual("booking_read_back", bridge["lastAttempt"]["action"])
+
+    def test_historical_training_does_not_block_a_fresh_captain_invitation(self):
+        from podplay_sim_club.training_sessions import propose_pair
+
+        storage = Storage(self.root)
+        ledger = load_intent_ledger(storage)
+        save_intent(storage, ledger, {
+            "schemaVersion": 1, "id": "intent:training:bogard-higashi:old",
+            "journey": "customer_training", "trainingTeamId": "bogard-higashi",
+            "status": "booked", "createdAt": "2026-09-01T12:00:00Z",
+            "participants": ["andy-bogard", "terry-bogard"],
+            "previewPlan": {"endTime": "2026-09-01T13:00:00Z"},
+        })
+
+        fresh = propose_pair(self.root, "andy-bogard", "terry-bogard", FIXED_NOW)
+        self.assertEqual("captain_invited", fresh["status"])
+        self.assertNotEqual("intent:training:bogard-higashi:old", fresh["id"])
+
+    def test_booked_named_training_advertises_owner_share_without_product_write(self):
+        from podplay_sim_club.server import _with_social_lifecycle_offers
+        from podplay_sim_club.social_engine import tick as social_tick
+
+        storage = Storage(self.root)
+        intent_id = "intent:training:share-offer"
+        occurrence = "occurrence:intent:share-offer"
+        ledger = load_intent_ledger(storage)
+        save_intent(storage, ledger, {
+            "schemaVersion": 1, "id": intent_id, "journey": "customer_training",
+            "status": "booked", "bookerActorId": "king-captain",
+            "participants": ["king-captain", "mai"], "remoteWrites": 1,
+            "booking": {"eventId": "event-share-offer", "occurrenceKey": occurrence},
+            "previewPlan": {"endTime": "2026-09-23T17:00:00Z"},
+        })
+
+        result = social_tick(self.root, now=FIXED_NOW)
+        offers = [row for row in result["offers"] if row.get("intentId") == intent_id]
+        self.assertEqual(["capture_share_invitation"], [row["kind"] for row in offers])
+        self.assertEqual("king-captain", offers[0]["actorId"])
+        self.assertEqual(["mai"], offers[0]["recipientActorIds"])
+        self.assertEqual([], storage.read_jsonl(storage.channel_path("club")))
+        self.assertFalse((storage.state / "share-invitations.json").exists())
+
+        card = _with_social_lifecycle_offers(Orchestrator(self.root), {
+            "matches": [{
+                "socialIntentRef": intent_id,
+                "lifecycle": {"state": "BOOKED", "steps": {"invitation": "NOT_OBSERVED"}},
+            }],
+        })["matches"][0]
+        self.assertEqual("AWAITING_OWNER_SHARE", card["lifecycle"]["state"])
+        self.assertEqual("OWNER_SHARE_OFFERED", card["lifecycle"]["steps"]["invitation"])
+        self.assertEqual("capture_share_invitation", card["socialNextAction"]["kind"])
+
+        storage.write_json(storage.state / "share-invitations.json", {
+            "schemaVersion": 1, "invitations": {occurrence: {"redeemUrl": "private"}},
+        })
+        after_capture = [
+            row for row in social_tick(self.root, now=FIXED_NOW)["offers"]
+            if row.get("intentId") == intent_id
+        ]
+        self.assertNotIn("capture_share_invitation", [row["kind"] for row in after_capture])
+        self.assertEqual(["redeem_share_invitation"], [row["kind"] for row in after_capture])
+
+    def test_share_choices_bridge_only_after_apply_and_recipient_is_named(self):
+        from podplay_sim_club.share_invitations import (
+            next_share_invitation_task, record_share_choice,
+        )
+        from podplay_sim_club.share_invitation_bridge import advance
+
+        storage = Storage(self.root)
+        intent_id = "intent:training:share-bridge"
+        occurrence = "occurrence:intent:share-bridge"
+        ledger = load_intent_ledger(storage)
+        save_intent(storage, ledger, {
+            "schemaVersion": 1, "id": intent_id, "journey": "customer_training",
+            "status": "booked", "bookerActorId": "king-captain",
+            "participants": ["king-captain", "mai"],
+            "booking": {"eventId": "event-share-bridge", "occurrenceKey": occurrence},
+            "previewPlan": {"endTime": "2026-09-23T17:00:00Z"},
+        })
+        with self.assertRaises(Exception):
+            record_share_choice(self.root, intent_id=intent_id, actor_id="mai", action="capture", now=FIXED_NOW)
+        record_share_choice(self.root, intent_id=intent_id, actor_id="king-captain", action="capture", now=FIXED_NOW)
+        task = next_share_invitation_task(self.root, now=FIXED_NOW)
+        self.assertEqual("capture_share_invitation", task["action"])
+        calls = []
+        waiting = advance(
+            self.root, task, now=FIXED_NOW,
+            capture=lambda *args: calls.append(args) or 0,
+            redeem=lambda *args: calls.append(args) or 0,
+        )
+        self.assertEqual("awaiting_preview_apply", waiting["action"])
+        self.assertEqual([], calls)
+        done = advance(
+            self.root, task, now=FIXED_NOW, apply_preview=True, confirmation=PREVIEW_ORIGIN,
+            capture=lambda *args: calls.append(args) or 0,
+            redeem=lambda *args: calls.append(args) or 0,
+        )
+        self.assertEqual("read_back_complete", done["action"])
+        self.assertEqual((self.root, intent_id, PREVIEW_ORIGIN), calls[-1])
+
+        storage.write_json(storage.state / "share-invitations.json", {
+            "schemaVersion": 1, "invitations": {occurrence: {"redeemUrl": "private"}},
+        })
+        record_share_choice(self.root, intent_id=intent_id, actor_id="mai", action="redeem", now=FIXED_NOW)
+        redemption = next_share_invitation_task(self.root, now=FIXED_NOW)
+        self.assertEqual("redeem_share_invitation", redemption["action"])
+        self.assertEqual("mai", redemption["recipientActorId"])
+
+    def test_training_check_in_is_per_player_and_apply_gated(self):
+        from podplay_sim_club.check_in_bridge import advance, next_task, offers, record_choice
+
+        storage = Storage(self.root)
+        intent_id = "intent:training:arrival"
+        ledger = load_intent_ledger(storage)
+        save_intent(storage, ledger, {
+            "schemaVersion": 1, "id": intent_id, "journey": "customer_training",
+            "status": "booked", "bookerActorId": "king-captain",
+            "participants": ["king-captain", "mai"],
+            "booking": {"eventId": "event-arrival", "occurrenceKey": "occurrence:intent:arrival"},
+            "previewPlan": {"startTime": "2026-09-23T15:30:00Z", "endTime": "2026-09-23T16:00:00Z"},
+            "shareRedemptions": [{"actorId": "mai", "status": "ACCEPTED"}],
+        })
+        people = {"king-captain": {}, "mai": {}}
+        available = offers(self.root, now=FIXED_NOW, people=people)
+        self.assertEqual({"king-captain", "mai"}, {row["actorId"] for row in available})
+        record_choice(self.root, intent_id=intent_id, actor_id="mai", now=FIXED_NOW)
+        task = next_task(self.root, now=FIXED_NOW)
+        self.assertEqual(("check_in_training", "mai"), (task["action"], task["actorId"]))
+        calls = []
+        self.assertEqual("awaiting_preview_apply", advance(
+            self.root, task, now=FIXED_NOW,
+            check_in=lambda *args: calls.append(args) or 0,
+        )["action"])
+        self.assertEqual([], calls)
+        self.assertEqual("read_back_complete", advance(
+            self.root, task, now=FIXED_NOW, apply_preview=True, confirmation=PREVIEW_ORIGIN,
+            check_in=lambda *args: calls.append(args) or 0,
+        )["action"])
+        self.assertEqual((self.root, True, PREVIEW_ORIGIN, intent_id, "mai"), calls[-1])
+
+    def test_live_lead_task_skips_stale_agreement_but_keeps_it_as_history(self):
+        from podplay_sim_club.training_sessions import next_booking_task
+
+        storage = Storage(self.root)
+        ledger = load_intent_ledger(storage)
+        stale = {
+            "schemaVersion": 1, "id": "intent:training:stale", "journey": "customer_training",
+            "status": "agreed", "createdAt": "2026-09-20T12:00:00Z",
+            "agreedAt": "2026-09-20T12:01:00Z", "bookerActorId": "andy-bogard",
+            "participants": ["andy-bogard", "terry-bogard"],
+            "constraints": {"durationMinutes": 30},
+        }
+        save_intent(storage, ledger, stale)
+
+        self.assertEqual("pass", next_booking_task(self.root, now=FIXED_NOW)["action"])
+        self.assertEqual("agreed", load_intent_ledger(storage)["intents"][stale["id"]]["status"])
 
     def test_player_share_invitation_link_is_private_and_same_preview_only(self):
         from podplay_sim_club.share_invitations import (
@@ -434,6 +653,186 @@ class SimClubTestCase(unittest.TestCase):
         self.assertEqual("reported", state["rounds"]["semi-final"]["status"])
         self.assertEqual("Japan Team", state["rounds"]["semi-final"]["winner"])
 
+    def test_finished_training_result_requires_requested_captain_and_named_winner(self):
+        from podplay_sim_club.result_requests import report_finished_event_result
+
+        storage = Storage(self.root)
+        intent_id = "intent:training:japan-team:001"
+        storage.write_json(storage.state / "booking-intents.json", {
+            "schemaVersion": 1,
+            "activeIntentId": intent_id,
+            "intents": {intent_id: {
+                "id": intent_id, "journey": "customer_training", "status": "attendance_observed",
+                "trainingTeamId": "japan-team", "bookerActorId": "kyo-captain",
+                "participants": ["kyo-captain", "benimaru"],
+                "eventObservation": {"eventId": "event-japan", "played": False},
+                "resultRequest": {
+                    "eventId": "event-japan", "reporterActorId": "kyo-captain",
+                    "status": "requested", "evidence": "verified_check_in_only",
+                },
+            }},
+        })
+        with self.assertRaises(ValueError):
+            report_finished_event_result(self.root, intent_id, "benimaru", "Japan Team", FIXED_NOW)
+        result = report_finished_event_result(self.root, intent_id, "kyo-captain", "Japan Team", FIXED_NOW)
+
+        self.assertEqual("reported", result["status"])
+        self.assertEqual("Japan Team", result["winner"])
+        persisted = Storage(self.root).load_json(Storage(self.root).state / "booking-intents.json")
+        self.assertTrue(persisted["intents"][intent_id]["eventObservation"]["played"])
+        message = Storage(self.root).read_jsonl(Storage(self.root).channel_path("club"))[-1]
+        self.assertEqual("event_result_reported", message["kind"])
+
+    def test_designated_captain_can_confirm_only_a_grounded_arcade_replay(self):
+        from podplay_sim_club.club_rounds import tick as player_round
+        from podplay_sim_club.social_engine import tick as social_tick
+
+        storage = Storage(self.root)
+        intent_id = "intent:training:bogard-higashi:replay-confirmation"
+        storage.write_json(storage.state / "booking-intents.json", {
+            "schemaVersion": 1, "activeIntentId": intent_id,
+            "intents": {intent_id: {
+                "id": intent_id, "journey": "customer_training", "status": "attendance_observed",
+                "trainingTeamId": "bogard-higashi", "bookerActorId": "andy-bogard",
+                "participants": ["andy-bogard", "terry-bogard"],
+                "booking": {"eventId": "event-replay"},
+                "eventObservation": {"eventId": "event-replay", "outcome": "attendance_observed", "played": False},
+                "arcadeReplay": {"status": "ready", "winner": ["terry-bogard"]},
+                "resultRequest": {"eventId": "event-replay", "reporterActorId": "andy-bogard", "status": "requested", "evidence": "arcade_replay"},
+            }},
+        })
+        offers = social_tick(self.root, now=FIXED_NOW)["offers"]
+        self.assertIn(
+            "confirm_arcade_replay_result",
+            [offer.get("kind") for offer in offers if offer.get("actorId") == "andy-bogard"],
+        )
+        result = player_round(self.root, actor_id="andy-bogard", now=FIXED_NOW)
+        self.assertEqual("confirm_arcade_replay_result", result["action"])
+        self.assertEqual("Terry Bogard", result["winner"])
+        persisted = storage.load_json(storage.state / "booking-intents.json")["intents"][intent_id]
+        self.assertEqual("reported", persisted["result"]["status"])
+        self.assertEqual("arcade_replay_captain_confirmation", persisted["result"]["evidence"])
+
+    def test_completed_training_suppresses_practice_and_enables_generic_captain_challenge(self):
+        from podplay_sim_club.club_rounds import tick as player_round
+        from podplay_sim_club.social_engine import record_completed_event, tick as social_tick
+
+        record_completed_event(
+            self.root, ["andy-bogard", "terry-bogard"], now=FIXED_NOW,
+            team_id="bogard-higashi", occurrence_key="training:completion:001",
+        )
+        offers = social_tick(self.root, now=FIXED_NOW)["offers"]
+        andy_offers = [offer for offer in offers if offer.get("actorId") == "andy-bogard"]
+        self.assertNotIn("invite_teammate", [offer.get("kind") for offer in andy_offers])
+        challenge = next(offer for offer in andy_offers if offer.get("kind") == "challenge_rival_captain")
+        self.assertEqual("kyo-captain", challenge["rivalCaptainId"])
+        action = player_round(self.root, actor_id="andy-bogard", now=FIXED_NOW)
+        self.assertEqual("challenge_rival_captain", action["action"])
+        intent = Storage(self.root).load_json(Storage(self.root).state / "booking-intents.json")["intents"][action["intentId"]]
+        self.assertEqual("recent_team_training_competition", intent["reason"])
+        self.assertEqual(["andy-bogard", "terry-bogard", "kyo-captain", "benimaru"], intent["participants"])
+        self.assertEqual(0, intent["remoteWrites"])
+
+    def test_arcade_table_tennis_is_seeded_replayable_and_local_only(self):
+        from podplay_sim_club.arcade import simulate_and_store, simulate_table_tennis
+
+        ratings = {
+            "kyo-captain": {"serve": 70, "attack": 76, "defense": 66, "composure": 72, "teamwork": 60},
+            "benimaru": {"serve": 64, "attack": 68, "defense": 70, "composure": 66, "teamwork": 75},
+            "andy-bogard": {"serve": 69, "attack": 73, "defense": 71, "composure": 70, "teamwork": 74},
+            "terry-bogard": {"serve": 66, "attack": 72, "defense": 73, "composure": 71, "teamwork": 76},
+        }
+        config = {"left": ["kyo-captain", "benimaru"], "right": ["andy-bogard", "terry-bogard"]}
+        first = simulate_table_tennis(config, ratings, "a" * 64)
+        second = simulate_table_tennis(config, ratings, "a" * 64)
+
+        self.assertEqual(first, second)
+        self.assertGreaterEqual(max(first["score"].values()), 11)
+        self.assertGreaterEqual(abs(first["score"]["left"] - first["score"]["right"]), 2)
+        stored = simulate_and_store(self.root, occurrence_key="arcade:demo-001", left=config["left"], right=config["right"])
+        again = simulate_and_store(self.root, occurrence_key="arcade:demo-001", left=config["left"], right=config["right"])
+        self.assertEqual(stored, again)
+        self.assertEqual("arcade_simulation", stored["kind"])
+        self.assertTrue((Storage(self.root).state / "arcade" / "matches.json").is_file())
+
+    def test_arcade_replay_is_confirmed_by_the_named_reporter_without_claiming_check_in(self):
+        from podplay_sim_club.arcade import attach_training_replay
+        from podplay_sim_club.result_requests import request_finished_event_result, report_finished_event_result
+
+        storage = Storage(self.root)
+        intent_id = "intent:training:women-fighters:arcade"
+        storage.write_json(storage.state / "booking-intents.json", {
+            "schemaVersion": 1, "activeIntentId": intent_id,
+            "intents": {intent_id: {
+                "id": intent_id, "journey": "customer_training", "status": "booked",
+                "trainingTeamId": "women-fighters", "bookerActorId": "king-captain",
+                "participants": ["king-captain", "mai"],
+                "booking": {"eventId": "event-arcade", "occurrenceKey": "women-arcade@2026-09-20T10:00:00Z", "endTime": "2026-09-20T10:30:00Z"},
+                "eventObservation": {"eventId": "event-arcade", "played": False},
+            }},
+        })
+        replay = attach_training_replay(self.root, intent_id=intent_id)
+        self.assertEqual("arcade_replay", replay["replay"]["evidence"])
+        requested = request_finished_event_result(self.root, now=FIXED_NOW)
+        self.assertEqual(intent_id, requested["intentId"])
+        winner = replay["replay"]["winner"][0]
+        confirmed = report_finished_event_result(self.root, intent_id, "king-captain", winner, FIXED_NOW)
+        self.assertEqual("arcade_replay_captain_confirmation", confirmed["evidence"])
+        persisted = storage.load_json(storage.state / "booking-intents.json")["intents"][intent_id]
+        self.assertFalse(persisted["eventObservation"]["played"])
+        self.assertTrue(persisted["eventObservation"]["fictionalPlayed"])
+        protocol = storage.read_jsonl(storage.state / "journal" / "facts.jsonl")
+        self.assertEqual(
+            ["request", "report"],
+            [row["payload"]["speechAct"] for row in protocol if row["type"] == "communication.message"],
+        )
+
+    def test_arcade_replay_bridge_requires_finished_observed_training(self):
+        from podplay_sim_club.arcade import attach_completed_training_replay
+
+        storage = Storage(self.root)
+        intent_id = "intent:training:bogard-higashi:arcade-bridge"
+        storage.write_json(storage.state / "booking-intents.json", {
+            "schemaVersion": 1, "activeIntentId": intent_id,
+            "intents": {intent_id: {
+                "id": intent_id, "journey": "customer_training", "status": "attendance_observed",
+                "bookerActorId": "andy-bogard", "participants": ["andy-bogard", "terry-bogard"],
+                "booking": {"eventId": "event-bridge", "occurrenceKey": "bridge@2026-09-20T10:00:00Z", "endTime": "2026-09-20T10:30:00Z"},
+                "eventObservation": {"eventId": "event-bridge", "outcome": "attendance_observed", "endTime": "2026-09-20T10:30:00Z", "played": False},
+            }},
+        })
+        before_end = attach_completed_training_replay(self.root, now=datetime(2026, 9, 20, 10, 29, tzinfo=timezone.utc))
+        self.assertEqual("pass", before_end["action"])
+        attached = attach_completed_training_replay(self.root, now=datetime(2026, 9, 20, 10, 31, tzinfo=timezone.utc))
+        self.assertEqual("arcade_replay_attached", attached["action"])
+        replay = storage.load_json(storage.state / "booking-intents.json")["intents"][intent_id]["arcadeReplay"]
+        self.assertEqual("ready", replay["status"])
+        again = attach_completed_training_replay(self.root, now=FIXED_NOW)
+        self.assertEqual("pass", again["action"])
+
+    def test_arcade_replay_bridge_derives_doubles_sides_from_named_captains(self):
+        from podplay_sim_club.arcade import attach_completed_training_replay
+
+        storage = Storage(self.root)
+        intent_id = "intent:challenge:arcade-bridge"
+        storage.write_json(storage.state / "booking-intents.json", {
+            "schemaVersion": 1, "activeIntentId": intent_id,
+            "intents": {intent_id: {
+                "id": intent_id, "journey": "customer_team_signup", "status": "attendance_observed",
+                "bookerActorId": "andy-bogard",
+                "participants": ["andy-bogard", "terry-bogard", "kyo-captain", "benimaru"],
+                "challenger": {"captainActorId": "andy-bogard", "teammateActorId": "terry-bogard", "teamName": "Bogard-Higashi"},
+                "opponent": {"captainActorId": "kyo-captain", "teammateActorId": "benimaru", "teamName": "Japan Team"},
+                "booking": {"eventId": "event-doubles", "occurrenceKey": "doubles@2026-09-20T10:00:00Z", "endTime": "2026-09-20T10:30:00Z"},
+                "eventObservation": {"eventId": "event-doubles", "outcome": "attendance_observed", "endTime": "2026-09-20T10:30:00Z", "played": False},
+            }},
+        })
+        attached = attach_completed_training_replay(self.root, now=datetime(2026, 9, 20, 10, 31, tzinfo=timezone.utc))
+        self.assertEqual("arcade_replay_attached", attached["action"])
+        replay = storage.load_json(storage.state / "arcade" / "matches.json")["matches"]["doubles@2026-09-20T10:00:00Z"]
+        self.assertEqual(["andy-bogard", "terry-bogard"], replay["left"])
+        self.assertEqual(["kyo-captain", "benimaru"], replay["right"])
+
     def test_team_member_can_acknowledge_but_not_attest_tournament_result(self):
         storage = Storage(self.root)
         storage.write_json(
@@ -460,7 +859,7 @@ class SimClubTestCase(unittest.TestCase):
         self.assertEqual("create_open_play", second["action"]["action"])
 
     def test_team_challenge_records_four_named_players_without_remote_writes(self):
-        from podplay_sim_club.team_challenges import plan_challenge
+        from podplay_sim_club.team_challenges import next_team_signup_task, plan_challenge
 
         intent = plan_challenge(
             self.root,
@@ -474,9 +873,51 @@ class SimClubTestCase(unittest.TestCase):
             intent["participants"],
         )
         self.assertEqual("owner_open_play", intent["fallbackJourney"])
+        self.assertEqual("andy-bogard", intent["bookerActorId"])
         self.assertEqual(0, intent["remoteWrites"])
+        task = next_team_signup_task(self.root)
+        self.assertEqual("plan_team_signup_booking", task["action"])
+        self.assertEqual(intent["id"], task["intentId"])
+        self.assertEqual(intent["participants"], task["participants"])
         replay = plan_challenge(self.root, "andy-vs-kyo-doubles.json", FIXED_NOW)
         self.assertEqual(intent, replay)
+
+    def test_sofia_promotes_any_captain_agreed_challenge_without_booking_it(self):
+        from podplay_sim_club.owner_engagement import tick as owner_tick
+        from podplay_sim_club.team_challenges import plan_challenge
+
+        intent = plan_challenge(self.root, "andy-vs-kyo-doubles.json", FIXED_NOW)
+        result = owner_tick(self.root, now=FIXED_NOW)
+
+        self.assertEqual("promote_captain_agreed_challenge", result["action"])
+        self.assertEqual(intent["id"], result["intentId"])
+        message = Storage(self.root).read_jsonl(Storage(self.root).channel_path("club"))[-1]
+        self.assertEqual("owner_challenge_promotion", message["kind"])
+        self.assertEqual(intent["participants"], message["to"])
+        stored = load_intent_ledger(Storage(self.root))["intents"][intent["id"]]
+        self.assertIn("ownerChallengePromotionAt", stored)
+        self.assertEqual(0, stored["remoteWrites"])
+
+    def test_team_signup_task_uses_named_captain_not_participant_order_for_legacy_intent(self):
+        from podplay_sim_club.team_challenges import next_team_signup_task, resolve_booking_owner
+
+        storage = Storage(self.root)
+        ledger = load_intent_ledger(storage)
+        intent = {
+            "schemaVersion": 1, "id": "intent:legacy-team", "status": "agreed",
+            "journey": "customer_team_signup", "createdAt": "2026-09-30T12:00:00+00:00",
+            # Deliberately not captain-first: legacy recovery must use the
+            # social challenger role, not this incidental list ordering.
+            "participants": ["teammate", "captain", "opponent-captain"],
+            "challenger": {"captainActorId": "captain"},
+            "constraints": {"durationMinutes": 30},
+        }
+        save_intent(storage, ledger, intent)
+
+        self.assertEqual("captain", resolve_booking_owner(intent))
+        task = next_team_signup_task(self.root)
+        self.assertEqual("captain", task["bookerActorId"])
+        self.assertEqual(intent["participants"], task["participants"])
 
     def test_direct_captain_challenge_is_an_invitation_not_a_booking_or_acceptance(self):
         from podplay_sim_club.team_challenges import propose_challenge
@@ -489,6 +930,483 @@ class SimClubTestCase(unittest.TestCase):
         invitation = Storage(self.root).read_jsonl(Storage(self.root).channel_path("club"))[-1]
         self.assertEqual("captain_challenge_invitation", invitation["kind"])
         self.assertEqual(["kyo-captain"], invitation["to"])
+
+    def test_only_addressed_captain_accepts_challenge_and_protocol_projects_it(self):
+        from podplay_sim_club.facts import load_facts
+        from podplay_sim_club.team_challenges import TeamChallengeError, accept_challenge, propose_challenge
+
+        invited = propose_challenge(self.root, "andy-vs-kyo-doubles.json", FIXED_NOW)
+        with self.assertRaises(TeamChallengeError):
+            accept_challenge(self.root, invited["id"], "benimaru", FIXED_NOW)
+        agreed = accept_challenge(self.root, invited["id"], "kyo-captain", FIXED_NOW)
+
+        self.assertEqual("agreed", agreed["status"])
+        facts = load_facts(self.root)
+        self.assertEqual(
+            ["communication.message", "commitment.proposed", "communication.message", "commitment.accepted"],
+            [row["type"] for row in facts],
+        )
+        projection = Storage(self.root).load_json(Storage(self.root).state / "projections" / "commitments.json")
+        commitment = projection["commitments"][invited["commitmentId"]]
+        self.assertEqual("accepted", commitment["status"])
+        self.assertEqual(["proposed", "accepted"], [row["status"] for row in commitment["transitions"]])
+
+    def test_commitment_transitions_enforce_actor_authority_and_evidence(self):
+        from podplay_sim_club.protocol import (
+            ProtocolError, append_protocol_facts_locked, make_commitment_proposal,
+            make_commitment_transition, make_message,
+        )
+
+        storage = Storage(self.root)
+        with storage.writer_lock():
+            message = make_message(
+                message_id="message:demo:proposal", conversation_id="conversation:demo",
+                correlation_id="journey:demo", sender_actor_id="captain-a",
+                recipient_actor_ids=["captain-b"], speech_act="propose",
+                content_code="demo.challenge", occurred_at="2026-09-23T15:00:00+00:00",
+                commitment_id="commitment:demo",
+            )
+            proposal = make_commitment_proposal(
+                commitment_id="commitment:demo", conversation_id="conversation:demo",
+                correlation_id="journey:demo", proposer_actor_id="captain-a",
+                debtor_actor_id="captain-b", beneficiary_actor_ids=["captain-a", "captain-b"],
+                kind="demo", content={"capabilityId": "demo.accept"},
+                occurred_at="2026-09-23T15:00:00+00:00", causation_id=message["factId"],
+            )
+            append_protocol_facts_locked(storage, [message, proposal])
+            with self.assertRaises(ProtocolError):
+                make_commitment_transition(
+                    storage, commitment_id="commitment:demo", transition="accepted",
+                    actor_id="captain-a", occurred_at="2026-09-23T15:01:00+00:00",
+                    causation_id=message["factId"],
+                )
+            accepted = make_commitment_transition(
+                storage, commitment_id="commitment:demo", transition="accepted",
+                actor_id="captain-b", occurred_at="2026-09-23T15:01:00+00:00",
+                causation_id=message["factId"],
+            )
+            append_protocol_facts_locked(storage, [accepted])
+            with self.assertRaises(ProtocolError):
+                make_commitment_transition(
+                    storage, commitment_id="commitment:demo", transition="satisfied",
+                    actor_id="lead", occurred_at="2026-09-23T16:00:00+00:00",
+                    causation_id=accepted["factId"],
+                )
+            satisfied = make_commitment_transition(
+                storage, commitment_id="commitment:demo", transition="satisfied",
+                actor_id="lead", occurred_at="2026-09-23T16:00:00+00:00",
+                causation_id=accepted["factId"], evidence_ref="evidence:demo:readback",
+            )
+            append_protocol_facts_locked(storage, [satisfied])
+        projection = storage.load_json(storage.state / "projections" / "commitments.json")
+        self.assertEqual("satisfied", projection["commitments"]["commitment:demo"]["status"])
+
+    def test_missed_training_requires_fresh_proposal_and_teammate_acceptance(self):
+        from podplay_sim_club.club_rounds import tick as club_round
+        from podplay_sim_club.facts import load_facts
+        from podplay_sim_club.projections import rebuild_projections
+        from podplay_sim_club.social_engine import tick as social_tick
+
+        storage = Storage(self.root)
+        ledger = load_intent_ledger(storage)
+        source = {
+            "schemaVersion": 1,
+            "id": "intent:training:women-fighters:missed",
+            "status": "missed_session",
+            "journey": "customer_training",
+            "reason": "captain_teammate_training",
+            "trainingTeamId": "women-fighters",
+            "bookerActorId": "king-captain",
+            "participants": ["king-captain", "mai"],
+            "constraints": {"durationMinutes": 30, "daysAhead": [0, 14], "localWindows": ["00:00-24:00"], "slotPolicy": "nearest_valid_low_contention"},
+            "eventObservation": {"eventId": "event-missed-training", "outcome": "missed_session"},
+            "remoteWrites": 0,
+        }
+        save_intent(storage, ledger, source)
+        storage.append_jsonl(storage.channel_path("club"), {
+            "id": "event:event-missed-training:training-missed", "channel": "club", "from": "riley",
+            "to": source["participants"], "kind": "training_missed_session", "intentId": source["id"],
+            "eventId": "event-missed-training", "observedAt": "2026-09-23T15:00:00Z",
+        })
+        storage.write_json(storage.state / "social-engine.json", {
+            "schemaVersion": 1,
+            "lastTickAt": "2026-09-23T15:00:00Z",
+            "interactionCooldownSemantics": "action-only",
+            "motives": {
+                "king-captain": {"desireToPlay": 100, "curiosity": 0, "frustration": 0},
+                "mai": {"desireToPlay": 100, "curiosity": 0, "frustration": 0},
+            },
+        })
+
+        social_tick(self.root, now=FIXED_NOW)
+        proposed = club_round(self.root, actor_id="king-captain", now=FIXED_NOW)
+        self.assertEqual("propose_session_retry", proposed["action"])
+        retry = load_intent_ledger(storage)["intents"][proposed["intentId"]]
+        self.assertEqual("captain_invited", retry["status"])
+        self.assertNotIn("booking", retry)
+
+        social_tick(self.root, now=FIXED_NOW)
+        accepted = club_round(self.root, actor_id="mai", now=FIXED_NOW)
+        self.assertEqual("accept_session_retry", accepted["action"])
+        retry = load_intent_ledger(storage)["intents"][proposed["intentId"]]
+        self.assertEqual("agreed", retry["status"])
+        messages = storage.read_jsonl(storage.channel_path("club"))[-2:]
+        self.assertEqual(["propose", "accept"], [row["speechAct"] for row in messages])
+        self.assertEqual(messages[0]["commitmentId"], messages[1]["commitmentId"])
+        facts = load_facts(self.root)
+        self.assertEqual(
+            ["communication.message", "commitment.proposed", "communication.message", "commitment.accepted"],
+            [fact["type"] for fact in facts],
+        )
+        projection = rebuild_projections(self.root)
+        commitment = projection["commitments"]["commitments"][messages[0]["commitmentId"]]
+        self.assertEqual("accepted", commitment["status"])
+        first = (storage.state / "projections" / "commitments.json").read_bytes()
+        rebuild_projections(self.root)
+        self.assertEqual(first, (storage.state / "projections" / "commitments.json").read_bytes())
+
+    def test_missed_team_session_can_be_reproposed_by_either_captain(self):
+        from podplay_sim_club.session_retries import accept_retry, propose_retry
+
+        storage = Storage(self.root)
+        ledger = load_intent_ledger(storage)
+        source = {
+            "schemaVersion": 1,
+            "id": "intent:team-challenge:missed",
+            "status": "missed_session",
+            "journey": "customer_team_signup",
+            "reason": "team_rivalry_doubles",
+            "bookerActorId": "andy-bogard",
+            "participants": ["andy-bogard", "terry-bogard", "kyo-captain", "benimaru"],
+            "challenger": {"teamId": "bogard-higashi", "teamName": "Bogard-Higashi", "captainActorId": "andy-bogard", "teammateActorId": "terry-bogard"},
+            "opponent": {"teamId": "japan-team", "teamName": "Japan Team", "captainActorId": "kyo-captain", "teammateActorId": "benimaru"},
+            "constraints": {"durationMinutes": 60, "daysAhead": [0, 14], "localWindows": ["00:00-24:00"], "slotPolicy": "nearest_valid_low_contention"},
+            "eventObservation": {"eventId": "event-missed-doubles", "outcome": "missed_session"},
+            "remoteWrites": 0,
+        }
+        save_intent(storage, ledger, source)
+
+        invited = propose_retry(self.root, source["id"], "kyo-captain", FIXED_NOW)
+        self.assertEqual("kyo-captain", invited["bookerActorId"])
+        self.assertEqual("japan-team", invited["challenger"]["teamId"])
+        self.assertEqual("captain_invited", invited["status"])
+        agreed = accept_retry(self.root, invited["id"], "andy-bogard", FIXED_NOW)
+        self.assertEqual("agreed", agreed["status"])
+        self.assertEqual("plan_team_signup_booking", agreed["nextAction"])
+        self.assertNotIn("booking", agreed)
+
+    def test_fact_journal_is_idempotent_and_rejects_secret_shaped_fields(self):
+        from podplay_sim_club.facts import FactValidationError, append_fact, load_facts, make_fact
+
+        fact = make_fact(
+            fact_type="belief.observed", natural_key="king:membership:1",
+            subject_ref="belief:king:membership", correlation_id="journey:self-discovery:king",
+            source_kind="preview_readback", payload={"subject": "membership", "status": "unknown"},
+            occurred_at=FIXED_NOW, actor_id="king-captain", privacy="operator",
+        )
+        self.assertTrue(append_fact(self.root, fact))
+        self.assertFalse(append_fact(self.root, fact))
+        self.assertEqual([fact], load_facts(self.root))
+        with self.assertRaises(FactValidationError):
+            make_fact(
+                fact_type="belief.observed", natural_key="unsafe",
+                subject_ref="belief:unsafe", correlation_id="journey:unsafe",
+                source_kind="preview_readback", payload={"password": "never-store-this"},
+                occurred_at=FIXED_NOW,
+            )
+        with self.assertRaises(FactValidationError):
+            make_fact(
+                fact_type="belief.observed", natural_key="unsafe-url",
+                subject_ref="belief:unsafe", correlation_id="journey:unsafe",
+                source_kind="preview_readback", payload={"value": "https://preview.invalid/invitation?token=private"},
+                occurred_at=FIXED_NOW,
+            )
+
+    def test_event_and_participation_projections_keep_people_independent(self):
+        from podplay_sim_club.event_lifecycle import (
+            ensure_planned_locked, record_booked_locked, record_check_in_locked,
+            record_invitation_locked, record_observation_locked, record_result_locked,
+            record_result_requested_locked, record_window_locked,
+        )
+        from podplay_sim_club.projections import rebuild_projections
+        from podplay_sim_club.server import (
+            _attach_share_invitation_links, _prefer_projected_events,
+        )
+
+        storage = Storage(self.root)
+        intent = {
+            "id": "intent:training:projection-demo", "journey": "customer_training",
+            "bookerActorId": "king-captain", "participants": ["king-captain", "mai"],
+            "commitmentId": "commitment:training:projection-demo",
+        }
+        with storage.writer_lock():
+            occurrence = ensure_planned_locked(storage, intent, "2026-09-23T15:00:00+00:00", {
+                "startTime": "2026-09-23T16:00:00+00:00",
+                "endTime": "2026-09-23T16:30:00+00:00", "podRef": "pod-w37",
+            })
+            record_window_locked(
+                storage, occurrence_key=occurrence, intent_id=intent["id"],
+                planned_window={
+                    "startTime": "2026-09-23T16:15:00+00:00",
+                    "endTime": "2026-09-23T16:45:00+00:00", "podRef": "pod-w37",
+                },
+                occurred_at="2026-09-23T15:02:00+00:00",
+            )
+            record_booked_locked(
+                storage, occurrence_key=occurrence, intent_id=intent["id"],
+                event_ref="event-demo", booker_actor_id="king-captain",
+                occurred_at="2026-09-23T15:05:00+00:00",
+                evidence_ref="evidence:event-demo:booking",
+            )
+            record_invitation_locked(
+                storage, occurrence_key=occurrence, intent_id=intent["id"], actor_id="mai",
+                status="ACCEPTED", occurred_at="2026-09-23T15:10:00+00:00",
+                evidence_ref="evidence:event-demo:mai-invitation",
+            )
+            record_check_in_locked(
+                storage, occurrence_key=occurrence, intent_id=intent["id"], actor_id="king-captain",
+                status="CHECKED_IN", occurred_at="2026-09-23T15:55:00+00:00",
+                evidence_ref="evidence:event-demo:king-check-in",
+            )
+            record_observation_locked(
+                storage, occurrence_key=occurrence, intent_id=intent["id"],
+                outcome="attendance_inconclusive", occurred_at="2026-09-23T16:31:00+00:00",
+                evidence_ref="evidence:event-demo:finished",
+                participant_observations={
+                    "king-captain": {"accepted": True, "checkIn": "CHECKED_IN"},
+                    "mai": {"accepted": True, "checkIn": "NOT_CHECKED_IN"},
+                },
+            )
+            record_result_requested_locked(
+                storage, occurrence_key=occurrence, intent_id=intent["id"],
+                reporter_actor_id="king-captain", occurred_at="2026-09-23T16:32:00+00:00",
+            )
+            record_result_locked(
+                storage, occurrence_key=occurrence, intent_id=intent["id"],
+                reporter_actor_id="king-captain", winner="King",
+                evidence_kind="captain_attestation", occurred_at="2026-09-23T16:33:00+00:00",
+                evidence_ref="evidence:event-demo:result",
+            )
+
+        event = storage.load_json(storage.state / "projections" / "events.json")["events"][occurrence]
+        people = storage.load_json(storage.state / "projections" / "participation.json")["participation"]
+        king = people[f"participation:{occurrence}:king-captain"]
+        mai = people[f"participation:{occurrence}:mai"]
+        self.assertEqual("completed", event["status"])
+        self.assertEqual("King", event["result"]["winner"])
+        self.assertEqual("checked_in", king["attendance"])
+        self.assertEqual("inconclusive", mai["attendance"])
+        self.assertEqual("accepted", mai["invitation"])
+        self.assertTrue(king["resultReporter"])
+        self.assertEqual(["participant", "booking_owner"], king["roles"])
+        self.assertEqual("2026-09-23T16:15:00+00:00", event["plannedWindow"]["startTime"])
+
+        event_bytes = (storage.state / "projections" / "events.json").read_bytes()
+        participation_bytes = (storage.state / "projections" / "participation.json").read_bytes()
+        rebuild_projections(self.root)
+        self.assertEqual(event_bytes, (storage.state / "projections" / "events.json").read_bytes())
+        self.assertEqual(
+            participation_bytes,
+            (storage.state / "projections" / "participation.json").read_bytes(),
+        )
+
+        legacy = {
+            "activeOccurrenceKey": occurrence,
+            "matches": [{
+                "occurrenceKey": occurrence,
+                "participants": [{"actorId": "legacy-wrong-person"}],
+                "legacyOnly": True,
+            }],
+        }
+        card = _prefer_projected_events(Orchestrator(self.root), legacy)["matches"][0]
+        self.assertEqual(["king-captain", "mai"], [row["actorId"] for row in card["participants"]])
+        self.assertNotIn("legacyOnly", card)
+        self.assertEqual("ACCEPTED", card["lifecycle"]["steps"]["acceptance"])
+        self.assertEqual("PARTIAL", card["lifecycle"]["steps"]["checkIn"])
+        self.assertEqual("RESULT_REPORTED", card["lifecycle"]["steps"]["play"])
+        storage.write_json(storage.state / "share-invitations.json", {
+            "invitations": {occurrence: {
+                "redeemUrl": "https://preview.invalid/redeem/operator-approved-link",
+                "maxRedeems": 3, "redeemsRemaining": 2,
+                "capturedAt": "2026-09-23T15:06:00+00:00",
+            }},
+        })
+        attached = _attach_share_invitation_links(
+            Orchestrator(self.root), {"activeOccurrenceKey": occurrence, "matches": [card]}
+        )
+        self.assertEqual(2, attached["matches"][0]["shareInvitation"]["redeemsRemaining"])
+
+    def test_self_asset_evidence_and_beliefs_are_safe_explicit_and_replayable(self):
+        from podplay_sim_club.projections import rebuild_projections
+        from podplay_sim_club.protocol import append_protocol_facts_locked
+        from podplay_sim_club.facts import FactValidationError
+        from podplay_sim_club.self_assets import (
+            SelfAssetValidationError, make_belief_fact, make_evidence,
+            persist_evidence_locked, validate_evidence,
+        )
+
+        storage = Storage(self.root)
+        zero = make_evidence(
+            probe_id="probe:self-assets:credits", target_fingerprint="pr-7200:build-demo",
+            capability_id="actor.inspect_self_assets", actor_id="king-captain",
+            subject="virtual_credit_balance", observed_at="2026-09-23T15:00:00Z",
+            result="observed", observation=0,
+        )
+        self.assertEqual({"amount": 0.0, "unit": "virtual_credit"}, zero["safeObservation"])
+        self.assertEqual(zero, make_evidence(
+            probe_id="probe:self-assets:credits", target_fingerprint="pr-7200:build-demo",
+            capability_id="actor.inspect_self_assets", actor_id="king-captain",
+            subject="virtual_credit_balance", observed_at="2026-09-23T15:00:00Z",
+            result="observed", observation=0,
+        ))
+        tampered = dict(zero)
+        tampered["evidenceId"] = "evidence:self-assets:00000000000000000000"
+        with self.assertRaises(SelfAssetValidationError):
+            validate_evidence(tampered)
+        unknown = make_evidence(
+            probe_id="probe:self-assets:credits", target_fingerprint="pr-7200:build-demo",
+            capability_id="actor.inspect_self_assets", actor_id="mai",
+            subject="virtual_credit_balance", observed_at="2026-09-23T15:00:00Z",
+            result="unknown", error_code="missing_field",
+        )
+        self.assertIsNone(unknown["safeObservation"])
+
+        expected = make_belief_fact(
+            actor_id="king-captain", subject="virtual_credit_balance", status="expected",
+            expected_value={"amount": 20.0, "unit": "virtual_credit"},
+            occurred_at="2026-09-23T14:55:00Z", correlation_id="journey:self-assets:king",
+            source_kind="actor_fixture",
+        )
+        observed = make_belief_fact(
+            actor_id="king-captain", subject="virtual_credit_balance", status="observed",
+            observed_value=zero["safeObservation"], evidence_ref=zero["evidenceId"],
+            expires_at="2026-09-23T15:15:00Z", occurred_at="2026-09-23T15:00:00Z",
+            correlation_id="journey:self-assets:king", source_kind="preview_readback",
+        )
+        contradicted = make_belief_fact(
+            actor_id="king-captain", subject="virtual_credit_balance", status="contradicted",
+            expected_value={"amount": 20.0, "unit": "virtual_credit"},
+            observed_value=zero["safeObservation"], evidence_ref=zero["evidenceId"],
+            expires_at="2026-09-23T15:15:00Z", occurred_at="2026-09-23T15:00:01Z",
+            correlation_id="journey:self-assets:king", source_kind="comparison",
+        )
+        stale = make_belief_fact(
+            actor_id="king-captain", subject="virtual_credit_balance", status="stale",
+            occurred_at="2026-09-23T15:15:00Z", correlation_id="journey:self-assets:king",
+            source_kind="expiry_policy",
+        )
+        mai_unknown = make_belief_fact(
+            actor_id="mai", subject="virtual_credit_balance", status="unknown",
+            evidence_ref=unknown["evidenceId"], occurred_at="2026-09-23T15:00:00Z",
+            correlation_id="journey:self-assets:mai", source_kind="preview_readback",
+        )
+        with storage.writer_lock():
+            persist_evidence_locked(storage, zero)
+            persist_evidence_locked(storage, unknown)
+            append_protocol_facts_locked(
+                storage, [expected, observed, contradicted, stale, mai_unknown]
+            )
+
+        beliefs = storage.load_json(storage.state / "projections" / "beliefs.json")["beliefs"]
+        king = beliefs["belief:king-captain:virtual_credit_balance"]
+        mai = beliefs["belief:mai:virtual_credit_balance"]
+        self.assertEqual("stale", king["status"])
+        self.assertEqual({"amount": 0.0, "unit": "virtual_credit"}, king["observedValue"])
+        self.assertEqual({"amount": 20.0, "unit": "virtual_credit"}, king["expectedValue"])
+        self.assertEqual(["expected", "observed", "contradicted", "stale"], [row["status"] for row in king["transitions"]])
+        self.assertEqual("unknown", mai["status"])
+        self.assertIsNone(mai["observedValue"])
+        self.assertNotEqual(king["sourceEvidenceRef"], mai["sourceEvidenceRef"])
+
+        first = (storage.state / "projections" / "beliefs.json").read_bytes()
+        rebuild_projections(self.root)
+        self.assertEqual(first, (storage.state / "projections" / "beliefs.json").read_bytes())
+
+        with self.assertRaises(SelfAssetValidationError):
+            make_evidence(
+                probe_id="probe:self-assets:membership", target_fingerprint="pr-7200:build-demo",
+                capability_id="actor.inspect_self_assets", actor_id="mai",
+                subject="membership_assignment", observed_at="2026-09-23T15:00:00Z",
+                result="observed", observation={"assigned": True, "email": "private@example.com"},
+            )
+        with self.assertRaises(FactValidationError):
+            make_evidence(
+                probe_id="probe:self-assets:membership",
+                target_fingerprint="https://preview.invalid/private",
+                capability_id="actor.inspect_self_assets", actor_id="mai",
+                subject="membership_assignment", observed_at="2026-09-23T15:00:00Z",
+                result="observed", observation={"assigned": False},
+            )
+
+    def test_self_asset_sanitizers_keep_entitlement_types_separate(self):
+        from podplay_sim_club.self_assets import (
+            SelfAssetValidationError, make_evidence,
+        )
+
+        common = {
+            "probe_id": "probe:self-assets:account",
+            "target_fingerprint": "pr-7200:build-demo",
+            "capability_id": "actor.inspect_self_assets",
+            "actor_id": "andy-bogard",
+            "observed_at": "2026-09-23T15:00:00Z",
+            "result": "observed",
+        }
+        packages = make_evidence(
+            **common,
+            subject="owned_package_entitlements",
+            observation=[
+                {"kind": "play_pass", "label": "Monthly play pass", "remainingQuantity": 2,
+                 "unit": "play", "expiresAt": "2026-10-01T00:00:00Z", "status": "active"},
+                {"kind": "package_credit", "label": "Training credit", "remainingQuantity": 40,
+                 "unit": "credit", "expiresAt": None, "status": "active"},
+            ],
+        )
+        self.assertEqual(
+            ["package_credit", "play_pass"],
+            [row["kind"] for row in packages["safeObservation"]],
+        )
+        self.assertEqual([40.0, 2.0], [row["remainingQuantity"] for row in packages["safeObservation"]])
+
+        membership = make_evidence(
+            **common, subject="membership_assignment",
+            observation={
+                "assigned": True, "type": "AREA_MEMBER", "displayName": "Preview Member",
+                "isOwner": True, "startDate": "2026-09-01T00:00:00Z",
+            },
+        )
+        self.assertTrue(membership["safeObservation"]["assigned"])
+        self.assertNotIn("discount", membership["safeObservation"])
+
+        benefits = make_evidence(
+            **common, subject="membership_benefits_understood",
+            observation=["Two customer-visible play passes"],
+        )
+        readiness = make_evidence(
+            **common, subject="payment_readiness", observation=True,
+        )
+        self.assertEqual(["Two customer-visible play passes"], benefits["safeObservation"])
+        self.assertEqual({"ready": True}, readiness["safeObservation"])
+
+        with self.assertRaises(SelfAssetValidationError):
+            make_evidence(
+                **common, subject="owned_package_entitlements",
+                observation=[{
+                    "id": "raw-product-id", "kind": "play_pass", "label": "Pass",
+                    "remainingQuantity": 1, "unit": "play", "expiresAt": None,
+                    "status": "active",
+                }],
+            )
+
+    def test_capability_catalog_is_role_general_and_contains_no_character_ids(self):
+        catalog = json.loads((REPO_ROOT / "capabilities" / "catalog.json").read_text())
+        roster = json.loads((REPO_ROOT / "characters" / "roster.json").read_text())
+        serialized = json.dumps(catalog)
+        self.assertEqual(1, catalog["schemaVersion"])
+        self.assertEqual(len(catalog["capabilities"]), len({row["id"] for row in catalog["capabilities"]}))
+        for character in roster["characters"]:
+            actor_id = character.get("actorId")
+            if isinstance(actor_id, str):
+                self.assertNotIn(f'"{actor_id}"', serialized)
 
     def orchestrator(self):
         return Orchestrator(self.root)
@@ -826,16 +1744,17 @@ class SimClubTestCase(unittest.TestCase):
         )
         self.assertIn("invite_sent", [message["kind"] for message in preview["messages"]])
         self.assertEqual("Andy Bogard", next(message for message in preview["messages"] if message["kind"] == "invite_sent")["fromLabel"])
-        self.assertIn("PODPLAY SIM CLUB // OBSERVATORY", page)
-        self.assertIn("REMOTE PRODUCT STATE", page)
-        self.assertIn("MESSAGES", page)
-        self.assertIn("SELECTED EVENT / BOOKING", page)
-        self.assertIn("CURRENT STORYLINES", page)
-        self.assertIn('id="toggle-stream"', page)
+        self.assertIn("community", preview)
+        self.assertIn("initiatives", preview)
+        self.assertEqual("Andy Bogard", next(person for person in preview["community"]["people"] if person["actorId"] == "andy-bogard")["label"])
+        self.assertIn("PODPLAY SIM CLUB // COMMUNITY OBSERVATORY", page)
+        self.assertIn("COMMUNITY CONVERSATION", page)
+        self.assertIn("SIMS · STATUS &amp; MOTIVES", page)
+        self.assertIn("STAFF / COMMUNITY INITIATIVES", page)
+        self.assertIn("BOOKINGS &amp; EVENTS", page)
         self.assertIn('id="preview-server"', page)
-        self.assertIn("Open this event in the preview", page)
-        self.assertIn("/api/tournament/report", page)
-        self.assertIn("if (element.innerHTML !== html)", page)
+        self.assertIn("Open this event in Preview", page)
+        self.assertIn("if(node.innerHTML!==html)", page)
         self.assertNotIn("LOCAL FAKE", page)
         self.assertNotIn("CHARACTER NEEDS", page)
         self.assertNotIn("BOOKING INTENTS", page)
@@ -1199,6 +2118,12 @@ class PreviewConnectionTestCase(unittest.TestCase):
         self.assertTrue(result["hasPaymentMethod"])
         self.assertEqual(12.5, result["virtualCredits"])
 
+    def test_missing_virtual_credit_field_remains_unknown(self):
+        result = summarize_payment({"paymentElement": None})
+
+        self.assertFalse(result["hasPaymentMethod"])
+        self.assertIsNone(result["virtualCredits"])
+
     def test_candidate_session_uses_available_default_table_rate(self):
         result = select_candidate_session(
             [
@@ -1551,6 +2476,28 @@ class PreviewConnectionTestCase(unittest.TestCase):
         self.assertTrue(body["termsAgreed"])
         self.assertEqual("USE_ALL", body["passesStrategy"])
         self.assertNotIn("owner", body)
+
+    def test_team_member_writer_previews_then_adds_one_named_member(self):
+        policy = TargetPolicy.from_config(ClubConfig(mode=RunMode.PREVIEW_WRITE, preview_origin=PREVIEW_ORIGIN, allowed_preview_origins=(PREVIEW_ORIGIN,), preview_write_confirmation=PREVIEW_ORIGIN))
+
+        class Response:
+            status = 200
+            def __enter__(self): return self
+            def __exit__(self, *args): return None
+            def geturl(self): return PREVIEW_ORIGIN + "/apis/v2/events/event-1/team-members"
+            def read(self, _limit): return b'{"invitation":{"id":"invite-1"}}'
+
+        requests = []
+        result = PreviewTeamMemberWriter(policy, "owner-token", lambda request, _timeout: requests.append(request) or Response()).add_paid_by_leader(
+            "event-1", "leader-1", {"fullName":"Terry Bogard", "email":"test@example.com", "userId":"user-2"}
+        )
+        self.assertEqual("invite-1", result["invitation"]["id"])
+        self.assertEqual(2, len(requests))
+        preview, ordered = (json.loads(request.data.decode()) for request in requests)
+        self.assertEqual("PREVIEW", preview["type"])
+        self.assertEqual("ORDER", ordered["type"])
+        self.assertEqual("PAID_BY_INVITER", ordered["chargeType"])
+        self.assertEqual({"user":{"id":"leader-1"}}, ordered["teamLeader"])
 
     def test_booking_occurrence_key_is_stable_and_slot_specific(self):
         first = occurrence_key("pod-1", "2026-09-26T12:00:00Z", "andy-bogard")

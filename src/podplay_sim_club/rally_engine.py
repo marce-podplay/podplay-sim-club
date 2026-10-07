@@ -10,17 +10,31 @@ from .tournament import run_tick as run_tournament_tick
 from .booking_intents import load_intent_ledger
 from .social_engine import tick as run_social_tick
 from .front_desk import tick as run_front_desk_tick
-from .event_observation import observe_finished_events, observe_finished_training_sessions, reconcile_missed_training_recoveries
+from .event_observation import observe_finished_events, observe_finished_training_sessions
+from .arcade import attach_completed_training_replay
 from .result_requests import request_finished_event_result
 from .owner_engagement import tick as run_owner_engagement_tick
 from .club_rounds import tick as run_club_round
 from .training_sessions import next_booking_task
+from .team_challenges import next_team_signup_task
+from .lead_booking_bridge import advance as advance_booking_bridge
+from .share_invitations import next_share_invitation_task
+from .share_invitation_bridge import advance as advance_share_invitation_bridge
+from .check_in_bridge import next_task as next_check_in_task, advance as advance_check_in_bridge
 
 
 STATE_FILE = "rally-engine.json"
 
 
-def tick(root: Path, hours: int = 2, now: Optional[datetime] = None) -> Dict[str, Any]:
+def tick(
+    root: Path,
+    hours: int = 2,
+    now: Optional[datetime] = None,
+    *,
+    plan_preview: bool = False,
+    apply_preview: bool = False,
+    confirmation: Optional[str] = None,
+) -> Dict[str, Any]:
     if not 1 <= hours <= 24:
         raise ValueError("hours must be between 1 and 24")
     storage = Storage(root)
@@ -88,14 +102,43 @@ def tick(root: Path, hours: int = 2, now: Optional[datetime] = None) -> Dict[str
             break
     observation = observe_finished_events(root, now=instant)
     training_observation = observe_finished_training_sessions(root, now=instant)
-    training_recovery = reconcile_missed_training_recoveries(root, now=instant)
+    arcade_replay = attach_completed_training_replay(root, now=instant)
+    training_recovery = {
+        "action": "pass",
+        "detail": "missed sessions require a fresh grounded player proposal and acceptance",
+        "remoteWrites": 0,
+    }
     result_request = request_finished_event_result(root, now=instant)
     result = run_tournament_tick(root, now=instant)
-    training = next_booking_task(root)
+    training = next_booking_task(root, now=instant)
     if training.get("action") != "pass":
         result = training
+    team_signup = next_team_signup_task(root, now=instant)
+    if team_signup.get("action") != "pass" and training.get("action") == "pass":
+        result = team_signup
     if result_request.get("action") != "pass":
         result = result_request
+    elif arcade_replay.get("action") != "pass":
+        result = arcade_replay
+    booking_task = training if training.get("action") != "pass" else team_signup
+    booking_bridge = advance_booking_bridge(
+        root, booking_task, now=instant, plan_preview=plan_preview, apply_preview=apply_preview,
+        confirmation=confirmation,
+    )
+    if booking_bridge.get("action") != "pass" and result_request.get("action") == "pass":
+        result = booking_bridge
+    share_task = next_share_invitation_task(root, now=instant)
+    share_bridge = advance_share_invitation_bridge(
+        root, share_task, now=instant, apply_preview=apply_preview, confirmation=confirmation,
+    )
+    if share_bridge.get("action") != "pass" and result_request.get("action") == "pass":
+        result = share_bridge
+    check_in_task = next_check_in_task(root, now=instant)
+    check_in_bridge = advance_check_in_bridge(
+        root, check_in_task, now=instant, apply_preview=apply_preview, confirmation=confirmation,
+    )
+    if check_in_bridge.get("action") != "pass" and result_request.get("action") == "pass":
+        result = check_in_bridge
     with storage.writer_lock():
         state = storage.load_json(storage.state / STATE_FILE, default=state)
         state["ticks"] = int(state.get("ticks", 0)) + 1
@@ -104,7 +147,7 @@ def tick(root: Path, hours: int = 2, now: Optional[datetime] = None) -> Dict[str
         state["schedulerCursor"] = cursor
         storage.write_json(storage.state / STATE_FILE, state)
         _write_interpretation_audit(storage, rounds, isoformat(instant))
-    return {"status": state["status"], "state": state, "action": result["action"], "socialOffers": social["offers"], "rounds": rounds, "ownerEngagement": owner_engagement, "player": player, "frontDesk": front_desk, "observation": observation, "trainingObservation": training_observation, "trainingRecovery": training_recovery, "resultRequest": result_request, "training": training, "remoteWrites": 0}
+    return {"status": state["status"], "state": state, "action": result["action"], "socialOffers": social["offers"], "rounds": rounds, "ownerEngagement": owner_engagement, "player": player, "frontDesk": front_desk, "observation": observation, "trainingObservation": training_observation, "arcadeReplay": arcade_replay, "trainingRecovery": training_recovery, "resultRequest": result_request, "training": training, "teamSignup": team_signup, "bookingBridge": booking_bridge, "shareInvitationTask": share_task, "shareInvitationBridge": share_bridge, "checkInTask": check_in_task, "checkInBridge": check_in_bridge, "remoteWrites": int(booking_bridge.get("remoteWrites", 0)) + int(share_bridge.get("remoteWrites", 0)) + int(check_in_bridge.get("remoteWrites", 0))}
 
 
 def _write_interpretation_audit(storage: Storage, rounds: list[Dict[str, Any]], observed_at: str) -> None:

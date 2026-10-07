@@ -7,6 +7,11 @@ Actors propose speech, intent, and at most one allowed action. The lead validate
 the proposal and writes all shared state. Model prose is never HTTP evidence and
 never determines assertion success.
 
+The lead enforces the boundaries in
+[`kb/capability-model.md`](../kb/capability-model.md): belief is not evidence,
+speech is not agreement, agreement is not execution, and execution is not
+success until its read-back passes.
+
 The lead must reconcile remote state before retrying a mutation. Production and
 shared staging are always outside the target boundary.
 
@@ -47,10 +52,21 @@ The lead checks the agreement and the free court, then moves that same event
 and reads it back. Riley tells the players the result. No second booking is
 created.
 
+## Missed player-owned sessions
+
+An ended session with accepted participants but no verified check-ins is a
+missed session, not a played match. The lead records and announces that evidence
+once. It does not reuse the old event or assume the old agreement continues.
+An authorized captain may make a fresh local proposal; the required teammate
+or opposing captain must explicitly accept. The resulting clean intent may then
+use the existing guarded booking adapter.
+
 ## Quiet club
 
 When there is no active event, player action, or front-desk request, Sofia may
 advertise an interest check on a durable cooldown. This local message can raise
 the addressed players' desire to play, but it is not a product promotion or an
-event. A named player must ask Riley for a new session before the lead plans a
-slot, and Sofia must still promote a planned event before any preview write.
+event. A captain may propose a player-owned training/challenge to the required
+player, or a named player may ask Riley for an owner event. The appropriate
+social commitment must be grounded before the lead plans a slot, and Sofia must
+still promote an owner event before its preview write.

@@ -2,8 +2,15 @@
   "schemaVersion": 1,
   "id": "preview-club-social-engine",
   "clock": {"desirePerHour": 8, "curiosityDecayPerHour": 4, "frustrationDecayPerHour": 2},
-  "thresholds": {"desireToPlay": 80, "curiosity": 70, "frustration": 60},
+  "thresholds": {"desireToPlay": 80, "curiosity": 70, "frustration": 60, "competition": 20},
   "cooldownMinutes": 60,
+  "postSession": {
+    "trainingRecoveryMinutes": 120,
+    "competitionWindowMinutes": 360,
+    "trainingDesireDrop": 35,
+    "competitionBoost": 30,
+    "cohesionBoost": 10
+  },
   "quietClubPromotion": {
     "desireBoost": 40,
     "cooldownMinutes": 240

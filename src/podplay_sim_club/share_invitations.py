@@ -12,6 +12,7 @@ from .target_policy import TargetPolicy
 from .storage import Storage
 from .time import isoformat, parse_instant
 from .preview_write import PreviewWriteError
+from .booking_intents import load_intent_ledger, save_intent
 
 
 SHARE_INVITATIONS_FILE = "share-invitations.json"
@@ -19,6 +20,97 @@ SHARE_INVITATIONS_FILE = "share-invitations.json"
 
 class ShareInvitationError(ValueError):
     """The product did not expose a safe share invitation URL."""
+
+
+def record_share_choice(
+    root, *, intent_id: str, actor_id: str, action: str,
+    now: Optional[datetime] = None,
+) -> Mapping[str, Any]:
+    """Persist a player decision before any invitation product write.
+
+    Choices are deliberately local and secret-free.  The lead bridge consumes a
+    capture choice only on an explicitly enabled Preview apply tick; recipient
+    redemption choices are similarly inert until the retained private link and
+    read-back adapter are available.
+    """
+    if action not in {"capture", "redeem"}:
+        raise ShareInvitationError("share invitation action is unsupported")
+    storage = Storage(root)
+    observed_at = isoformat(now or datetime.now(timezone.utc))
+    with storage.writer_lock():
+        ledger = load_intent_ledger(storage)
+        intent = ledger["intents"].get(intent_id)
+        if not isinstance(intent, dict):
+            raise ShareInvitationError("share invitation intent is unavailable")
+        owner = intent.get("bookerActorId")
+        participants = intent.get("participants") if isinstance(intent.get("participants"), list) else []
+        if action == "capture":
+            if actor_id != owner:
+                raise ShareInvitationError("only the booking owner may capture a share invitation")
+            choice = intent.get("shareInvitationChoice") if isinstance(intent.get("shareInvitationChoice"), dict) else {}
+            choice.update({"actorId": actor_id, "status": "accepted", "requestedAt": observed_at})
+            intent["shareInvitationChoice"] = choice
+            intent["nextAction"] = "lead_may_capture_private_share_invitation"
+        else:
+            if actor_id == owner or actor_id not in participants:
+                raise ShareInvitationError("only a named non-owner participant may redeem a share invitation")
+            choices = intent.get("shareRedemptionChoices") if isinstance(intent.get("shareRedemptionChoices"), dict) else {}
+            choices[actor_id] = {"status": "accepted", "requestedAt": observed_at}
+            intent["shareRedemptionChoices"] = choices
+            intent["nextAction"] = "lead_may_redeem_named_player_share_invitation"
+        save_intent(storage, ledger, intent, make_active=False)
+    return {"intentId": intent_id, "actorId": actor_id, "action": action, "observedAt": observed_at}
+
+
+def next_share_invitation_task(root, *, now: Optional[datetime] = None) -> Mapping[str, Any]:
+    """Choose one current, player-authorized invitation bridge task.
+
+    This is a selection helper only.  It does not read credentials, expose a
+    URL, or contact Preview.
+    """
+    storage = Storage(root)
+    instant = now or datetime.now(timezone.utc)
+    ledger = load_intent_ledger(storage)
+    sidecar = storage.load_json(storage.state / SHARE_INVITATIONS_FILE, default={})
+    retained = sidecar.get("invitations", {}) if isinstance(sidecar, dict) else {}
+    if not isinstance(retained, dict):
+        retained = {}
+    for intent_id, intent in ledger["intents"].items():
+        if not isinstance(intent, dict) or intent.get("journey") not in {"customer_training", "customer_team_signup"}:
+            continue
+        if intent.get("status") not in {"booked", "team_signup_in_progress", "team_members_registered"}:
+            continue
+        booking = intent.get("booking") if isinstance(intent.get("booking"), dict) else {}
+        plan = intent.get("previewPlan") if isinstance(intent.get("previewPlan"), dict) else {}
+        occurrence = booking.get("occurrenceKey")
+        if not isinstance(occurrence, str):
+            continue
+        end_time = plan.get("endTime")
+        if isinstance(end_time, str) and parse_instant(end_time) <= instant:
+            continue
+        owner = intent.get("bookerActorId")
+        choice = intent.get("shareInvitationChoice") if isinstance(intent.get("shareInvitationChoice"), dict) else {}
+        if (
+            isinstance(owner, str) and occurrence not in retained
+            and choice.get("actorId") == owner and choice.get("status") == "accepted"
+        ):
+            return {"action": "capture_share_invitation", "intentId": intent_id, "ownerActorId": owner}
+        record = retained.get(occurrence)
+        choices = intent.get("shareRedemptionChoices") if isinstance(intent.get("shareRedemptionChoices"), dict) else {}
+        participants = intent.get("participants") if isinstance(intent.get("participants"), list) else []
+        accepted_rows = {
+            row.get("actorId") for row in intent.get("shareRedemptions", [])
+            if isinstance(row, dict) and row.get("status") == "ACCEPTED"
+        }
+        if isinstance(record, dict):
+            for actor_id in participants:
+                decision = choices.get(actor_id) if isinstance(actor_id, str) else None
+                if (
+                    isinstance(actor_id, str) and actor_id != owner and actor_id not in accepted_rows
+                    and isinstance(decision, dict) and decision.get("status") == "accepted"
+                ):
+                    return {"action": "redeem_share_invitation", "intentId": intent_id, "recipientActorId": actor_id}
+    return {"action": "pass", "detail": "no current player-authorized share invitation task"}
 
 
 class _RejectRedirects(HTTPRedirectHandler):

@@ -50,6 +50,7 @@ class PreviewBookingWriter:
         session_table_id: str,
         virtual_credits: float,
         additional_items: Optional[list] = None,
+        session_guests_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         if self._used:
             raise PreviewWriteError("booking write budget exhausted")
@@ -57,15 +58,26 @@ class PreviewBookingWriter:
             raise PreviewWriteError("booking order requires session and table IDs")
         if not isinstance(virtual_credits, (int, float)) or not 0 <= virtual_credits <= 25:
             raise PreviewWriteError("booking order credits must be between 0 and 25")
-        items = [{"session": {"id": session_id}, "sessionTable": {"id": session_table_id}}]
-        for item in additional_items or []:
-            if not isinstance(item, dict):
+        first_item = {"session": {"id": session_id}, "sessionTable": {"id": session_table_id}}
+        if session_guests_id is not None:
+            if not isinstance(session_guests_id, str) or not session_guests_id:
+                raise PreviewWriteError("booking guest option must be a non-empty ID")
+            first_item["sessionGuests"] = {"id": session_guests_id}
+        items = [first_item]
+        for extra in additional_items or []:
+            if not isinstance(extra, dict):
                 raise PreviewWriteError("booking order items must be objects")
-            extra_session = item.get("sessionId")
-            extra_table = item.get("tableId")
+            extra_session = extra.get("sessionId")
+            extra_table = extra.get("tableId")
             if not isinstance(extra_session, str) or not isinstance(extra_table, str):
                 raise PreviewWriteError("booking order items require session and table IDs")
-            items.append({"session": {"id": extra_session}, "sessionTable": {"id": extra_table}})
+            item = {"session": {"id": extra_session}, "sessionTable": {"id": extra_table}}
+            guest_id = extra.get("sessionGuestsId")
+            if guest_id is not None:
+                if not isinstance(guest_id, str) or not guest_id:
+                    raise PreviewWriteError("booking guest option must be a non-empty ID")
+                item["sessionGuests"] = {"id": guest_id}
+            items.append(item)
         self._used = True
         payload = {
             "type": "ORDER",
@@ -201,6 +213,7 @@ def read_back_event(
         "endTime": event.get("endTime"),
         "isCanceled": event.get("isCanceled"),
         "invitationCount": _collection_total(event.get("invitations")),
+        "teamSize": event.get("teamSize"),
     }
 
 

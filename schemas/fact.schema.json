@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://podplay.local/schemas/fact.schema.json",
+  "title": "Preview Club Fact",
+  "type": "object",
+  "required": ["schemaVersion", "factId", "type", "occurredAt", "recordedAt", "subjectRef", "correlationId", "source", "privacy", "payload"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "factId": {"type": "string", "pattern": "^fact:"},
+    "type": {"type": "string", "minLength": 1},
+    "occurredAt": {"type": "string", "format": "date-time"},
+    "recordedAt": {"type": "string", "format": "date-time"},
+    "actorId": {"type": ["string", "null"]},
+    "subjectRef": {"type": "string", "minLength": 1},
+    "conversationId": {"type": ["string", "null"]},
+    "causationId": {"type": ["string", "null"]},
+    "correlationId": {"type": "string", "minLength": 1},
+    "source": {
+      "type": "object",
+      "required": ["kind", "evidenceRef"],
+      "properties": {"kind": {"type": "string"}, "evidenceRef": {"type": ["string", "null"]}},
+      "additionalProperties": false
+    },
+    "privacy": {"enum": ["public", "community", "operator"]},
+    "payload": {"type": "object"}
+  },
+  "additionalProperties": false
+}
+

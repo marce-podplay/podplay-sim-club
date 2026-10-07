@@ -1,11 +1,20 @@
 """Captain-led two-player training agreements with no preview writes."""
 
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from .booking_intents import load_intent_ledger, save_intent
+from .protocol import (
+    append_protocol_facts_locked,
+    commitment_id_for,
+    conversation_id_for,
+    make_commitment_proposal,
+    make_commitment_transition,
+    make_message,
+    reply_causation,
+)
 from .storage import Storage
 from .time import isoformat
 
@@ -42,10 +51,13 @@ def propose(root: Path, scenario_name: str, now: datetime) -> Dict[str, Any]:
             },
             "nextAction": "await_teammate_acceptance",
             "remoteWrites": 0,
+            "conversationId": conversation_id_for(intent_id),
+            "commitmentId": commitment_id_for(intent_id),
         }
         save_intent(storage, ledger, intent)
-        storage.append_jsonl(storage.channel_path("club"), {
+        message = {
             "id": f"{intent_id}:training-invitation",
+            "conversationId": intent["conversationId"], "commitmentId": intent["commitmentId"], "speechAct": "propose",
             "channel": "club",
             "kind": "training_invitation",
             "from": captain,
@@ -54,7 +66,9 @@ def propose(root: Path, scenario_name: str, now: datetime) -> Dict[str, Any]:
             "text": "King proposes a 30-minute Women Fighters training session. Mai, accept and the lead may plan one available court.",
             "observedAt": observed_at,
             "remoteWrites": 0,
-        })
+        }
+        storage.append_jsonl(storage.channel_path("club"), message)
+        _record_proposal(storage, intent, captain, teammate, message, observed_at)
     return intent
 
 
@@ -76,8 +90,9 @@ def accept(root: Path, scenario_name: str, now: datetime) -> Dict[str, Any]:
         intent = deepcopy(intent)
         intent.update({"status": "agreed", "agreedAt": observed_at, "nextAction": "plan_live_w37_availability_then_player_booking"})
         save_intent(storage, ledger, intent)
-        storage.append_jsonl(storage.channel_path("club"), {
+        message = {
             "id": f"{intent_id}:training-acceptance",
+            "conversationId": intent.get("conversationId"), "commitmentId": intent.get("commitmentId"), "speechAct": "accept",
             "channel": "club",
             "kind": "training_acceptance",
             "from": teammate,
@@ -87,7 +102,9 @@ def accept(root: Path, scenario_name: str, now: datetime) -> Dict[str, Any]:
             "text": "Mai accepts the 30-minute Women Fighters training session. King may book one available court.",
             "observedAt": observed_at,
             "remoteWrites": 0,
-        })
+        }
+        storage.append_jsonl(storage.channel_path("club"), message)
+        _record_acceptance(storage, intent, teammate, captain, message, observed_at)
     return intent
 
 
@@ -103,10 +120,9 @@ def propose_pair(root: Path, captain: str, teammate: str, now: datetime) -> Dict
     team, names = _validated_pair(storage, captain, teammate)
     with storage.writer_lock():
         ledger = load_intent_ledger(storage)
-        active = next((intent for intent in ledger["intents"].values() if isinstance(intent, dict)
-                       and intent.get("journey") == "customer_training"
-                       and intent.get("trainingTeamId") == team["id"]
-                       and intent.get("status") in {"captain_invited", "agreed", "planned", "booked"}), None)
+        active = next((intent for intent in ledger["intents"].values() if _blocks_fresh_pair_proposal(
+            intent, team["id"], now
+        )), None)
         if isinstance(active, dict):
             return deepcopy(active)
         sequence = 1 + sum(1 for intent in ledger["intents"].values() if isinstance(intent, dict)
@@ -121,15 +137,52 @@ def propose_pair(root: Path, captain: str, teammate: str, now: datetime) -> Dict
             "bookerActorId": captain, "participants": [captain, teammate],
             "constraints": {"durationMinutes": 30, "daysAhead": [0, 14], "localWindows": ["00:00-24:00"], "slotPolicy": "nearest_valid_low_contention"},
             "nextAction": "await_teammate_acceptance", "remoteWrites": 0,
+            "conversationId": conversation_id_for(intent_id), "commitmentId": commitment_id_for(intent_id),
         }
         save_intent(storage, ledger, intent)
-        storage.append_jsonl(storage.channel_path("club"), {
+        message = {
             "id": f"{intent_id}:training-invitation", "channel": "club", "kind": "training_invitation",
+            "conversationId": intent["conversationId"], "commitmentId": intent["commitmentId"], "speechAct": "propose",
             "from": captain, "to": [teammate], "intentId": intent_id,
             "text": f"{names[captain]} proposes a 30-minute {team['name']} training session. {names[teammate]}, accept and the lead may plan one available W37 court.",
             "observedAt": observed_at, "remoteWrites": 0,
-        })
+        }
+        storage.append_jsonl(storage.channel_path("club"), message)
+        _record_proposal(storage, intent, captain, teammate, message, observed_at)
     return intent
+
+
+def _blocks_fresh_pair_proposal(intent: Any, team_id: str, now: datetime) -> bool:
+    """Whether an existing team training is still a live social commitment.
+
+    Historical bookings and old unexecuted agreements are evidence, not a
+    permanent veto over a new invitation.  A future booked session remains a
+    real commitment; a fresh proposal/agreement remains live for two hours so
+    a captain does not spam their teammate while the lead is planning it.
+    """
+    if not isinstance(intent, dict):
+        return False
+    if intent.get("journey") != "customer_training" or intent.get("trainingTeamId") != team_id:
+        return False
+    status = intent.get("status")
+    if status == "booked":
+        plan = intent.get("previewPlan")
+        end = plan.get("endTime") if isinstance(plan, dict) else None
+        if not isinstance(end, str):
+            return False
+        try:
+            return datetime.fromisoformat(end.replace("Z", "+00:00")) > now
+        except ValueError:
+            return False
+    if status not in {"captain_invited", "agreed", "preview_ready", "planned"}:
+        return False
+    started = intent.get("agreedAt") or intent.get("createdAt")
+    if not isinstance(started, str):
+        return False
+    try:
+        return (now - datetime.fromisoformat(started.replace("Z", "+00:00"))).total_seconds() < 2 * 60 * 60
+    except ValueError:
+        return False
 
 
 def accept_intent(root: Path, intent_id: str, teammate: str, now: datetime) -> Dict[str, Any]:
@@ -155,17 +208,20 @@ def accept_intent(root: Path, intent_id: str, teammate: str, now: datetime) -> D
         intent = deepcopy(intent)
         intent.update({"status": "agreed", "agreedAt": observed_at, "nextAction": "plan_live_w37_availability_then_player_booking"})
         save_intent(storage, ledger, intent)
-        storage.append_jsonl(storage.channel_path("club"), {
+        message = {
             "id": f"{intent_id}:training-acceptance", "channel": "club", "kind": "training_acceptance",
+            "conversationId": intent.get("conversationId"), "commitmentId": intent.get("commitmentId"), "speechAct": "accept",
             "from": teammate, "to": [captain], "intentId": intent_id,
             "inReplyTo": f"{intent_id}:training-invitation",
             "text": f"{names[teammate]} accepts {names[captain]}'s 30-minute {team['name']} training session. {names[captain]} may book one available W37 court.",
             "observedAt": observed_at, "remoteWrites": 0,
-        })
+        }
+        storage.append_jsonl(storage.channel_path("club"), message)
+        _record_acceptance(storage, intent, teammate, captain, message, observed_at)
     return intent
 
 
-def next_booking_task(root: Path) -> Dict[str, Any]:
+def next_booking_task(root: Path, now: Optional[datetime] = None) -> Dict[str, Any]:
     """Find one agreed training intent for the lead's guarded booking bridge."""
     storage = Storage(root)
     ledger = load_intent_ledger(storage)
@@ -173,14 +229,27 @@ def next_booking_task(root: Path) -> Dict[str, Any]:
         intent for intent in ledger["intents"].values()
         if isinstance(intent, dict)
         and intent.get("journey") == "customer_training"
-        and intent.get("status") == "agreed"
+        and intent.get("status") in {"agreed", "preview_ready"}
     ]
+    if now is not None:
+        candidates = [intent for intent in candidates if _booking_agreement_is_fresh(intent, now)]
     if not candidates:
         return {"action": "pass", "detail": "no agreed training session awaits planning"}
-    intent = sorted(candidates, key=lambda row: str(row.get("agreedAt") or row.get("createdAt") or ""))[0]
+    # A Preview plan is perishable: live availability can change underneath it.
+    # Prefer the currently active social agreement, then the newest agreement,
+    # rather than letting an old `preview_ready` plan starve fresh player intent.
+    active_id = ledger.get("activeIntentId")
+    intent = sorted(
+        candidates,
+        key=lambda row: (
+            row.get("id") != active_id,
+            -_agreement_timestamp(row),
+            str(row.get("id") or ""),
+        ),
+    )[0]
     return {
         "actorId": "lead",
-        "action": "plan_training_booking",
+        "action": "apply_training_booking" if intent.get("status") == "preview_ready" else "plan_training_booking",
         "intentId": intent["id"],
         "bookerActorId": intent["bookerActorId"],
         "participants": list(intent["participants"]),
@@ -192,6 +261,102 @@ def next_booking_task(root: Path) -> Dict[str, Any]:
         ],
         "detail": "both named training players agreed; plan live W37 availability before the guarded player booking",
     }
+
+
+def _agreement_timestamp(intent: Dict[str, Any]) -> float:
+    """Stable ordering helper; malformed historical timestamps sort last."""
+    value = intent.get("agreedAt") or intent.get("createdAt") or ""
+    if not isinstance(value, str):
+        return 0.0
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def _booking_agreement_is_fresh(intent: Dict[str, Any], now: datetime) -> bool:
+    """Keep a historic agreement from becoming a new product booking.
+
+    An accepted agreement is actionable for two hours.  A plan is more
+    perishable because court availability changes, so a precomputed
+    ``preview_ready`` plan is eligible only for fifteen minutes.  The caller
+    supplies `now` only in the live Rally Engine; direct inspection remains
+    backwards-compatible and does not silently mutate history.
+    """
+    stamp = intent.get("agreedAt") or intent.get("createdAt")
+    if not isinstance(stamp, str):
+        return False
+    try:
+        agreed_at = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if now - agreed_at > timedelta(hours=2):
+        return False
+    if intent.get("status") != "preview_ready":
+        return True
+    plan = intent.get("previewPlan")
+    observed_at = plan.get("observedAt") if isinstance(plan, dict) else None
+    if not isinstance(observed_at, str):
+        return False
+    try:
+        return now - datetime.fromisoformat(observed_at.replace("Z", "+00:00")) <= timedelta(minutes=15)
+    except ValueError:
+        return False
+
+
+def _record_proposal(
+    storage: Storage, intent: Dict[str, Any], captain: str, teammate: str,
+    message: Dict[str, Any], observed_at: str,
+) -> None:
+    conversation_id = str(intent["conversationId"])
+    commitment_id = str(intent["commitmentId"])
+    correlation_id = f"journey:{intent['id']}"
+    message_fact = make_message(
+        message_id=message["id"], conversation_id=conversation_id,
+        correlation_id=correlation_id, sender_actor_id=captain,
+        recipient_actor_ids=[teammate], speech_act="propose",
+        content_code="training.session.proposed", occurred_at=observed_at,
+        commitment_id=commitment_id,
+        parameters={"intentRef": intent["id"], "durationMinutes": intent["constraints"]["durationMinutes"]},
+    )
+    commitment_fact = make_commitment_proposal(
+        commitment_id=commitment_id, conversation_id=conversation_id,
+        correlation_id=correlation_id, proposer_actor_id=captain,
+        debtor_actor_id=teammate,
+        beneficiary_actor_ids=[actor for actor in intent["participants"] if isinstance(actor, str)],
+        kind="join_team_training",
+        content={"capabilityId": "player.accept_team_training", "intentRef": intent["id"]},
+        occurred_at=observed_at, causation_id=message_fact["factId"],
+    )
+    append_protocol_facts_locked(storage, [message_fact, commitment_fact])
+
+
+def _record_acceptance(
+    storage: Storage, intent: Dict[str, Any], teammate: str, captain: str,
+    message: Dict[str, Any], observed_at: str,
+) -> None:
+    conversation_id = intent.get("conversationId")
+    commitment_id = intent.get("commitmentId")
+    if not isinstance(conversation_id, str) or not isinstance(commitment_id, str):
+        # Compatibility intents written before protocol migration remain valid
+        # but cannot be misrepresented as newly observed protocol facts.
+        return
+    correlation_id = f"journey:{intent['id']}"
+    message_fact = make_message(
+        message_id=message["id"], conversation_id=conversation_id,
+        correlation_id=correlation_id, sender_actor_id=teammate,
+        recipient_actor_ids=[captain], speech_act="accept",
+        content_code="training.session.accepted", occurred_at=observed_at,
+        commitment_id=commitment_id, in_reply_to=f"{intent['id']}:training-invitation",
+        causation_id=reply_causation(f"{intent['id']}:training-invitation"),
+        parameters={"intentRef": intent["id"]}, grounding="understood",
+    )
+    transition = make_commitment_transition(
+        storage, commitment_id=commitment_id, transition="accepted",
+        actor_id=teammate, occurred_at=observed_at,
+        causation_id=message_fact["factId"],
+    )
+    append_protocol_facts_locked(storage, [message_fact, transition])
 
 
 def _validated_scenario(storage: Storage, scenario_name: str) -> tuple[Dict[str, Any], str, str]:

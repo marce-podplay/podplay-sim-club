@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://podplay.local/schemas/participation.schema.json",
+  "title": "Preview Club Participation Projection",
+  "type": "object",
+  "required": ["schemaVersion", "participationId", "occurrenceKey", "actorId", "roles", "invitation", "checkIn", "attendance", "evidenceRefs"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "participationId": {"type": "string"}, "occurrenceKey": {"type": "string"}, "actorId": {"type": "string"},
+    "roles": {"type": "array", "items": {"type": "string"}}, "invitation": {"type": "string"},
+    "checkIn": {"type": "string"}, "attendance": {"type": "string"}, "resultReporter": {"type": "boolean"},
+    "evidenceRefs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "lastReducedFactId": {"type": ["string", "null"]}
+  },
+  "additionalProperties": false
+}

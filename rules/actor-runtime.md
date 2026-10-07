@@ -8,6 +8,10 @@ An actor may speak, ask for help, select an offered intention, propose one
 allowed action, and propose a memory update. It may not select arbitrary URLs,
 tenants, pods, credentials, or feature flags and may not edit shared world state.
 
+The six capability layers and their boundaries are defined in
+[`kb/capability-model.md`](../kb/capability-model.md). Runtime rules implement
+that model; they must not create a scenario-specific shortcut around it.
+
 ## Motives and offers
 
 The deterministic social engine owns motives and eligibility. Desire to play
@@ -15,24 +19,32 @@ drifts with the clock and falls after a completed session. Static roster
 affinity makes a teammate invitation legal; closeness is durable and rises only
 after a shared completed event. A published event addressed to an available
 player is an advertised opportunity. Curiosity comes from a relevant release
-note and is consumed after one attempt. A blocked slot or unanswered invitation
-raises frustration and advertises a question to Riley rather than a retry.
+note and is consumed after one attempt. A blocked product path or unexplained
+mismatch can advertise a question to Riley. An evidenced missed session can
+advertise a fresh captain proposal, but the required teammate or opposing
+captain must accept it again.
 
 An actor receives only these legal advertisements and may accept, ask, or pass.
-It never creates a booking through dialogue. A per-actor cooldown prevents the
-same unanswered offer from repeating on every Rally tick.
+It never creates a booking through dialogue. An interaction-specific cooldown
+prevents the same unanswered offer from repeating on every Rally tick without
+blocking a distinct invitation, acceptance, or short training attempt.
 
 When the club has neither a live opportunity nor a player or staff interaction,
 Sofia may receive one quiet-club advertisement. Her legal response is a public
 interest check addressed to enabled players. It can increase their desire to
-play and directs any interested player to Riley; it is not a promo code, an
-event publication, or a booking. The lead still needs a player request before
-planning a new session.
+play; it is not a promo code, an event publication, or a booking. Depending on
+the legal offer, a captain may propose directly to a teammate/rival captain or
+a player may ask Riley for help.
 
 For a high-intensity rivalry, a captain also receives a direct challenge offer.
 That route sends an unbooked invitation to the rival captain and keeps the
 intent at `captain_invited` until the rival captain accepts. It never treats a
 teammate or captain as accepted merely because they were named.
+
+After a missed player-owned event, the elapsed event stays history. A fresh
+`session_retry_proposal` creates a new social commitment with no copied product
+artifacts. Only `session_retry_acceptance` makes the new intent eligible for
+the ordinary training or team-signup adapter.
 
 ## Event-driven rounds
 

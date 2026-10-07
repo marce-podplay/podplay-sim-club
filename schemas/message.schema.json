@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://podplay.local/schemas/message.schema.json",
+  "title": "Preview Club Protocol Message",
+  "type": "object",
+  "required": ["messageId", "conversationId", "speechAct", "senderActorId", "recipientActorIds", "contentCode", "grounding", "observedAt"],
+  "properties": {
+    "messageId": {"type": "string"},
+    "conversationId": {"type": "string"},
+    "speechAct": {"enum": ["inform", "report", "invite", "propose", "request", "offer", "accept", "reject", "counter", "acknowledge", "clarify", "complain", "escalate"]},
+    "senderActorId": {"type": "string"},
+    "recipientActorIds": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true},
+    "contentCode": {"type": "string"},
+    "parameters": {"type": "object"},
+    "inReplyTo": {"type": ["string", "null"]},
+    "grounding": {"enum": ["created", "addressed", "acknowledged", "clarification_requested", "understood"]},
+    "commitmentId": {"type": ["string", "null"]},
+    "observedAt": {"type": "string", "format": "date-time"}
+  },
+  "additionalProperties": false
+}
+

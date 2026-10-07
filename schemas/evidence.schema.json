@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://podplay.local/schemas/evidence.schema.json",
+  "title": "Preview Club Sanitized Product Evidence",
+  "type": "object",
+  "required": ["schemaVersion", "evidenceId", "probeId", "targetFingerprint", "actorId", "capabilityId", "subject", "observedAt", "safeObservation", "contractVersion", "result", "errorCode", "source"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "evidenceId": {"type": "string", "pattern": "^evidence:self-assets:"}, "probeId": {"type": "string"}, "targetFingerprint": {"type": "string"},
+    "actorId": {"type": "string"}, "capabilityId": {"type": "string"}, "subject": {"type": "string"},
+    "observedAt": {"type": "string", "format": "date-time"}, "safeObservation": {},
+    "contractVersion": {"type": "integer", "minimum": 1}, "result": {"enum": ["observed", "unknown", "error"]},
+    "errorCode": {"type": ["string", "null"]},
+    "source": {
+      "type": "object",
+      "required": ["kind", "actorOwned"],
+      "properties": {"kind": {"const": "preview_readback"}, "actorOwned": {"const": true}},
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

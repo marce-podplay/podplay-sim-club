@@ -64,6 +64,24 @@ class PreviewBookingEvaluator:
         }
         return self._post_preview(payload)
 
+    def evaluate_team(self, items: list, virtual_credits: float = 0) -> Dict[str, Any]:
+        """Preview a leader-paid booking with advertised guest capacity."""
+        if not isinstance(items, list) or not items:
+            raise PreviewEvaluationError("team booking preview needs selected session items")
+        payload_items = []
+        for item in items:
+            if not isinstance(item, dict):
+                raise PreviewEvaluationError("team booking preview item is invalid")
+            values = (item.get("sessionId"), item.get("tableId"), item.get("sessionGuestsId"))
+            if not all(isinstance(value, str) and value for value in values):
+                raise PreviewEvaluationError("team booking preview needs an advertised guest option")
+            payload_items.append({"session": {"id": values[0]}, "sessionTable": {"id": values[1]}, "sessionGuests": {"id": values[2]}})
+        return self._post_preview({
+            "type": "PREVIEW", "items": payload_items, "chargeStrategy": "ONLY_OWNER",
+            "passesStrategy": "USE_NONE", "virtualCredits": virtual_credits,
+            "termsAgreed": True, "bookingMode": "USER_BOOKED",
+        })
+
     def _post_preview(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         self._validate_payload(payload)
         url = self.policy.target_origin + "/apis/v2/bookings"
@@ -129,20 +147,24 @@ class PreviewBookingEvaluator:
         if payload.get("termsAgreed") is not True or payload.get("bookingMode") != "USER_BOOKED":
             raise PreviewEvaluationError("booking preview baseline fields changed")
         items = payload.get("items")
-        if not isinstance(items, list) or len(items) != 1:
-            raise PreviewEvaluationError("booking preview requires exactly one item")
-        item = items[0]
-        if not isinstance(item, dict) or set(item) != {"session", "sessionTable"}:
-            raise PreviewEvaluationError("booking preview item shape changed")
-        for name in ("session", "sessionTable"):
-            reference = item.get(name)
-            if (
-                not isinstance(reference, dict)
-                or set(reference) != {"id"}
-                or not isinstance(reference.get("id"), str)
-                or not reference["id"]
-            ):
-                raise PreviewEvaluationError(f"booking preview {name} reference is invalid")
+        if not isinstance(items, list) or not items:
+            raise PreviewEvaluationError("booking preview requires at least one item")
+        for item in items:
+            if not isinstance(item, dict) or set(item) not in ({"session", "sessionTable"}, {"session", "sessionTable", "sessionGuests"}):
+                raise PreviewEvaluationError("booking preview item shape changed")
+            for name in ("session", "sessionTable"):
+                reference = item.get(name)
+                if (
+                    not isinstance(reference, dict)
+                    or set(reference) != {"id"}
+                    or not isinstance(reference.get("id"), str)
+                    or not reference["id"]
+                ):
+                    raise PreviewEvaluationError(f"booking preview {name} reference is invalid")
+            if "sessionGuests" in item:
+                reference = item["sessionGuests"]
+                if not isinstance(reference, dict) or set(reference) != {"id"} or not isinstance(reference.get("id"), str) or not reference["id"]:
+                    raise PreviewEvaluationError("booking preview sessionGuests reference is invalid")
 
 
 def summarize_booking_preview(value: Any) -> Dict[str, Any]:

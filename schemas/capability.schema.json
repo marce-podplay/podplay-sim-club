@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://podplay.local/schemas/capability.schema.json",
+  "title": "Preview Club Capability Contract",
+  "type": "object",
+  "required": ["id", "version", "roles", "goal", "speechActs", "offer", "remoteWrite", "privacy"],
+  "properties": {
+    "id": {"type": "string"},
+    "version": {"type": "integer", "minimum": 1},
+    "roles": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true},
+    "goal": {"type": "string"},
+    "motivation": {"type": "object"},
+    "requiredBeliefs": {"type": "array", "items": {"type": "string"}},
+    "requiredRelationships": {"type": "array", "items": {"type": "string"}},
+    "requiredOpportunities": {"type": "array", "items": {"type": "string"}},
+    "requiredCommitments": {"type": "array", "items": {"type": "string"}},
+    "speechActs": {"type": "array", "items": {"type": "string"}},
+    "offer": {"type": "string"},
+    "adapter": {"type": ["string", "null"]},
+    "remoteWrite": {"type": "boolean"},
+    "cooldown": {"type": "object"},
+    "successFacts": {"type": "array", "items": {"type": "string"}},
+    "failureFeedback": {"type": "object"},
+    "privacy": {"enum": ["public", "community", "operator"]}
+  },
+  "additionalProperties": false
+}
+

@@ -1,8 +1,15 @@
 # Preview Club roadmap
 
+The architectural model is maintained in the [knowledge base](kb/README.md),
+with the implementation sequence in the
+[capability alignment plan](kb/capability-alignment-plan.md). The roadmap orders
+delivery; it does not redefine those boundaries.
+
 ## Now — Rally Engine foundation
 
 - Durable two-hour/20-minute loop contract and actor handoff rules.
+- Grounded missed-session retry: captain proposal, required acceptance, then
+  the ordinary training or team-signup adapter.
 - Two-Then-One tournament scenario: Bogard-Higashi vs Japan Team, then the
   reported winner vs Women Fighters Team.
 - Nearest-fixture policy: a planned tournament event uses the nearest real
@@ -15,6 +22,10 @@
   end, and collect a named player result report.
 - Let Sofia announce the final only after that report.
 - Reconcile identities/payment ledger after a preview refresh.
+- Verify the active player-owned membership, pass/credit, and payment-readiness
+  discovery against live Preview customer UI; then add the pricing/benefit gate:
+  a named payer reads a quote, confirms its treatment against their
+  expectations, and only then enables a team-signup booking.
 
 ## Later — extract a reusable skill
 

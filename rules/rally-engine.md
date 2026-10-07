@@ -16,6 +16,12 @@ not a character and not a product adapter.
   action boundary validates and persists it.
 - Preview writes are never an emergent model action. They must use the approved
   PR preview target and the deterministic, read-back-verified workflow.
+- A captain/teammate agreement enters the lead booking bridge in two explicit
+  phases: `--plan-preview` may perform one authenticated availability and
+  quote evaluation; `--apply-preview --confirm-origin <exact-origin>` may then
+  invoke exactly one existing player-owned adapter.  A normal `rally-tick`
+  records the waiting phase only.  The bridge audit is local, compact, and
+  shown with the relevant community initiative.
 - On completion, Rally Engine writes one immutable, secret-free summary under
   `state/runs/`. It includes tick timing, tournament state, fixture plan/event
   references, remote-write count, and the channel message kinds that explain
