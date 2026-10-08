@@ -228,6 +228,44 @@ expire quickly. The current booking write must require an unexpired matching
 quote and accepted `payer_approval` as well as the existing four-person social
 agreement.
 
+## Observatory: make the business decision inspectable
+
+The local dashboard is where the club owner can understand why a socially
+agreed match is ready, blocked, or deliberately paused. It must project safe
+facts and beliefs rather than re-render raw API payloads.
+
+Selecting a player should show:
+
+- social context: team, recovery/competition state, commitments, and active
+  opportunities;
+- **expectations**: price range, currency, payer willingness, and expected
+  membership/pass/credit treatment, marked as local policy rather than product
+  fact;
+- **customer-visible beliefs**: membership wording, package/pass balances and
+  expirations, virtual credits, payment readiness, with source, observed time,
+  expiry, and status (`observed`, `unknown`, `stale`, `contradicted`);
+- a compact evidence trail showing why a belief changed, never raw account,
+  payment, or credential material.
+
+Selecting a booking or pre-booking plan should show:
+
+- social agreement versus financial authority: captain, attendees, named payer
+  and benefit owner, plus outstanding acceptances and payer approval;
+- venue/court rule observations: capacity, local time, bookability,
+  opening/peak/lead-time/cancellation conditions when exposed, and an explicit
+  `unknown` label when not exposed;
+- requested versus observed charge strategy. `ONLY_OWNER`, split, and
+  per-player benefit use are different states, not labels for the same thing;
+- a safe quote breakdown: total/currency, visible rate/fees/tax, membership,
+  pass and credit treatment, constraint/error codes, source/time/expiry;
+- comparison results and their next owner: payer clarification, counteroffer,
+  Riley question, complaint, approval, or blocked execution.
+
+No participant inherits another participant's membership, pass, credit, or
+payment readiness in this view. A field that the current product flow cannot
+prove stays `unknown`, even when the social story would make a positive answer
+convenient.
+
 ## What remains deliberately unknown
 
 Until live customer/UI and quote evidence proves otherwise, do not assume:

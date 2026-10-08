@@ -80,6 +80,47 @@ def _encourage_team_training(storage: Storage, observed_at: str) -> Optional[Dic
     create any future agreement and the normal player booking flow applies.
     """
     with storage.writer_lock():
+        activation_state = storage.load_json(storage.state / "team-activations.json", default={})
+        activations = activation_state.get("activations", {}) if isinstance(activation_state, dict) else {}
+        roster = storage.load_json(storage.root / "characters" / "roster.json", default={})
+        teams = {
+            row.get("id"): row for row in roster.get("teams", [])
+            if isinstance(row, dict) and isinstance(row.get("id"), str)
+        } if isinstance(roster, dict) else {}
+        if isinstance(activations, dict):
+            for team_id, activation in activations.items():
+                if not isinstance(team_id, str) or not isinstance(activation, dict) or activation.get("announcedAt"):
+                    continue
+                team = teams.get(team_id)
+                targets = activation.get("actorIds")
+                captain = None
+                if isinstance(team, dict):
+                    captain_character = team.get("captainId")
+                    characters = {
+                        row.get("id"): row for row in roster.get("characters", []) if isinstance(row, dict)
+                    }
+                    captain_row = characters.get(captain_character)
+                    captain = captain_row.get("actorId") if isinstance(captain_row, dict) else None
+                if not isinstance(team, dict) or not isinstance(targets, list) or not all(isinstance(actor, str) for actor in targets) or not isinstance(captain, str) or captain not in targets:
+                    continue
+                activation["announcedAt"] = observed_at
+                storage.write_json(storage.state / "team-activations.json", activation_state)
+                team_name = str(team.get("name") or team_id)
+                storage.append_jsonl(storage.channel_path("club"), {
+                    "id": f"team-activation:{team_id}:training-welcome",
+                    "occurrenceKey": f"team-activation:{team_id}",
+                    "channel": "club", "from": "sofia", "to": targets,
+                    "kind": "owner_team_training_nudge",
+                    "motiveBoost": 45,
+                    "text": f"Welcome, {team_name}. Your player accounts are ready. A short training session is available whenever your captain and one teammate choose to arrange one.",
+                    "observedAt": observed_at, "remoteWrites": 0,
+                })
+                return {
+                    "actorId": "sofia", "action": "welcome_verified_team",
+                    "detail": "advertised a local training opportunity to a newly verified team",
+                    "teamId": team_id, "targets": targets, "observedAt": observed_at,
+                    "remoteWrites": 0,
+                }
         ledger = load_intent_ledger(storage)
         source = next((intent for intent in ledger["intents"].values() if isinstance(intent, dict)
                        and intent.get("journey") == "customer_training"

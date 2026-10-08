@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import threading
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from .actor_runtime import run_tick as run_actor_tick
 from .identity_registry import TEAM_ACTOR_NAMES
@@ -14,6 +14,7 @@ from .orchestrator import Orchestrator
 from .preview_match_ledger import sanitized_match_index
 from .tournament import acknowledge_result_request, report_winner
 from .result_requests import report_finished_event_result
+from .inspectors import InspectorNotFoundError, booking_plan_inspector, inspection_index, player_inspector
 
 
 class ObservatoryServer:
@@ -95,9 +96,17 @@ class ObservatoryServer:
                         "storylines": _active_storylines(orchestrator),
                         "community": _community_snapshot(orchestrator),
                         "initiatives": _staff_initiatives(orchestrator),
+                        "invitationConversations": _invitation_conversations(orchestrator),
                         "clubState": _club_state(orchestrator),
                         "arcade": _arcade_snapshot(orchestrator),
+                        "inspectors": inspection_index(orchestrator.storage.root),
                     })
+                    return
+                if self.path.startswith("/api/inspect/player/"):
+                    self._inspection(lambda: player_inspector(orchestrator.storage.root, unquote(self.path.rsplit("/", 1)[-1])))
+                    return
+                if self.path.startswith("/api/inspect/booking-plan/"):
+                    self._inspection(lambda: booking_plan_inspector(orchestrator.storage.root, unquote(self.path.rsplit("/", 1)[-1])))
                     return
                 if self.path == "/health":
                     self._json(
@@ -145,6 +154,12 @@ class ObservatoryServer:
             def _json(self, status: HTTPStatus, value):
                 payload = json.dumps(value, sort_keys=True).encode("utf-8")
                 self._send(status, payload, "application/json; charset=utf-8")
+
+            def _inspection(self, read):
+                try:
+                    self._json(HTTPStatus.OK, read())
+                except InspectorNotFoundError:
+                    self._json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
 
             def _send(self, status: HTTPStatus, payload: bytes, content_type: str):
                 self.send_response(status.value)
@@ -423,6 +438,72 @@ def _staff_initiatives(orchestrator: Orchestrator):
         })
     rows.sort(key=lambda row: (row["status"] != "agreed", row["id"]))
     return rows[:8]
+
+
+def _invitation_conversations(orchestrator: Orchestrator):
+    """Project secret-free invitation coordination, not invitation credentials.
+
+    This answers the social question "has the other player noticed and what is
+    expected next?"  A retained URL remains in its private 0600 sidecar; this
+    projection exposes only the grounded lifecycle around it.
+    """
+    ledger = orchestrator.storage.load_json(
+        orchestrator.storage.state / "booking-intents.json", default={}
+    )
+    private_links = orchestrator.storage.load_json(
+        orchestrator.storage.state / "share-invitations.json", default={}
+    )
+    intents = ledger.get("intents", {}) if isinstance(ledger, dict) else {}
+    links = private_links.get("invitations", {}) if isinstance(private_links, dict) else {}
+    if not isinstance(intents, dict) or not isinstance(links, dict):
+        return []
+    directory = _actor_directory(orchestrator)
+    rows = []
+    for intent_id, intent in intents.items():
+        if not isinstance(intent_id, str) or not isinstance(intent, dict):
+            continue
+        if intent.get("journey") not in {"customer_training", "customer_team_signup"}:
+            continue
+        booking = intent.get("booking") if isinstance(intent.get("booking"), dict) else {}
+        occurrence = booking.get("occurrenceKey")
+        owner = intent.get("bookerActorId")
+        participants = intent.get("participants") if isinstance(intent.get("participants"), list) else []
+        if not isinstance(occurrence, str) or not isinstance(owner, str) or not isinstance(links.get(occurrence), dict):
+            continue
+        attention = intent.get("shareInvitationAttention") if isinstance(intent.get("shareInvitationAttention"), dict) else {}
+        decisions = intent.get("shareRedemptionChoices") if isinstance(intent.get("shareRedemptionChoices"), dict) else {}
+        redeemed = {
+            item.get("actorId") for item in intent.get("shareRedemptions", [])
+            if isinstance(item, dict) and item.get("status") == "ACCEPTED" and isinstance(item.get("actorId"), str)
+        }
+        for recipient in participants:
+            if not isinstance(recipient, str) or recipient == owner:
+                continue
+            acknowledgement = attention.get(recipient) if isinstance(attention.get(recipient), dict) else {}
+            decision = decisions.get(recipient) if isinstance(decisions.get(recipient), dict) else {}
+            if recipient in redeemed:
+                stage, next_step = "redeemed", "await_check_in_window"
+            elif decision.get("status") == "accepted":
+                stage, next_step = "recipient_accepted_locally", "lead_may_redeem_named_player_share_invitation"
+            elif acknowledgement.get("status") == "acknowledged":
+                stage, next_step = "acknowledged", "recipient_accept_ask_or_pass"
+            else:
+                stage, next_step = "handoff_ready", "recipient_acknowledge_handoff"
+            rows.append({
+                "intentId": intent_id,
+                "occurrenceKey": occurrence,
+                "ownerActorId": owner,
+                "ownerLabel": directory.get(owner, owner),
+                "recipientActorId": recipient,
+                "recipientLabel": directory.get(recipient, recipient),
+                "stage": stage,
+                "expectedNextStep": next_step,
+                "handoffCapturedAt": links[occurrence].get("capturedAt"),
+                "acknowledgedAt": acknowledgement.get("acknowledgedAt"),
+                "decisionAt": decision.get("requestedAt"),
+            })
+    rows.sort(key=lambda row: (row["stage"] == "redeemed", str(row.get("handoffCapturedAt") or "")), reverse=True)
+    return rows[:12]
 
 
 def _club_state(orchestrator: Orchestrator):

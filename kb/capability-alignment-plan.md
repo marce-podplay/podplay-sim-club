@@ -46,6 +46,14 @@ The communication-and-commitment slice is also present:
   produce conversation and commitment facts alongside compatibility state;
 - an addressed rival captain can accept a challenge on a later actor turn,
   without booking a court or implying teammate attendance;
+- a captain may receive more than one invitation, but an accepted-or-later
+  doubles challenge consumes their social commitment capacity: a later
+  invitation is explicitly deferred to Riley as a future request, never
+  silently accepted, rescheduled, or turned into a second booking;
+- agreement is not indefinite product authority: unbooked training and team
+  challenge agreements expire after the planning window, and a newer accepted
+  training agreement supersedes older unbooked authority for that same team
+  while preserving the prior intent as history.
 - result requests/reports and Riley replies now produce communication facts,
   but do not manufacture commitments where none were made;
 - commitment projections retain their ordered transition history and evidence
@@ -99,6 +107,11 @@ observe product/community
 
 No model call writes a fact, projection, URL, slot, price, participant state, or
 winner directly. It proposes one choice from already legal offers.
+
+The six layers are deliberately orthogonal to product bounded contexts.  The
+[domain context map](domain-context-map.md) records those seams and the
+anti-corruption contracts required as Team Signup, unified pricing, kids,
+Series, and sport-specific ratings evolve.
 
 ## Canonical data ownership
 
@@ -642,6 +655,17 @@ Deliverables:
 
 - add preflight comparisons for price, currency, discount, pass use, credits,
   cancellation terms, availability, and role permissions;
+- create one explicit booking-plan record that names the captain, attendees,
+  payer/benefit owner, venue, selected local-time slot, and requested charge
+  and benefit strategies before any quote is read;
+- project the quote as an explanation, not merely a total: visible rate,
+  fees/tax, membership treatment, virtual-credit treatment, pass treatment,
+  capacity/opening/peak constraints, cancellation terms, and blocking codes
+  are individually `observed`, `unknown`, `stale`, or `not_applicable`;
+- model `ONLY_OWNER`, split, and per-player benefit strategies separately.
+  The current owner-paid/`USE_NONE` baseline must be displayed as a limitation,
+  never relabeled as a split-payment result. No actor can spend or reveal a
+  teammate's benefit merely because they are captain or booking owner;
 - block checkout when a configured actor boundary is violated;
 - offer clarify/complain/pass instead of a blind retry;
 - connect comparisons to Riley and evidence-backed issue creation.
@@ -651,6 +675,64 @@ Exit criteria:
 - every blocked write names the failed expectation and evidence;
 - the actor, staff, and dashboard agree on the blocker;
 - a mismatch cannot trigger a second charge or duplicate booking.
+
+#### Milestone 5 Observatory read model
+
+The Observatory is an explanation surface, not a copy of private checkout
+payloads. It needs two linked inspectors.
+
+**Player inspector** (selected Sim) shows social motives/team cohesion and
+offers; local expectations; customer-visible membership/package/pass/credit/
+payment-readiness beliefs; and source, observed-at, expiry, and status for
+each belief. It never shows account identifiers, payment references, raw
+responses, credentials, tokens, emails, UIDs, or bearer URLs.
+
+**Booking-plan inspector** (selected event or pre-booking plan) shows social
+agreement and named payer/benefit owner; venue/court capacity, local time and
+visible rule constraints; requested versus product-proven charge strategy;
+per-owner membership/pass/credit treatment; safe quote composition; and the
+comparison, Riley question, payer approval, or blocker that owns the next
+transition. Every unavailable field visibly remains `unknown` rather than
+being rendered as zero, free, no discount, or split payment.
+
+#### Milestone 5 delivery slices
+
+1. **5A — booking-plan and quote contracts — complete.** The product-neutral
+   `booking-plan` contract names participants, owner, payer, venue/window and
+   requested funding strategy. Read-only quote evidence carries independently
+   status-bearing fields for total, currency, membership, credits, passes,
+   capacity, cancellation, and blocking codes. Its projection advances only to
+   `awaiting_payer_approval`; no plan can authorize a Preview write yet.
+2. **5B — read-only plan inspector — complete.** Shared secret-free inspector
+   queries serve both `./club inspect player --actor <id>` / `./club inspect
+   booking-plan --id <id>` and the Observatory. Player inspection shows
+   motives and time-bounded beliefs; plan inspection shows participants,
+   owner/payer separation, requested funding, quote field statuses, evidence
+   source, and the next plan stage. The web UI is only a client of these
+   projection queries.
+3. **5C — owner-paid baseline comparison — complete.** `./club assess
+   booking-plan --id <id>` compares a persisted read-only quote with the named
+   payer's projected price expectation and payment readiness. Membership and
+   pass treatment are relevant only when that payer explicitly expected one.
+   The durable result is `within_expectation`, `mismatch`, or `unknown` with
+   per-check evidence and safe next actions. A match reaches only
+   `request_payer_approval`; a mismatch offers clarify/counter/pass/Riley.
+   `./club expect booking-price` records the actor-owned fictional ceiling
+   explicitly; it is local policy, never a product entitlement or payment.
+4. **5D — payer approval gate.**
+   - **5D-a — complete:** `./club payer-approval request --id <id>` creates a
+     payer-owned commitment only from a fresh `within_expectation` comparison;
+     `./club payer-approval accept --id <id> --payer <actor>` lets only that
+     named payer accept it. The approval is quote-bound, expires after fifteen
+     minutes, and is visible through the plan inspector.
+   - **5D-b — complete:** live read-only team-signup planning now emits the
+     canonical plan and sanitized quote facts. Its initial guarded Preview
+     booking call refuses unless it can resolve the exact accepted, unexpired
+     approval for that plan/quote/payer. Legacy intents without a canonical
+     plan remain ineligible rather than receiving retroactive authority.
+5. **5E — split/payment-strategy research.** Add a strategy only after a
+   customer-visible product flow proves it; unsupported teammate pass or
+   credit use remains unknown or unavailable.
 
 ### Milestone 6 — capability catalog and generic planner
 

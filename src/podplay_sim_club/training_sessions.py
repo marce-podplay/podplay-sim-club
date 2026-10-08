@@ -23,6 +23,10 @@ class TrainingSessionError(ValueError):
     pass
 
 
+BOOKING_AUTHORITY_LIFETIME = timedelta(hours=2)
+ACTIONABLE_TRAINING_STATUSES = {"captain_invited", "agreed", "preview_ready", "planned"}
+
+
 def propose(root: Path, scenario_name: str, now: datetime) -> Dict[str, Any]:
     """Let a captain offer one legal training session to a named teammate."""
     storage = Storage(root)
@@ -90,6 +94,7 @@ def accept(root: Path, scenario_name: str, now: datetime) -> Dict[str, Any]:
         intent = deepcopy(intent)
         intent.update({"status": "agreed", "agreedAt": observed_at, "nextAction": "plan_live_w37_availability_then_player_booking"})
         save_intent(storage, ledger, intent)
+        _supersede_prior_team_authority_locked(storage, ledger, intent, observed_at)
         message = {
             "id": f"{intent_id}:training-acceptance",
             "conversationId": intent.get("conversationId"), "commitmentId": intent.get("commitmentId"), "speechAct": "accept",
@@ -174,13 +179,13 @@ def _blocks_fresh_pair_proposal(intent: Any, team_id: str, now: datetime) -> boo
             return datetime.fromisoformat(end.replace("Z", "+00:00")) > now
         except ValueError:
             return False
-    if status not in {"captain_invited", "agreed", "preview_ready", "planned"}:
+    if status not in ACTIONABLE_TRAINING_STATUSES:
         return False
     started = intent.get("agreedAt") or intent.get("createdAt")
     if not isinstance(started, str):
         return False
     try:
-        return (now - datetime.fromisoformat(started.replace("Z", "+00:00"))).total_seconds() < 2 * 60 * 60
+        return (now - datetime.fromisoformat(started.replace("Z", "+00:00"))) < BOOKING_AUTHORITY_LIFETIME
     except ValueError:
         return False
 
@@ -208,6 +213,7 @@ def accept_intent(root: Path, intent_id: str, teammate: str, now: datetime) -> D
         intent = deepcopy(intent)
         intent.update({"status": "agreed", "agreedAt": observed_at, "nextAction": "plan_live_w37_availability_then_player_booking"})
         save_intent(storage, ledger, intent)
+        _supersede_prior_team_authority_locked(storage, ledger, intent, observed_at)
         message = {
             "id": f"{intent_id}:training-acceptance", "channel": "club", "kind": "training_acceptance",
             "conversationId": intent.get("conversationId"), "commitmentId": intent.get("commitmentId"), "speechAct": "accept",
@@ -221,9 +227,102 @@ def accept_intent(root: Path, intent_id: str, teammate: str, now: datetime) -> D
     return intent
 
 
+def reconcile_training_booking_authority(root: Path, now: datetime) -> Dict[str, Any]:
+    """Turn stale, unbooked training agreements into explicit history.
+
+    An agreement remains an auditable social fact.  Its short-lived authority
+    to begin a new product booking does not.  This keeps the lead queue free
+    of abandoned work without rewriting attendance, results, or old bookings.
+    """
+    storage = Storage(root)
+    observed_at = isoformat(now)
+    expired_ids: list[str] = []
+    with storage.writer_lock():
+        ledger = load_intent_ledger(storage)
+        for intent_id, original in ledger["intents"].items():
+            if not isinstance(intent_id, str) or not isinstance(original, dict):
+                continue
+            if (
+                original.get("journey") != "customer_training"
+                or original.get("status") not in ACTIONABLE_TRAINING_STATUSES
+                or _booking_agreement_is_fresh(original, now)
+            ):
+                continue
+            intent = deepcopy(original)
+            intent.update({
+                "status": "expired",
+                "bookingAuthorityExpiredAt": observed_at,
+                "nextAction": "history_only_fresh_player_agreement_required",
+            })
+            save_intent(storage, ledger, intent)
+            expired_ids.append(intent_id)
+    return {"expiredIntentIds": expired_ids, "observedAt": observed_at}
+
+
+def _supersede_prior_team_authority_locked(
+    storage: Storage, ledger: Dict[str, Any], current: Dict[str, Any], observed_at: str,
+) -> None:
+    """Keep one fresh booking authority per team while retaining all history."""
+    team_id = _training_team_id(storage, current)
+    current_id = current.get("id")
+    if not isinstance(team_id, str) or not isinstance(current_id, str):
+        return
+    for intent_id, original in ledger["intents"].items():
+        if intent_id == current_id or not isinstance(original, dict):
+            continue
+        if (
+            original.get("journey") != "customer_training"
+            or original.get("status") not in ACTIONABLE_TRAINING_STATUSES
+            or _training_team_id(storage, original) != team_id
+        ):
+            continue
+        intent = deepcopy(original)
+        intent.update({
+            "status": "superseded",
+            "supersededAt": observed_at,
+            "supersededBy": current_id,
+            "nextAction": "history_only_newer_team_agreement_exists",
+        })
+        save_intent(storage, ledger, intent)
+
+
+def _training_team_id(storage: Storage, intent: Dict[str, Any]) -> Optional[str]:
+    explicit = intent.get("trainingTeamId")
+    if isinstance(explicit, str) and explicit:
+        return explicit
+    participants = intent.get("participants")
+    captain = intent.get("bookerActorId")
+    if not isinstance(participants, list) or not isinstance(captain, str):
+        return None
+    actor_ids = {actor_id for actor_id in participants if isinstance(actor_id, str)}
+    if len(actor_ids) != 2 or captain not in actor_ids:
+        return None
+    roster = storage.load_json(storage.root / "characters" / "roster.json", default={})
+    characters = {
+        row.get("id"): row for row in roster.get("characters", [])
+        if isinstance(row, dict) and isinstance(row.get("id"), str)
+    } if isinstance(roster, dict) else {}
+    for team in roster.get("teams", []) if isinstance(roster, dict) else []:
+        if not isinstance(team, dict):
+            continue
+        members = team.get("members")
+        captain_character = characters.get(team.get("captainId"))
+        captain_actor = captain_character.get("actorId") if isinstance(captain_character, dict) else None
+        member_actors = {
+            characters.get(member, {}).get("actorId") for member in members
+            if isinstance(member, str) and isinstance(characters.get(member), dict)
+        } if isinstance(members, list) else set()
+        if captain_actor == captain and actor_ids.issubset(member_actors):
+            team_id = team.get("id")
+            return team_id if isinstance(team_id, str) else None
+    return None
+
+
 def next_booking_task(root: Path, now: Optional[datetime] = None) -> Dict[str, Any]:
     """Find one agreed training intent for the lead's guarded booking bridge."""
     storage = Storage(root)
+    if now is not None:
+        reconcile_training_booking_authority(root, now)
     ledger = load_intent_ledger(storage)
     candidates = [
         intent for intent in ledger["intents"].values()
@@ -290,7 +389,7 @@ def _booking_agreement_is_fresh(intent: Dict[str, Any], now: datetime) -> bool:
         agreed_at = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
     except ValueError:
         return False
-    if now - agreed_at > timedelta(hours=2):
+    if now - agreed_at > BOOKING_AUTHORITY_LIFETIME:
         return False
     if intent.get("status") != "preview_ready":
         return True

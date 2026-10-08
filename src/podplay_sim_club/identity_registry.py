@@ -48,11 +48,19 @@ TEAM_ACTOR_NAMES = {
     "king-captain": ("King", "Women Fighters"),
     "mai": ("Mai", "Shiranui"),
     "yuri": ("Yuri", "Sakazaki"),
+    "ryu": ("Ryu", "Hoshi"),
+    "ken-masters": ("Ken", "Masters"),
+    "chun-li": ("Chun", "Li"),
+    "blanka": ("Blanka", "Santos"),
+    "zangief": ("Zangief", "Petrov"),
+    "dhalsim": ("Dhalsim", "Rao"),
 }
 
 TEAM_ACTORS = {
     "japan-team": ("kyo-captain", "benimaru"),
     "women-fighters": ("king-captain", "mai", "yuri"),
+    "world-warriors": ("ryu", "ken-masters", "chun-li"),
+    "street-fighter-contenders": ("blanka", "zangief", "dhalsim"),
 }
 
 

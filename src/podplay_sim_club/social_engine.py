@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from .storage import Storage
 from .time import isoformat, parse_instant
 from .check_in_bridge import offers as check_in_offers
+from .team_challenges import captain_commitments
 
 
 STATE_FILE = "social-engine.json"
@@ -24,7 +25,7 @@ def tick(root: Path, now: Optional[datetime] = None) -> Dict[str, Any]:
     roster = storage.load_json(root / "characters" / "roster.json")
     if not isinstance(scenario, dict) or scenario.get("schemaVersion") != 1:
         raise ValueError("social engine scenario is invalid")
-    if not isinstance(roster, dict) or roster.get("schemaVersion") != 3:
+    if not isinstance(roster, dict) or roster.get("schemaVersion") not in {3, 4}:
         raise ValueError("character roster is invalid")
     instant = now or parse_instant(None)
     _reconcile_reported_training_completions(root, instant)
@@ -47,6 +48,7 @@ def tick(root: Path, now: Optional[datetime] = None) -> Dict[str, Any]:
         _apply_owner_promotions(storage, motives, state)
         offers = (_staff_offers(storage, roster)
                   + _result_confirmation_offers(storage, people)
+                  + _payer_approval_offers(storage, people, instant)
                   + _missed_session_offers(storage, motives, state, scenario, instant)
                   + _challenge_acceptance_offers(storage, people)
                   + _training_offers(storage, people, roster, motives, state, scenario, instant)
@@ -61,6 +63,45 @@ def tick(root: Path, now: Optional[datetime] = None) -> Dict[str, Any]:
         state.update({"schemaVersion": 1, "lastTickAt": observed_at, "offers": offers, "opportunities": opportunities})
         storage.write_json(storage.state / STATE_FILE, state)
     return {"observedAt": observed_at, "offers": offers, "opportunities": opportunities, "motives": motives}
+
+
+def _payer_approval_offers(
+    storage: Storage, people: Dict[str, Dict[str, Any]], instant: datetime,
+) -> List[Dict[str, Any]]:
+    """Advertise only a fresh, addressed payer-approval commitment.
+
+    A matching quote makes approval possible; it never supplies approval.  The
+    named payer receives one narrow accept-or-pass opportunity and the accept
+    path revalidates quote freshness before changing any durable fact.
+    """
+    projection = storage.load_json(storage.state / "projections" / "commitments.json", default={})
+    commitments = projection.get("commitments", {}) if isinstance(projection, dict) else {}
+    offers: List[Dict[str, Any]] = []
+    for commitment in commitments.values() if isinstance(commitments, dict) else []:
+        if not isinstance(commitment, dict) or commitment.get("status") != "proposed":
+            continue
+        if commitment.get("kind") != "payer_approval":
+            continue
+        payer = commitment.get("debtorActorId")
+        content = commitment.get("content")
+        expires_at = commitment.get("expiresAt")
+        plan_id = content.get("bookingPlanId") if isinstance(content, dict) else None
+        if not isinstance(payer, str) or payer not in people or not isinstance(plan_id, str):
+            continue
+        if not isinstance(expires_at, str):
+            continue
+        try:
+            if parse_instant(expires_at) <= instant:
+                continue
+        except ValueError:
+            continue
+        offers.append({
+            "actorId": payer,
+            "kind": "approve_booking_plan",
+            "bookingPlanId": plan_id,
+            "reason": "payer_received_a_fresh_within_expectation_booking_quote",
+        })
+    return offers
 
 
 def _reconcile_reported_training_completions(root: Path, instant: datetime) -> None:
@@ -241,7 +282,7 @@ def _staff_offers(storage: Storage, roster: Dict[str, Any]) -> List[Dict[str, An
             continue
         kind = row.get("kind")
         message_id = row.get("id")
-        if kind not in {"player_request", "reschedule_request", "new_event_request", "share_invitation_expired"} or not isinstance(message_id, str):
+        if kind not in {"player_request", "reschedule_request", "new_event_request", "share_invitation_expired", "challenge_capacity_request"} or not isinstance(message_id, str):
             continue
         if message_id in answered:
             continue
@@ -288,7 +329,8 @@ def _apply_owner_promotions(storage: Storage, motives: Dict[str, Dict[str, Any]]
             continue
         for actor_id in targets:
             if actor_id in motives:
-                boost = 15 if row.get("kind") == "owner_team_training_nudge" else 10
+                configured_boost = row.get("motiveBoost")
+                boost = configured_boost if isinstance(configured_boost, int) and 0 <= configured_boost <= 50 else (15 if row.get("kind") == "owner_team_training_nudge" else 10)
                 motives[actor_id]["desireToPlay"] = min(100, int(motives[actor_id].get("desireToPlay", 0)) + boost)
         applied[message_id] = True
 
@@ -388,12 +430,23 @@ def _challenge_acceptance_offers(
         opponent = intent.get("opponent")
         captain = opponent.get("captainActorId") if isinstance(opponent, dict) else None
         if isinstance(captain, str) and captain in people:
-            offers.append({
-                "actorId": captain,
-                "kind": "accept_team_challenge",
-                "intentId": intent.get("id"),
-                "reason": "captain_challenge_addressed_to_opposing_captain",
-            })
+            intent_id = intent.get("id")
+            conflicts = captain_commitments(ledger, captain, exclude_intent_id=intent_id if isinstance(intent_id, str) else None)
+            if conflicts:
+                offers.append({
+                    "actorId": captain,
+                    "kind": "ask_riley_for_challenge_deferral",
+                    "intentId": intent_id,
+                    "conflictingIntentIds": [row["id"] for row in conflicts if isinstance(row.get("id"), str)],
+                    "reason": "captain_already_has_an_accepted_team_challenge",
+                })
+            else:
+                offers.append({
+                    "actorId": captain,
+                    "kind": "accept_team_challenge",
+                    "intentId": intent_id,
+                    "reason": "captain_challenge_addressed_to_opposing_captain",
+                })
     return offers
 
 
@@ -452,7 +505,10 @@ def _competition_challenge_offers(
         team = state["teamDynamics"].get(team_id, {})
         if int(team.get("competition", 0)) < threshold or int(motives.get(actor_id, {}).get("competition", 0)) < threshold:
             continue
-        rival = _available_rival_captain(roster, people, team_id)
+        ledger = storage.load_json(storage.state / "booking-intents.json", default={})
+        if captain_commitments(ledger, actor_id):
+            continue
+        rival = _available_rival_captain(roster, people, team_id, ledger)
         if rival is not None:
             offers.append({
                 "actorId": actor_id, "kind": "challenge_rival_captain", "rivalCaptainId": rival,
@@ -546,10 +602,19 @@ def _share_redemption_offers(
         }
         for recipient in intent.get("participants", []) if isinstance(intent.get("participants"), list) else []:
             if isinstance(recipient, str) and recipient != owner and recipient in people and recipient not in accepted:
+                attention = intent.get("shareInvitationAttention") if isinstance(intent.get("shareInvitationAttention"), dict) else {}
+                acknowledgement = attention.get(recipient) if isinstance(attention.get(recipient), dict) else {}
                 offers.append({
-                    "actorId": recipient, "kind": "redeem_share_invitation", "intentId": intent_id,
+                    "actorId": recipient,
+                    "kind": "redeem_share_invitation" if acknowledgement.get("status") == "acknowledged" else "acknowledge_share_invitation",
+                    "intentId": intent_id,
                     "occurrenceKey": occurrence, "ownerActorId": owner,
-                    "reason": "named_player_has_private_share_handoff_available",
+                    "reason": (
+                        "named_player_acknowledged_private_share_handoff_and_may_now_decide"
+                        if acknowledgement.get("status") == "acknowledged"
+                        else "named_player_has_private_share_handoff_available"
+                    ),
+                    "expectedNextStep": "recipient_accept_ask_or_pass" if acknowledgement.get("status") == "acknowledged" else "recipient_acknowledgement",
                 })
     return offers
 
@@ -675,7 +740,9 @@ def _available_teammate(roster: Dict[str, Any], people: Dict[str, Dict[str, Any]
     return None
 
 
-def _available_rival_captain(roster: Dict[str, Any], people: Dict[str, Dict[str, Any]], team_id: str) -> Optional[str]:
+def _available_rival_captain(
+    roster: Dict[str, Any], people: Dict[str, Dict[str, Any]], team_id: str, ledger: Dict[str, Any],
+) -> Optional[str]:
     """Select the first ready opposing captain without a rivalry ranking."""
     characters = {row.get("id"): row for row in roster.get("characters", []) if isinstance(row, dict)}
     for team in sorted((row for row in roster.get("teams", []) if isinstance(row, dict)), key=lambda row: str(row.get("id", ""))):
@@ -685,7 +752,11 @@ def _available_rival_captain(roster: Dict[str, Any], people: Dict[str, Dict[str,
         captain_id = captain.get("actorId") if isinstance(captain, dict) else None
         members = team.get("members", [])
         teammate_ids = [characters.get(member, {}).get("actorId") for member in members if member != team.get("captainId")]
-        if isinstance(captain_id, str) and captain_id in people and any(isinstance(value, str) and value in people for value in teammate_ids):
+        if (
+            isinstance(captain_id, str) and captain_id in people
+            and not captain_commitments(ledger, captain_id)
+            and any(isinstance(value, str) and value in people for value in teammate_ids)
+        ):
             return captain_id
     return None
 

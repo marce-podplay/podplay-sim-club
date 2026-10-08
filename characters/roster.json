@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "challengePolicy": {
     "doubles": {
       "route": "customer_booking",
@@ -11,10 +11,19 @@
       "requires": ["clubOwner", "publishedEventBeforePromotion"]
     }
   },
+  "affinityGroups": [
+    {"id": "game-series:king-of-fighters", "kind": "game_series", "label": "The King of Fighters"},
+    {"id": "game-series:street-fighter", "kind": "game_series", "label": "Street Fighter"},
+    {"id": "region:brazil", "kind": "region", "label": "Brazil"},
+    {"id": "region:italy", "kind": "region", "label": "Italy"},
+    {"id": "region:japan", "kind": "region", "label": "Japan"},
+    {"id": "region:korea", "kind": "region", "label": "Korea"}
+  ],
   "teams": [
     {
       "id": "bogard-higashi",
       "name": "Bogard-Higashi",
+      "affinityGroupIds": ["game-series:king-of-fighters"],
       "captainId": "andy-bogard",
       "members": ["andy-bogard", "terry-bogard", "joe-higashi"],
       "sports": {"pickleball": {"preferredTeamSize": 2, "captainInvitesOneTeammate": true, "thirdMemberMayAttendAsGuest": true}, "future_three_player": {"preferredTeamSize": 3}}
@@ -22,6 +31,7 @@
     {
       "id": "japan-team",
       "name": "Japan Team",
+      "affinityGroupIds": ["game-series:king-of-fighters", "region:japan"],
       "captainId": "kyo-kusanagi",
       "members": ["kyo-kusanagi", "benimaru-nikaido", "goro-daimon"],
       "sports": {"pickleball": {"preferredTeamSize": 2, "captainInvitesOneTeammate": true, "thirdMemberMayAttendAsGuest": true}, "future_three_player": {"preferredTeamSize": 3}}
@@ -29,6 +39,7 @@
     {
       "id": "art-of-fighting",
       "name": "Art of Fighting Team",
+      "affinityGroupIds": ["game-series:king-of-fighters", "region:italy"],
       "country": "Italy",
       "captainId": "ryo-sakazaki",
       "members": ["ryo-sakazaki", "robert-garcia", "takuma-sakazaki"],
@@ -37,6 +48,7 @@
     {
       "id": "women-fighters",
       "name": "Women Fighters Team",
+      "affinityGroupIds": ["game-series:king-of-fighters", "region:brazil"],
       "country": "Brazil",
       "captainId": "king",
       "members": ["king", "mai-shiranui", "yuri-sakazaki"],
@@ -45,10 +57,27 @@
     {
       "id": "korea-team",
       "name": "Korea Team",
+      "affinityGroupIds": ["game-series:king-of-fighters", "region:korea"],
       "country": "Korea",
       "captainId": "kim-kaphwan",
       "members": ["kim-kaphwan", "chang-koehan", "choi-bounge"],
       "sports": {"pickleball": {"preferredTeamSize": 2, "captainInvitesOneTeammate": true, "thirdMemberMayAttendAsGuest": true}}
+    },
+    {
+      "id": "world-warriors",
+      "name": "World Warriors",
+      "affinityGroupIds": ["game-series:street-fighter"],
+      "captainId": "ryu",
+      "members": ["ryu", "ken-masters", "chun-li"],
+      "sports": {"pickleball": {"preferredTeamSize": 2, "captainInvitesOneTeammate": true, "thirdMemberMayAttendAsGuest": true}, "future_three_player": {"preferredTeamSize": 3}}
+    },
+    {
+      "id": "street-fighter-contenders",
+      "name": "Street Fighter Contenders",
+      "affinityGroupIds": ["game-series:street-fighter"],
+      "captainId": "blanka",
+      "members": ["blanka", "zangief", "dhalsim"],
+      "sports": {"pickleball": {"preferredTeamSize": 2, "captainInvitesOneTeammate": true, "thirdMemberMayAttendAsGuest": true}, "future_three_player": {"preferredTeamSize": 3}}
     }
   ],
   "staff": [
@@ -83,6 +112,12 @@
     {"id": "yuri-sakazaki", "actorId": "yuri", "name": "Yuri Sakazaki", "role": "future_player", "teamIds": ["women-fighters"], "affinities": ["king", "mai-shiranui"]},
     {"id": "kim-kaphwan", "name": "Kim Kaphwan", "role": "future_player", "teamIds": ["korea-team"], "affinities": ["chang-koehan", "choi-bounge"], "captainOf": ["korea-team"]},
     {"id": "chang-koehan", "name": "Chang Koehan", "role": "future_player", "teamIds": ["korea-team"], "affinities": ["kim-kaphwan", "choi-bounge"]},
-    {"id": "choi-bounge", "name": "Choi Bounge", "role": "future_player", "teamIds": ["korea-team"], "affinities": ["kim-kaphwan", "chang-koehan"]}
+    {"id": "choi-bounge", "name": "Choi Bounge", "role": "future_player", "teamIds": ["korea-team"], "affinities": ["kim-kaphwan", "chang-koehan"]},
+    {"id": "ryu", "actorId": "ryu", "name": "Ryu", "role": "future_player", "teamIds": ["world-warriors"], "affinities": ["ken-masters", "chun-li"], "captainOf": ["world-warriors"]},
+    {"id": "ken-masters", "actorId": "ken-masters", "name": "Ken Masters", "role": "future_player", "teamIds": ["world-warriors"], "affinities": ["ryu", "chun-li"]},
+    {"id": "chun-li", "actorId": "chun-li", "name": "Chun-Li", "role": "future_player", "teamIds": ["world-warriors"], "affinities": ["ryu", "ken-masters"]},
+    {"id": "blanka", "actorId": "blanka", "name": "Blanka", "role": "future_player", "teamIds": ["street-fighter-contenders"], "affinities": ["zangief", "dhalsim"], "captainOf": ["street-fighter-contenders"]},
+    {"id": "zangief", "actorId": "zangief", "name": "Zangief", "role": "future_player", "teamIds": ["street-fighter-contenders"], "affinities": ["blanka", "dhalsim"]},
+    {"id": "dhalsim", "actorId": "dhalsim", "name": "Dhalsim", "role": "future_player", "teamIds": ["street-fighter-contenders"], "affinities": ["blanka", "zangief"]}
   ]
 }

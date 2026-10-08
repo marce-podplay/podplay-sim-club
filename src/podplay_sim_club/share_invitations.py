@@ -13,6 +13,7 @@ from .storage import Storage
 from .time import isoformat, parse_instant
 from .preview_write import PreviewWriteError
 from .booking_intents import load_intent_ledger, save_intent
+from .protocol import append_protocol_facts_locked, make_message, reply_causation
 
 
 SHARE_INVITATIONS_FILE = "share-invitations.json"
@@ -54,12 +55,69 @@ def record_share_choice(
         else:
             if actor_id == owner or actor_id not in participants:
                 raise ShareInvitationError("only a named non-owner participant may redeem a share invitation")
+            attention = intent.get("shareInvitationAttention") if isinstance(intent.get("shareInvitationAttention"), dict) else {}
+            acknowledgement = attention.get(actor_id) if isinstance(attention.get(actor_id), dict) else {}
+            if acknowledgement.get("status") != "acknowledged":
+                raise ShareInvitationError("the named recipient must acknowledge the invitation handoff before deciding")
             choices = intent.get("shareRedemptionChoices") if isinstance(intent.get("shareRedemptionChoices"), dict) else {}
             choices[actor_id] = {"status": "accepted", "requestedAt": observed_at}
             intent["shareRedemptionChoices"] = choices
             intent["nextAction"] = "lead_may_redeem_named_player_share_invitation"
         save_intent(storage, ledger, intent, make_active=False)
     return {"intentId": intent_id, "actorId": actor_id, "action": action, "observedAt": observed_at}
+
+
+def record_share_attention(
+    root, *, intent_id: str, actor_id: str, now: Optional[datetime] = None,
+) -> Mapping[str, Any]:
+    """Record that a named recipient noticed a private-invitation handoff.
+
+    Acknowledgement establishes common ground about the *next decision* only.
+    It neither exposes the private redeem URL nor authorizes redemption; the
+    recipient still has to make a distinct durable accept/pass/ask choice.
+    """
+    storage = Storage(root)
+    observed_at = isoformat(now or datetime.now(timezone.utc))
+    with storage.writer_lock():
+        ledger = load_intent_ledger(storage)
+        intent = ledger["intents"].get(intent_id)
+        if not isinstance(intent, dict):
+            raise ShareInvitationError("share invitation intent is unavailable")
+        owner = intent.get("bookerActorId")
+        participants = intent.get("participants") if isinstance(intent.get("participants"), list) else []
+        if actor_id == owner or actor_id not in participants:
+            raise ShareInvitationError("only a named non-owner participant may acknowledge a share invitation")
+        if intent.get("status") not in {"booked", "team_signup_in_progress", "team_members_registered"}:
+            raise ShareInvitationError("share invitation is not currently actionable")
+        attention = intent.get("shareInvitationAttention") if isinstance(intent.get("shareInvitationAttention"), dict) else {}
+        prior = attention.get(actor_id) if isinstance(attention.get(actor_id), dict) else {}
+        if prior.get("status") == "acknowledged":
+            return {"intentId": intent_id, "actorId": actor_id, "status": "acknowledged", "observedAt": prior.get("acknowledgedAt")}
+        attention[actor_id] = {"status": "acknowledged", "acknowledgedAt": observed_at}
+        intent["shareInvitationAttention"] = attention
+        intent["nextAction"] = "await_named_player_share_decision"
+        save_intent(storage, ledger, intent, make_active=False)
+        message_id = f"{intent_id}:share-invitation-acknowledged:{actor_id}"
+        row = {
+            "id": message_id, "channel": "club", "from": actor_id, "to": [owner],
+            "kind": "share_invitation_acknowledged", "speechAct": "acknowledge",
+            "intentId": intent_id,
+            "inReplyTo": f"{intent_id}:share-invitation-ready:{actor_id}",
+            "text": "I received the private invitation handoff. I will now decide whether to accept, ask a question, or pass.",
+            "observedAt": observed_at, "remoteWrites": 0,
+        }
+        if not any(existing.get("id") == message_id for existing in storage.read_jsonl(storage.channel_path("club")) if isinstance(existing, dict)):
+            storage.append_jsonl(storage.channel_path("club"), row)
+            conversation_id = intent.get("conversationId") if isinstance(intent.get("conversationId"), str) else f"conversation:{intent_id}"
+            append_protocol_facts_locked(storage, [make_message(
+                message_id=message_id, conversation_id=conversation_id,
+                correlation_id=f"journey:{intent_id}", sender_actor_id=actor_id,
+                recipient_actor_ids=[owner], speech_act="acknowledge",
+                content_code="share_invitation.handoff_acknowledged", occurred_at=observed_at,
+                in_reply_to=row["inReplyTo"], causation_id=reply_causation(row["inReplyTo"]),
+                grounding="acknowledged", parameters={"intentRef": intent_id, "nextStep": "recipient_decision"},
+            )])
+    return {"intentId": intent_id, "actorId": actor_id, "status": "acknowledged", "observedAt": observed_at}
 
 
 def next_share_invitation_task(root, *, now: Optional[datetime] = None) -> Mapping[str, Any]:

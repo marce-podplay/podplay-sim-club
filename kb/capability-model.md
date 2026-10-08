@@ -79,6 +79,10 @@ accepted -> satisfied | violated | canceled
 ```
 
 Delivery, understanding, acceptance, and satisfaction are separate facts.
+For a private invitation, the recipient first acknowledges the handoff, then
+receives a separate explicit decision (`accept`, `ask`, or `pass`). The
+dashboard can therefore show both the attention state and the expected next
+step without claiming an invitation was redeemed.
 Staff can answer, explain, propose, or escalate. Staff cannot make a player
 accept. Sofia can advertise and influence; she cannot manufacture demand or a
 product outcome.
@@ -153,4 +157,3 @@ branch:
 
 The same pattern supports player training, team challenges, price complaints,
 membership/pass discovery, and owner/admin feature probes.
-

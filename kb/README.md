@@ -23,6 +23,10 @@ Start here:
 - [Pricing, benefits, and booking authority](pricing-and-benefits-model.md) —
   customer-known facts, quote-specific benefit treatment, payer consent, and
   the safe path from a captain agreement to a booking.
+- [Domain context map](domain-context-map.md) — the bounded contexts, feature
+  seams, authority firewalls, and integration contracts for evolving PodPlay
+  capabilities such as team signup, unified pricing, kids, series, and
+  multi-sport ratings.
 - [Evolution plan](evolution-plan.md) — incremental changes that do not require
   replacing the current engine at once.
 - [Shared-session loop plan](shared-session-loop-plan.md) — the staged path from

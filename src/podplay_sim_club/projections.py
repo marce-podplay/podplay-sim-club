@@ -26,6 +26,7 @@ def rebuild_projections_locked(storage: Storage) -> Dict[str, Any]:
     storage.write_json(directory / "events.json", result["events"])
     storage.write_json(directory / "participation.json", result["participation"])
     storage.write_json(directory / "beliefs.json", result["beliefs"])
+    storage.write_json(directory / "booking-plans.json", result["bookingPlans"])
     storage.write_json(directory / "metadata.json", result["metadata"])
     return result
 
@@ -36,6 +37,7 @@ def reduce_facts(facts: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
     events: Dict[str, Dict[str, Any]] = {}
     participation: Dict[str, Dict[str, Any]] = {}
     beliefs: Dict[str, Dict[str, Any]] = {}
+    booking_plans: Dict[str, Dict[str, Any]] = {}
     seen: set[str] = set()
     last_fact_id = None
     for fact in facts:
@@ -131,6 +133,21 @@ def reduce_facts(facts: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
                 event["status"] = "booked"
                 event["productEventRef"] = payload.get("productEventRef")
                 event["productEvidenceRef"] = fact.get("source", {}).get("evidenceRef")
+                # A booking plan and event share the stable occurrence key.
+                # Keep the plan's funding/quote history intact, but let the
+                # operational stage reflect the verified product write.
+                for plan in booking_plans.values():
+                    plan_data = plan.get("plan") if isinstance(plan, dict) else None
+                    if not isinstance(plan_data, dict) or plan_data.get("occurrenceKey") != occurrence_key:
+                        continue
+                    plan["stage"] = "executed"
+                    plan["execution"] = {
+                        "status": "booked",
+                        "productEventRef": payload.get("productEventRef"),
+                        "evidenceRef": fact.get("source", {}).get("evidenceRef"),
+                        "observedAt": fact["occurredAt"],
+                    }
+                    plan["lastReducedFactId"] = fact_id
             elif fact_type == "event.observed":
                 event["status"] = payload.get("outcome", "observed")
                 event["productEvidenceRef"] = fact.get("source", {}).get("evidenceRef")
@@ -209,6 +226,42 @@ def reduce_facts(facts: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
                 "evidenceRef": evidence_ref,
             })
             belief["lastReducedFactId"] = fact_id
+        if fact_type in {"booking_plan.created", "booking_plan.planned"}:
+            plan = payload.get("plan")
+            if isinstance(plan, dict) and isinstance(plan.get("bookingPlanId"), str):
+                booking_plans[plan["bookingPlanId"]] = {
+                    "schemaVersion": 1,
+                    "bookingPlanId": plan["bookingPlanId"],
+                    "plan": deepcopy(plan),
+                    "quote": None,
+                    "comparison": None,
+                    "execution": None,
+                    "stage": plan.get("stage", "draft"),
+                    "lastReducedFactId": fact_id,
+                }
+        if fact_type in {"booking_quote.observed", "booking_quote.unknown", "booking_quote.error"}:
+            plan = booking_plans.get(fact["subjectRef"])
+            if plan is not None:
+                result = payload.get("result")
+                plan["quote"] = {
+                    "status": result,
+                    "fields": deepcopy(payload.get("fields")),
+                    "errorCode": payload.get("errorCode"),
+                    "evidenceRef": fact.get("source", {}).get("evidenceRef"),
+                    "observedAt": fact["occurredAt"],
+                }
+                requested_stage = plan.get("plan", {}).get("stage") if isinstance(plan.get("plan"), dict) else None
+                if plan.get("stage") not in {"executed", "observed"}:
+                    plan["stage"] = "awaiting_payer_approval" if result == "observed" and requested_stage != "blocked" else "blocked"
+                plan["lastReducedFactId"] = fact_id
+        if fact_type in {"booking_quote.compared.within_expectation", "booking_quote.compared.mismatch", "booking_quote.compared.unknown"}:
+            plan = booking_plans.get(fact["subjectRef"])
+            comparison = payload.get("comparison")
+            if plan is not None and isinstance(comparison, dict):
+                plan["comparison"] = deepcopy(comparison)
+                if plan.get("stage") not in {"executed", "observed"}:
+                    plan["stage"] = "awaiting_payer_approval" if comparison.get("status") == "within_expectation" else "blocked"
+                plan["lastReducedFactId"] = fact_id
     return {
         "conversations": {
             "schemaVersion": 1,
@@ -221,6 +274,7 @@ def reduce_facts(facts: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
         "events": {"schemaVersion": 1, "events": {key: events[key] for key in sorted(events)}},
         "participation": {"schemaVersion": 1, "participation": {key: participation[key] for key in sorted(participation)}},
         "beliefs": {"schemaVersion": 1, "beliefs": {key: beliefs[key] for key in sorted(beliefs)}},
+        "bookingPlans": {"schemaVersion": 1, "bookingPlans": {key: booking_plans[key] for key in sorted(booking_plans)}},
         "metadata": {
             "schemaVersion": 1,
             "factCount": len(seen),

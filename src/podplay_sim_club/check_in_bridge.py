@@ -10,6 +10,13 @@ from .storage import Storage
 from .time import isoformat, parse_instant
 
 
+# Both journeys produce a player-owned booking and named player invitations.
+# Check-in authority belongs to that shared contract, not to the social reason
+# (practice versus a team challenge) which originally created the booking.
+PLAYER_OWNED_CHECK_IN_JOURNEYS = {"customer_training", "customer_team_signup"}
+CHECK_IN_ELIGIBLE_BOOKING_STATUSES = {"booked", "team_members_registered"}
+
+
 def record_choice(root: Path, *, intent_id: str, actor_id: str, now: datetime) -> Dict[str, Any]:
     """Persist one participant's arrival choice; this performs no product I/O."""
     storage = Storage(root)
@@ -17,10 +24,10 @@ def record_choice(root: Path, *, intent_id: str, actor_id: str, now: datetime) -
     with storage.writer_lock():
         ledger = load_intent_ledger(storage)
         intent = ledger["intents"].get(intent_id)
-        if not isinstance(intent, dict) or intent.get("journey") != "customer_training":
-            raise ValueError("check-in choice requires a booked customer training intent")
+        if not isinstance(intent, dict) or intent.get("journey") not in PLAYER_OWNED_CHECK_IN_JOURNEYS:
+            raise ValueError("check-in choice requires a booked player-owned intent")
         participants = intent.get("participants") if isinstance(intent.get("participants"), list) else []
-        if intent.get("status") != "booked" or actor_id not in participants:
+        if intent.get("status") not in CHECK_IN_ELIGIBLE_BOOKING_STATUSES or actor_id not in participants:
             raise ValueError("actor is not a named booked training participant")
         choices = intent.get("checkInChoices") if isinstance(intent.get("checkInChoices"), dict) else {}
         choices[actor_id] = {"status": "accepted", "requestedAt": observed_at}
@@ -42,7 +49,7 @@ def offers(root: Path, *, now: datetime, people: Dict[str, Dict[str, Any]]) -> l
     }
     result = []
     for intent_id, intent in ledger["intents"].items():
-        if not isinstance(intent, dict) or intent.get("journey") != "customer_training" or intent.get("status") != "booked":
+        if not isinstance(intent, dict) or intent.get("journey") not in PLAYER_OWNED_CHECK_IN_JOURNEYS or intent.get("status") not in CHECK_IN_ELIGIBLE_BOOKING_STATUSES:
             continue
         plan = intent.get("previewPlan") if isinstance(intent.get("previewPlan"), dict) else {}
         booking = intent.get("booking") if isinstance(intent.get("booking"), dict) else {}
@@ -82,7 +89,7 @@ def next_task(root: Path, *, now: datetime) -> Dict[str, Any]:
         if isinstance(row, dict) and row.get("kind") == "training_check_in_recorded"
     }
     for intent_id, intent in ledger["intents"].items():
-        if not isinstance(intent, dict) or intent.get("journey") != "customer_training" or intent.get("status") != "booked":
+        if not isinstance(intent, dict) or intent.get("journey") not in PLAYER_OWNED_CHECK_IN_JOURNEYS or intent.get("status") not in CHECK_IN_ELIGIBLE_BOOKING_STATUSES:
             continue
         booking = intent.get("booking") if isinstance(intent.get("booking"), dict) else {}
         occurrence = booking.get("occurrenceKey")

@@ -78,6 +78,8 @@ def _handle_request(storage: Storage, messages: list, request: Any, observed_at:
         return _new_event_request(storage, request, observed_at)
     if request.get("kind") == "share_invitation_expired":
         return _expired_share_invitation(storage, request, observed_at)
+    if request.get("kind") == "challenge_capacity_request":
+        return _challenge_capacity_request(storage, request, observed_at)
     request_id = request.get("id")
     intent_id = request.get("intentId")
     if not isinstance(request_id, str) or not isinstance(intent_id, str):
@@ -142,6 +144,18 @@ def _expired_share_invitation(storage: Storage, request: Dict[str, Any], observe
     return _reply(storage, request, observed_at, "I logged a fresh 30-minute Women Fighters request. The old booking stays in history; the lead must find a new free court before King can book and share a new invitation.", "rebooking_requested", intentId=intent_id)
 
 
+def _challenge_capacity_request(storage: Storage, request: Dict[str, Any], observed_at: str) -> Dict[str, Any]:
+    """Acknowledge a declined overlap without turning it into a reservation."""
+    intent_id = request.get("intentId")
+    if not isinstance(intent_id, str):
+        return _reply(storage, request, observed_at, "I need the challenge reference before I can record a later request.", "request_missing_intent")
+    return _reply(
+        storage, request, observed_at,
+        "I recorded the captain's capacity conflict. This challenge is not agreed or booked; either captain can send a fresh invitation after their current match is resolved.",
+        "challenge_capacity_recorded", intentId=intent_id,
+    )
+
+
 def _captains_agreed(messages: list, intent: Dict[str, Any], intent_id: str) -> bool:
     senders = {row.get("from") for row in messages if isinstance(row, dict) and row.get("kind") == "reschedule_request" and row.get("intentId") == intent_id}
     if not may_start_early(intent):
@@ -158,7 +172,7 @@ def _reply(storage: Storage, request: Dict[str, Any], observed_at: str, text: st
     conversation_id = request.get("conversationId") or conversation_id_for(f"request:{request_id}")
     speech_act = (
         "propose" if action == "propose_reschedule"
-        else "acknowledge" if action in {"new_event_requested", "rebooking_requested"}
+        else "acknowledge" if action in {"new_event_requested", "rebooking_requested", "challenge_capacity_recorded"}
         else "clarify"
     )
     row = {

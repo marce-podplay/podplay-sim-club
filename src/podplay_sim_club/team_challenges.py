@@ -23,6 +23,50 @@ class TeamChallengeError(ValueError):
     """Raised when a team challenge cannot be tied back to the roster."""
 
 
+# An invitation is only a request.  Once a captain has accepted a challenge,
+# however, a second doubles commitment would tell an impossible social story
+# (and could later turn into two competing bookings).  Keep this deliberately
+# narrower than "all open intents": a captain may still *receive* more than
+# one invitation and choose which one to accept.
+CAPTAIN_COMMITMENT_STATUSES = {
+    "agreed",
+    "preview_ready",
+    "team_signup_in_progress",
+    "team_members_registered",
+    "booked",
+}
+TEAM_BOOKING_AUTHORITY_LIFETIME = timedelta(hours=2)
+ACTIONABLE_TEAM_CHALLENGE_STATUSES = {"captain_invited", "agreed", "preview_ready", "team_signup_in_progress", "planned"}
+
+
+def captain_commitments(
+    ledger: Dict[str, Any], actor_id: str, *, exclude_intent_id: Optional[str] = None,
+) -> list[Dict[str, Any]]:
+    """Return accepted-or-later doubles commitments for one named captain.
+
+    This is a social capacity projection, not a calendar availability claim.
+    It prevents a captain from accepting two live team challenges; the lead
+    still owns availability, booking, invitations, and attendance.
+    """
+    rows = ledger.get("intents", {}) if isinstance(ledger, dict) else {}
+    matches: list[Dict[str, Any]] = []
+    for intent_id, intent in rows.items() if isinstance(rows, dict) else []:
+        if intent_id == exclude_intent_id or not isinstance(intent, dict):
+            continue
+        if (
+            intent.get("journey") != "customer_team_signup"
+            or intent.get("status") not in CAPTAIN_COMMITMENT_STATUSES
+        ):
+            continue
+        sides = (intent.get("challenger"), intent.get("opponent"))
+        if any(
+            isinstance(side, dict) and side.get("captainActorId") == actor_id
+            for side in sides
+        ):
+            matches.append(deepcopy(intent))
+    return matches
+
+
 def propose_challenge(root: Path, scenario_name: str, now: datetime) -> Dict[str, Any]:
     """Send a captain-to-captain doubles invitation without booking a court."""
     storage = Storage(root)
@@ -103,6 +147,9 @@ def propose_captain_challenge(
             pair = {left.get("teamId"), right.get("teamId")}
             if pair == {challenger["teamId"], opponent["teamId"]} and existing.get("status") in {"captain_invited", "agreed", "preview_ready", "team_signup_in_progress", "team_members_registered"}:
                 return deepcopy(existing)
+        for captain_id in (challenger_actor_id, opponent_actor_id):
+            if captain_commitments(ledger, captain_id):
+                raise TeamChallengeError("a captain already has an accepted team challenge")
         key = f"{challenger['teamId']}-vs-{opponent['teamId']}:{now.strftime('%Y%m%dT%H')}"
         intent_id = f"intent:team-challenge:{key}"
         participants = [challenger["captainActorId"], challenger["teammateActorId"], opponent["captainActorId"], opponent["teammateActorId"]]
@@ -144,6 +191,8 @@ def accept_challenge(root: Path, intent_id: str, actor_id: str, now: datetime) -
         proposer = challenger.get("captainActorId") if isinstance(challenger, dict) else None
         if intent.get("status") != "captain_invited" or actor_id != expected or not isinstance(proposer, str):
             raise TeamChallengeError("only the addressed opposing captain may accept")
+        if captain_commitments(ledger, actor_id, exclude_intent_id=intent_id):
+            raise TeamChallengeError("captain already has an accepted team challenge")
         observed_at = isoformat(now)
         intent = deepcopy(intent)
         intent.update({"status": "agreed", "agreedAt": observed_at, "nextAction": "plan_team_signup_booking"})
@@ -162,6 +211,54 @@ def accept_challenge(root: Path, intent_id: str, actor_id: str, now: datetime) -
     return intent
 
 
+def defer_challenge_for_capacity(
+    root: Path, intent_id: str, actor_id: str, now: datetime,
+) -> Dict[str, Any]:
+    """Let an addressed captain decline one invitation because they are busy.
+
+    The player asks Riley to retain the situation as a future conversation,
+    rather than implying a reschedule, a new court, or a second agreement.
+    """
+    storage = Storage(root)
+    with storage.writer_lock():
+        ledger = load_intent_ledger(storage)
+        intent = ledger["intents"].get(intent_id)
+        if not isinstance(intent, dict) or intent.get("journey") != "customer_team_signup":
+            raise TeamChallengeError("team challenge invitation is unavailable")
+        opponent = intent.get("opponent")
+        challenger = intent.get("challenger")
+        expected = opponent.get("captainActorId") if isinstance(opponent, dict) else None
+        proposer = challenger.get("captainActorId") if isinstance(challenger, dict) else None
+        if intent.get("status") != "captain_invited" or actor_id != expected or not isinstance(proposer, str):
+            raise TeamChallengeError("only the addressed opposing captain may defer this invitation")
+        conflicts = captain_commitments(ledger, actor_id, exclude_intent_id=intent_id)
+        if not conflicts:
+            raise TeamChallengeError("captain has no accepted challenge requiring a deferral")
+        observed_at = isoformat(now)
+        conflict_ids = [row["id"] for row in conflicts if isinstance(row.get("id"), str)]
+        intent = deepcopy(intent)
+        intent.update({
+            "status": "captain_deferred",
+            "deferredAt": observed_at,
+            "deferredBy": actor_id,
+            "deferredForIntentIds": conflict_ids,
+            "nextAction": "await_fresh_captain_invitation_after_capacity_frees",
+        })
+        save_intent(storage, ledger, intent)
+        message = {
+            "id": f"{intent_id}:captain-capacity-request", "channel": "club",
+            "kind": "challenge_capacity_request", "from": actor_id,
+            "to": [proposer, "riley"], "conversationId": intent.get("conversationId"),
+            "commitmentId": intent.get("commitmentId"), "speechAct": "request",
+            "intentId": intent_id, "inReplyTo": f"{intent_id}:captain-invitation",
+            "text": "I am already committed to another doubles challenge. Riley, please keep this as a later request; this is not an acceptance, court plan, or booking.",
+            "observedAt": observed_at, "remoteWrites": 0,
+        }
+        storage.append_jsonl(storage.channel_path("club"), message)
+        _record_challenge_capacity_deferral(storage, intent, actor_id, proposer, message, observed_at)
+    return intent
+
+
 def plan_challenge(root: Path, scenario_name: str, now: datetime) -> Dict[str, Any]:
     """Record one agreed doubles challenge; product writes require a later adapter."""
     storage = Storage(root)
@@ -169,7 +266,7 @@ def plan_challenge(root: Path, scenario_name: str, now: datetime) -> Dict[str, A
     roster = storage.load_json(root / "characters" / "roster.json")
     if not isinstance(scenario, dict) or scenario.get("schemaVersion") != 1:
         raise TeamChallengeError("team challenge scenario is invalid")
-    if not isinstance(roster, dict) or roster.get("schemaVersion") != 3:
+    if not isinstance(roster, dict) or roster.get("schemaVersion") not in {3, 4}:
         raise TeamChallengeError("character roster is invalid")
     if scenario.get("journey") != "doubles_challenge":
         raise TeamChallengeError("team challenge must describe a doubles journey")
@@ -279,6 +376,8 @@ def next_team_signup_task(root: Path, now: Optional[datetime] = None) -> Dict[st
     invites in the Preview product.
     """
     storage = Storage(root)
+    if now is not None:
+        reconcile_team_signup_booking_authority(root, now)
     ledger = load_intent_ledger(storage)
     candidates = [
         intent for intent in ledger["intents"].values()
@@ -315,6 +414,38 @@ def next_team_signup_task(root: Path, now: Optional[datetime] = None) -> Dict[st
     }
 
 
+def reconcile_team_signup_booking_authority(root: Path, now: datetime) -> Dict[str, Any]:
+    """Expire unbooked captain agreements whose planning authority elapsed.
+
+    This does not rewrite a captain's acceptance or a booked event.  It only
+    removes stale product-booking authority, so an old social agreement cannot
+    remain an indefinite task or later create a surprise match.
+    """
+    storage = Storage(root)
+    observed_at = isoformat(now)
+    expired_ids: list[str] = []
+    with storage.writer_lock():
+        ledger = load_intent_ledger(storage)
+        for intent_id, original in ledger["intents"].items():
+            if not isinstance(intent_id, str) or not isinstance(original, dict):
+                continue
+            if (
+                original.get("journey") != "customer_team_signup"
+                or original.get("status") not in ACTIONABLE_TEAM_CHALLENGE_STATUSES
+                or _booking_agreement_is_fresh(original, now)
+            ):
+                continue
+            intent = deepcopy(original)
+            intent.update({
+                "status": "expired",
+                "bookingAuthorityExpiredAt": observed_at,
+                "nextAction": "history_only_fresh_captain_agreement_required",
+            })
+            save_intent(storage, ledger, intent)
+            expired_ids.append(intent_id)
+    return {"expiredIntentIds": expired_ids, "observedAt": observed_at}
+
+
 def _agreement_timestamp(intent: Dict[str, Any]) -> float:
     value = intent.get("agreedAt") or intent.get("createdAt") or ""
     if not isinstance(value, str):
@@ -333,7 +464,7 @@ def _booking_agreement_is_fresh(intent: Dict[str, Any], now: datetime) -> bool:
         agreed_at = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
     except ValueError:
         return False
-    if now - agreed_at > timedelta(hours=2):
+    if now - agreed_at > TEAM_BOOKING_AUTHORITY_LIFETIME:
         return False
     if intent.get("status") != "preview_ready":
         return True
@@ -394,6 +525,30 @@ def _record_challenge_acceptance(
         storage, commitment_id=commitment_id, transition="accepted",
         actor_id=actor_id, occurred_at=observed_at,
         causation_id=message_fact["factId"],
+    )
+    append_protocol_facts_locked(storage, [message_fact, transition])
+
+
+def _record_challenge_capacity_deferral(
+    storage: Storage, intent: Dict[str, Any], actor_id: str, proposer: str,
+    message: Dict[str, Any], observed_at: str,
+) -> None:
+    conversation_id, commitment_id = intent.get("conversationId"), intent.get("commitmentId")
+    if not isinstance(conversation_id, str) or not isinstance(commitment_id, str):
+        return
+    proposal_id = f"{intent['id']}:captain-invitation"
+    message_fact = make_message(
+        message_id=message["id"], conversation_id=conversation_id,
+        correlation_id=f"journey:{intent['id']}", sender_actor_id=actor_id,
+        recipient_actor_ids=[proposer, "riley"], speech_act="request",
+        content_code="team.challenge.capacity_deferred", occurred_at=observed_at,
+        commitment_id=commitment_id, in_reply_to=proposal_id,
+        grounding="understood", causation_id=reply_causation(proposal_id),
+        parameters={"intentRef": intent["id"]},
+    )
+    transition = make_commitment_transition(
+        storage, commitment_id=commitment_id, transition="rejected",
+        actor_id=actor_id, occurred_at=observed_at, causation_id=message_fact["factId"],
     )
     append_protocol_facts_locked(storage, [message_fact, transition])
 

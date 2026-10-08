@@ -23,9 +23,13 @@ delivery; it does not redefine those boundaries.
 - Let Sofia announce the final only after that report.
 - Reconcile identities/payment ledger after a preview refresh.
 - Verify the active player-owned membership, pass/credit, and payment-readiness
-  discovery against live Preview customer UI; then add the pricing/benefit gate:
-  a named payer reads a quote, confirms its treatment against their
-  expectations, and only then enables a team-signup booking.
+  discovery against live Preview customer UI; then add the pricing/benefit
+  gate and Observatory inspectors: a selected player shows expectations,
+  customer-visible benefit beliefs, source/freshness and uncertainty; a
+  selected booking plan shows payer, charge strategy, venue constraints, quote
+  treatment, comparisons and approval. A named payer reads a quote, confirms
+  its treatment against their expectations, and only then enables a
+  team-signup booking.
 
 ## Later — extract a reusable skill
 

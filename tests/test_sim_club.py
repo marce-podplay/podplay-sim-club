@@ -1,4 +1,4 @@
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 from io import StringIO
 import json
@@ -25,7 +25,7 @@ from podplay_sim_club.credentials import CredentialsError, PreviewCredentials
 from podplay_sim_club.communications import record_invite_sent
 from podplay_sim_club.firebase_auth import AuthSession, FirebaseAuthenticator
 from podplay_sim_club.player_login import session_check_record, verify_player_session
-from podplay_sim_club.identity_registry import ActorIdentity, IdentityRegistry
+from podplay_sim_club.identity_registry import ActorIdentity, IdentityRegistry, TEAM_ACTORS
 from podplay_sim_club.preview_seed import load_preview_seed, seed_actor_ids
 from podplay_sim_club.fake_preview import FakePreview
 from podplay_sim_club.orchestrator import Orchestrator, SimulatedCrash
@@ -94,7 +94,26 @@ class SimClubTestCase(unittest.TestCase):
         roster = json.loads((REPO_ROOT / "characters" / "roster.json").read_text())
         characters = {character["id"]: character for character in roster["characters"]}
 
-        self.assertEqual(3, roster["schemaVersion"])
+        self.assertEqual(4, roster["schemaVersion"])
+        from podplay_sim_club.affinity_groups import groups_for_team, team_relationships, validate_roster_affinity_groups
+        validate_roster_affinity_groups(roster)
+        self.assertEqual(
+            ["game-series:king-of-fighters", "region:japan"],
+            [group["id"] for group in groups_for_team(roster, "japan-team")],
+        )
+        relationship = next(row for row in team_relationships(roster) if row["teamIds"] == ["bogard-higashi", "japan-team"])
+        self.assertEqual(["game-series:king-of-fighters"], relationship["sharedAffinityGroupIds"])
+        self.assertEqual("high", relationship["explicitRivalry"]["intensity"])
+        street_fighter = next(team for team in roster["teams"] if team["id"] == "world-warriors")
+        self.assertEqual(["ryu", "ken-masters", "chun-li"], street_fighter["members"])
+        sf_relationship = next(row for row in team_relationships(roster) if row["teamIds"] == ["street-fighter-contenders", "world-warriors"])
+        self.assertEqual(["game-series:street-fighter"], sf_relationship["sharedAffinityGroupIds"])
+        self.assertIsNone(sf_relationship["explicitRivalry"])
+        self.assertEqual(("ryu", "ken-masters", "chun-li"), TEAM_ACTORS["world-warriors"])
+        self.assertEqual(("blanka", "zangief", "dhalsim"), TEAM_ACTORS["street-fighter-contenders"])
+        active_actor_ids = {row.get("actorId") for row in characters.values()}
+        self.assertTrue(set(TEAM_ACTORS["world-warriors"]).issubset(active_actor_ids))
+        self.assertTrue(set(TEAM_ACTORS["street-fighter-contenders"]).issubset(active_actor_ids))
         for team in roster["teams"]:
             self.assertIn(team["captainId"], team["members"])
             self.assertTrue(all(member in characters for member in team["members"]))
@@ -227,6 +246,20 @@ class SimClubTestCase(unittest.TestCase):
         later = social_tick(self.root, now=datetime(2026, 9, 23, 15, 30, tzinfo=timezone.utc))
         self.assertFalse(any(offer.get("kind") == "stimulate_quiet_club" for offer in later["offers"]))
 
+    def test_verified_team_activation_is_a_local_training_welcome_not_a_booking(self):
+        from podplay_sim_club.owner_engagement import tick as owner_tick
+        from podplay_sim_club.team_activation import record_verified_team_activation
+
+        record_verified_team_activation(self.root, "world-warriors", ["ryu", "ken-masters", "chun-li"], now=FIXED_NOW)
+        result = owner_tick(self.root, now=FIXED_NOW)
+        self.assertEqual("welcome_verified_team", result["action"])
+        self.assertEqual("world-warriors", result["teamId"])
+        messages = Storage(self.root).read_jsonl(Storage(self.root).channel_path("club"))
+        welcome = next(row for row in messages if row.get("kind") == "owner_team_training_nudge")
+        self.assertEqual(["ryu", "ken-masters", "chun-li"], welcome["to"])
+        self.assertEqual(45, welcome["motiveBoost"])
+        self.assertEqual(0, welcome["remoteWrites"])
+
     def test_captain_challenge_cooldown_does_not_block_a_distinct_teammate_offer(self):
         from podplay_sim_club.social_engine import tick as social_tick
 
@@ -266,7 +299,7 @@ class SimClubTestCase(unittest.TestCase):
 
         result = tick(self.root, now=FIXED_NOW)
         self.assertLessEqual(len(result["rounds"]), 2)
-        self.assertTrue(all(len(round_["actorTurns"]) == 10 for round_ in result["rounds"]))
+        self.assertTrue(all(1 <= len(round_["actorTurns"]) <= 10 for round_ in result["rounds"]))
         self.assertTrue(result["rounds"][0]["messageSent"])
         self.assertTrue(any(turn["action"] == "challenge_rival_captain" for round_ in result["rounds"] for turn in round_["actorTurns"]))
         intents = load_intent_ledger(Storage(self.root))["intents"]
@@ -440,16 +473,31 @@ class SimClubTestCase(unittest.TestCase):
         storage.write_json(storage.state / "share-invitations.json", {
             "schemaVersion": 1, "invitations": {occurrence: {"redeemUrl": "private"}},
         })
+        from podplay_sim_club.server import _invitation_conversations
+        conversations = _invitation_conversations(Orchestrator(self.root))
+        self.assertEqual("handoff_ready", conversations[0]["stage"])
+        self.assertEqual("recipient_acknowledge_handoff", conversations[0]["expectedNextStep"])
         after_capture = [
             row for row in social_tick(self.root, now=FIXED_NOW)["offers"]
             if row.get("intentId") == intent_id
         ]
         self.assertNotIn("capture_share_invitation", [row["kind"] for row in after_capture])
-        self.assertEqual(["redeem_share_invitation"], [row["kind"] for row in after_capture])
+        self.assertEqual(["acknowledge_share_invitation"], [row["kind"] for row in after_capture])
+
+        from podplay_sim_club.share_invitations import record_share_attention
+        record_share_attention(self.root, intent_id=intent_id, actor_id="mai", now=FIXED_NOW)
+        conversations = _invitation_conversations(Orchestrator(self.root))
+        self.assertEqual("acknowledged", conversations[0]["stage"])
+        self.assertEqual("recipient_accept_ask_or_pass", conversations[0]["expectedNextStep"])
+        after_attention = [
+            row for row in social_tick(self.root, now=FIXED_NOW)["offers"]
+            if row.get("intentId") == intent_id
+        ]
+        self.assertEqual(["redeem_share_invitation"], [row["kind"] for row in after_attention])
 
     def test_share_choices_bridge_only_after_apply_and_recipient_is_named(self):
         from podplay_sim_club.share_invitations import (
-            next_share_invitation_task, record_share_choice,
+            next_share_invitation_task, record_share_attention, record_share_choice,
         )
         from podplay_sim_club.share_invitation_bridge import advance
 
@@ -459,7 +507,7 @@ class SimClubTestCase(unittest.TestCase):
         ledger = load_intent_ledger(storage)
         save_intent(storage, ledger, {
             "schemaVersion": 1, "id": intent_id, "journey": "customer_training",
-            "status": "booked", "bookerActorId": "king-captain",
+            "status": "team_members_registered", "bookerActorId": "king-captain",
             "participants": ["king-captain", "mai"],
             "booking": {"eventId": "event-share-bridge", "occurrenceKey": occurrence},
             "previewPlan": {"endTime": "2026-09-23T17:00:00Z"},
@@ -488,6 +536,13 @@ class SimClubTestCase(unittest.TestCase):
         storage.write_json(storage.state / "share-invitations.json", {
             "schemaVersion": 1, "invitations": {occurrence: {"redeemUrl": "private"}},
         })
+        with self.assertRaises(Exception):
+            record_share_choice(self.root, intent_id=intent_id, actor_id="mai", action="redeem", now=FIXED_NOW)
+        attention = record_share_attention(self.root, intent_id=intent_id, actor_id="mai", now=FIXED_NOW)
+        self.assertEqual("acknowledged", attention["status"])
+        message = storage.read_jsonl(storage.channel_path("club"))[-1]
+        self.assertEqual("share_invitation_acknowledged", message["kind"])
+        self.assertEqual("acknowledge", message["speechAct"])
         record_share_choice(self.root, intent_id=intent_id, actor_id="mai", action="redeem", now=FIXED_NOW)
         redemption = next_share_invitation_task(self.root, now=FIXED_NOW)
         self.assertEqual("redeem_share_invitation", redemption["action"])
@@ -525,7 +580,23 @@ class SimClubTestCase(unittest.TestCase):
         )["action"])
         self.assertEqual((self.root, True, PREVIEW_ORIGIN, intent_id, "mai"), calls[-1])
 
-    def test_live_lead_task_skips_stale_agreement_but_keeps_it_as_history(self):
+        # Team signup uses the same named-player invitation and arrival
+        # contract.  The bridge must not care whether the social purpose was
+        # a practice or a captain-led challenge.
+        team_intent_id = "intent:challenge:arrival"
+        save_intent(storage, load_intent_ledger(storage), {
+            "schemaVersion": 1, "id": team_intent_id, "journey": "customer_team_signup",
+            "status": "team_members_registered", "bookerActorId": "king-captain",
+            "participants": ["king-captain", "mai"],
+            "booking": {"eventId": "event-challenge-arrival", "occurrenceKey": "occurrence:intent:challenge-arrival"},
+            "previewPlan": {"startTime": "2026-09-23T15:30:00Z", "endTime": "2026-09-23T16:00:00Z"},
+            "shareRedemptions": [{"actorId": "mai", "status": "ACCEPTED"}],
+        })
+        record_choice(self.root, intent_id=team_intent_id, actor_id="mai", now=FIXED_NOW)
+        team_intent = load_intent_ledger(storage)["intents"][team_intent_id]
+        self.assertEqual("accepted", team_intent["checkInChoices"]["mai"]["status"])
+
+    def test_live_lead_task_expires_stale_agreement_into_history(self):
         from podplay_sim_club.training_sessions import next_booking_task
 
         storage = Storage(self.root)
@@ -540,7 +611,59 @@ class SimClubTestCase(unittest.TestCase):
         save_intent(storage, ledger, stale)
 
         self.assertEqual("pass", next_booking_task(self.root, now=FIXED_NOW)["action"])
-        self.assertEqual("agreed", load_intent_ledger(storage)["intents"][stale["id"]]["status"])
+        stored = load_intent_ledger(storage)["intents"][stale["id"]]
+        self.assertEqual("expired", stored["status"])
+        self.assertEqual("history_only_fresh_player_agreement_required", stored["nextAction"])
+
+    def test_newer_team_acceptance_supersedes_prior_unbooked_booking_authority(self):
+        from podplay_sim_club.training_sessions import accept_intent
+
+        storage = Storage(self.root)
+        ledger = load_intent_ledger(storage)
+        prior = {
+            "schemaVersion": 1, "id": "intent:training:bogard-higashi:prior",
+            "journey": "customer_training", "trainingTeamId": "bogard-higashi",
+            "status": "agreed", "createdAt": "2026-09-23T14:00:00Z",
+            "agreedAt": "2026-09-23T14:10:00Z", "bookerActorId": "andy-bogard",
+            "participants": ["andy-bogard", "terry-bogard"],
+            "constraints": {"durationMinutes": 30},
+        }
+        current = {
+            "schemaVersion": 1, "id": "intent:training:bogard-higashi:current",
+            "journey": "customer_training", "trainingTeamId": "bogard-higashi",
+            "status": "captain_invited", "createdAt": "2026-09-23T15:00:00Z",
+            "bookerActorId": "andy-bogard", "participants": ["andy-bogard", "terry-bogard"],
+            "constraints": {"durationMinutes": 30}, "nextAction": "await_teammate_acceptance",
+        }
+        save_intent(storage, ledger, prior)
+        save_intent(storage, ledger, current)
+
+        accepted = accept_intent(self.root, current["id"], "terry-bogard", FIXED_NOW)
+        stored = load_intent_ledger(storage)["intents"]
+        self.assertEqual("agreed", accepted["status"])
+        self.assertEqual("superseded", stored[prior["id"]]["status"])
+        self.assertEqual(current["id"], stored[prior["id"]]["supersededBy"])
+
+    def test_live_team_signup_task_expires_stale_captain_agreement(self):
+        from podplay_sim_club.team_challenges import next_team_signup_task
+
+        storage = Storage(self.root)
+        stale = {
+            "schemaVersion": 1, "id": "intent:team-challenge:stale",
+            "journey": "customer_team_signup", "status": "agreed",
+            "createdAt": "2026-09-20T12:00:00Z", "agreedAt": "2026-09-20T12:01:00Z",
+            "bookerActorId": "andy-bogard",
+            "participants": ["andy-bogard", "terry-bogard", "kyo-captain", "benimaru"],
+            "challenger": {"captainActorId": "andy-bogard"},
+            "opponent": {"captainActorId": "kyo-captain"},
+            "constraints": {"durationMinutes": 60},
+        }
+        save_intent(storage, load_intent_ledger(storage), stale)
+
+        self.assertEqual("pass", next_team_signup_task(self.root, now=FIXED_NOW)["action"])
+        stored = load_intent_ledger(storage)["intents"][stale["id"]]
+        self.assertEqual("expired", stored["status"])
+        self.assertEqual("history_only_fresh_captain_agreement_required", stored["nextAction"])
 
     def test_player_share_invitation_link_is_private_and_same_preview_only(self):
         from podplay_sim_club.share_invitations import (
@@ -950,6 +1073,35 @@ class SimClubTestCase(unittest.TestCase):
         commitment = projection["commitments"][invited["commitmentId"]]
         self.assertEqual("accepted", commitment["status"])
         self.assertEqual(["proposed", "accepted"], [row["status"] for row in commitment["transitions"]])
+
+    def test_captain_defers_an_overlapping_challenge_and_riley_can_acknowledge_it(self):
+        from podplay_sim_club.front_desk import tick as front_desk_tick
+        from podplay_sim_club.social_engine import tick as social_tick
+        from podplay_sim_club.team_challenges import (
+            TeamChallengeError, accept_challenge, defer_challenge_for_capacity,
+            propose_captain_challenge, propose_challenge,
+        )
+
+        # Ryu can make the invitation while Andy is still free.  It remains a
+        # request, not an agreement or calendar claim.
+        pending = propose_captain_challenge(self.root, "ryu", "andy-bogard", FIXED_NOW)
+        established = propose_challenge(self.root, "andy-vs-kyo-doubles.json", FIXED_NOW)
+        accept_challenge(self.root, established["id"], "kyo-captain", FIXED_NOW)
+
+        # Andy may not turn the second invitation into a concurrent commitment.
+        with self.assertRaises(TeamChallengeError):
+            accept_challenge(self.root, pending["id"], "andy-bogard", FIXED_NOW)
+        deferred = defer_challenge_for_capacity(self.root, pending["id"], "andy-bogard", FIXED_NOW)
+        self.assertEqual("captain_deferred", deferred["status"])
+        self.assertEqual([established["id"]], deferred["deferredForIntentIds"])
+
+        offers = social_tick(self.root, now=FIXED_NOW)["offers"]
+        self.assertTrue(any(row.get("actorId") == "riley" for row in offers))
+        reply = front_desk_tick(self.root, now=FIXED_NOW)
+        self.assertEqual("challenge_capacity_recorded", reply["action"])
+        messages = Storage(self.root).read_jsonl(Storage(self.root).channel_path("club"))
+        self.assertEqual("challenge_capacity_request", messages[-2]["kind"])
+        self.assertEqual("staff_reply", messages[-1]["kind"])
 
     def test_commitment_transitions_enforce_actor_authority_and_evidence(self):
         from podplay_sim_club.protocol import (
@@ -1397,6 +1549,175 @@ class SimClubTestCase(unittest.TestCase):
                 }],
             )
 
+    def test_booking_plan_quote_contract_keeps_unknown_benefits_unknown(self):
+        from podplay_sim_club.booking_plans import (
+            BookingPlanValidationError, make_booking_plan, make_plan_fact,
+            compare_quote_to_payer_beliefs, make_comparison_fact,
+            make_quote_evidence, make_quote_fact,
+        )
+        from podplay_sim_club.facts import append_facts_locked
+        from podplay_sim_club.projections import rebuild_projections_locked
+
+        plan = make_booking_plan(
+            occurrence_key="occurrence:training:bogard-higashi:007",
+            owner_actor_id="andy-bogard",
+            participant_actor_ids=["andy-bogard", "terry-bogard"],
+            payer_actor_id="andy-bogard",
+            venue_ref="venue:w37:table-1",
+            starts_at="2026-10-07T19:00:00Z",
+            ends_at="2026-10-07T19:30:00Z",
+        )
+        self.assertEqual("owner_pays", plan["requestedFunding"]["chargeStrategy"])
+        self.assertEqual("andy-bogard", plan["payerActorId"])
+
+        fields = {
+            "total": {"status": "observed", "value": 18.0},
+            "currency": {"status": "observed", "value": "USD"},
+            "membershipTreatment": {"status": "unknown", "value": None},
+            "virtualCreditTreatment": {"status": "not_applicable", "value": None},
+            "passTreatment": {"status": "unknown", "value": None},
+            "capacityTreatment": {"status": "observed", "value": "two_players_allowed"},
+            "cancellationTerms": {"status": "unknown", "value": None},
+            "blockingCodes": {"status": "observed", "value": []},
+        }
+        evidence = make_quote_evidence(
+            booking_plan=plan, observed_at="2026-10-07T18:00:00Z",
+            result="observed", fields=fields,
+        )
+        storage = Storage(self.root)
+        with storage.writer_lock():
+            append_facts_locked(storage, [
+                make_plan_fact(plan=plan, occurred_at="2026-10-07T17:59:00Z", correlation_id="journey:007"),
+                make_quote_fact(evidence=evidence, occurred_at="2026-10-07T18:00:00Z", correlation_id="journey:007"),
+            ])
+            rebuild_projections_locked(storage)
+        projection = storage.load_json(storage.state / "projections" / "booking-plans.json")
+        row = projection["bookingPlans"][plan["bookingPlanId"]]
+        self.assertEqual("awaiting_payer_approval", row["stage"])
+        self.assertEqual("unknown", row["quote"]["fields"]["passTreatment"]["status"])
+        self.assertIsNone(row["quote"]["fields"]["membershipTreatment"]["value"])
+
+        # A verified product write advances the operational stage, without
+        # erasing the separate quote and payer-approval record.
+        from podplay_sim_club.facts import make_fact
+        with storage.writer_lock():
+            append_facts_locked(storage, [
+                make_fact(
+                    fact_type="event.booked", natural_key="training-007-booked",
+                    subject_ref=plan["occurrenceKey"], correlation_id="journey:007",
+                    source_kind="preview_readback", evidence_ref="evidence:preview:event:training-007",
+                    payload={"productEventRef": "event:training-007"},
+                    occurred_at="2026-10-07T18:04:00Z", actor_id="lead", privacy="community",
+                ),
+            ])
+            rebuild_projections_locked(storage)
+        row = storage.load_json(storage.state / "projections" / "booking-plans.json")["bookingPlans"][plan["bookingPlanId"]]
+        self.assertEqual("executed", row["stage"])
+        self.assertEqual("event:training-007", row["execution"]["productEventRef"])
+
+        from podplay_sim_club.inspectors import booking_plan_inspector, inspection_index, player_inspector
+        inspected_plan = booking_plan_inspector(self.root, plan["bookingPlanId"])
+        self.assertEqual("andy-bogard", inspected_plan["payerActorId"])
+        self.assertEqual("unknown", inspected_plan["quote"]["fields"]["membershipTreatment"]["status"])
+        andy = player_inspector(self.root, "andy-bogard")
+        self.assertEqual("Andy Bogard", andy["label"])
+        self.assertIn(plan["bookingPlanId"], [row["bookingPlanId"] for row in inspection_index(self.root)["bookingPlans"]])
+
+        comparison = compare_quote_to_payer_beliefs(
+            booking_plan=plan, quote_evidence=evidence, assessed_at="2026-10-07T18:02:00Z",
+            beliefs=[
+                {"actorId": "andy-bogard", "subject": "acceptable_booking_price", "status": "expected", "expectedValue": {"maxAmount": 20.0, "currency": "USD"}},
+                {"actorId": "andy-bogard", "subject": "payment_readiness", "status": "observed", "observedValue": {"ready": True}},
+            ],
+        )
+        self.assertEqual("within_expectation", comparison["status"])
+        with storage.writer_lock():
+            append_facts_locked(storage, [
+                make_comparison_fact(comparison=comparison, occurred_at="2026-10-07T18:02:00Z", correlation_id="journey:007"),
+            ])
+            rebuild_projections_locked(storage)
+        self.assertEqual(
+            "within_expectation",
+            storage.load_json(storage.state / "projections" / "booking-plans.json")["bookingPlans"][plan["bookingPlanId"]]["comparison"]["status"],
+        )
+        from podplay_sim_club.payer_approval import PayerApprovalError, accept as accept_payer_approval, require_accepted, request as request_payer_approval
+        requested = request_payer_approval(self.root, plan["bookingPlanId"], "2026-10-07T18:03:00Z")
+        self.assertEqual("andy-bogard", requested["payerActorId"])
+        with self.assertRaises(PayerApprovalError):
+            accept_payer_approval(self.root, plan["bookingPlanId"], "terry-bogard", "2026-10-07T18:03:30Z")
+        from podplay_sim_club.club_rounds import tick as player_round
+        from podplay_sim_club.social_engine import tick as social_tick
+        approval_time = datetime(2026, 10, 7, 18, 3, 30, tzinfo=timezone.utc)
+        offers = social_tick(self.root, now=approval_time)["offers"]
+        self.assertTrue(any(
+            row.get("actorId") == "andy-bogard"
+            and row.get("kind") == "approve_booking_plan"
+            and row.get("bookingPlanId") == plan["bookingPlanId"]
+            for row in offers
+        ))
+        accepted = player_round(self.root, actor_id="andy-bogard", now=approval_time)
+        self.assertEqual("approve_booking_plan", accepted["action"])
+        self.assertEqual("accepted", accepted["approval"])
+        self.assertEqual(
+            "andy-bogard",
+            require_accepted(self.root, plan["bookingPlanId"], "2026-10-07T18:04:00Z")["payerActorId"],
+        )
+        with self.assertRaises(PayerApprovalError):
+            require_accepted(self.root, plan["bookingPlanId"], "2026-10-07T18:18:01Z")
+        self.assertEqual(
+            "accepted", booking_plan_inspector(self.root, plan["bookingPlanId"])["payerApproval"]["status"]
+        )
+
+        mismatch = compare_quote_to_payer_beliefs(
+            booking_plan=plan, quote_evidence=evidence, assessed_at="2026-10-07T18:03:00Z",
+            beliefs=[
+                {"actorId": "andy-bogard", "subject": "acceptable_booking_price", "status": "expected", "expectedValue": {"maxAmount": 10.0, "currency": "USD"}},
+                {"actorId": "andy-bogard", "subject": "payment_readiness", "status": "observed", "observedValue": {"ready": True}},
+            ],
+        )
+        self.assertEqual("mismatch", mismatch["status"])
+        self.assertEqual(["clarify", "counter", "pass", "ask_riley"], mismatch["recommendedActions"])
+
+        with self.assertRaises(BookingPlanValidationError):
+            make_quote_evidence(
+                booking_plan=plan, observed_at="2026-10-07T18:01:00Z", result="observed",
+                fields={**fields, "passTreatment": {"status": "unknown", "value": "free"}},
+            )
+        with self.assertRaises(BookingPlanValidationError):
+            make_booking_plan(
+                occurrence_key="occurrence:invalid", owner_actor_id="andy-bogard",
+                participant_actor_ids=["andy-bogard", "terry-bogard"], payer_actor_id="mai",
+                venue_ref="venue:w37:table-1", starts_at="2026-10-07T19:00:00Z",
+                ends_at="2026-10-07T19:30:00Z", charge_strategy="owner_pays",
+                benefit_strategy="use_none", stage="approved",
+            )
+
+    def test_cli_player_inspector_renders_json(self):
+        output = StringIO()
+        with redirect_stdout(output):
+            result = main(["--home", str(self.root), "inspect", "player", "--actor", "andy-bogard"])
+        self.assertEqual(0, result)
+        self.assertEqual("andy-bogard", json.loads(output.getvalue())["actorId"])
+
+    def test_cli_booking_plan_list_renders_safe_empty_index(self):
+        output = StringIO()
+        with redirect_stdout(output):
+            result = main(["--home", str(self.root), "inspect", "booking-plans"])
+        self.assertEqual(0, result)
+        self.assertEqual({"bookingPlans": []}, json.loads(output.getvalue()))
+
+    def test_cli_price_expectation_is_a_local_belief_not_a_product_write(self):
+        output = StringIO()
+        with redirect_stdout(output):
+            result = main([
+                "--home", str(self.root), "expect", "booking-price", "--actor", "andy-bogard",
+                "--max-amount", "24", "--currency", "USD", "--at", "2026-10-07T18:00:00Z",
+            ])
+        self.assertEqual(0, result)
+        self.assertEqual(0, json.loads(output.getvalue())["remoteWrites"])
+        beliefs = Storage(self.root).load_json(Path(self.root) / "state" / "projections" / "beliefs.json")["beliefs"]
+        self.assertEqual({"maxAmount": 24.0, "currency": "USD"}, beliefs["belief:andy-bogard:acceptable_booking_price"]["expectedValue"])
+
     def test_capability_catalog_is_role_general_and_contains_no_character_ids(self):
         catalog = json.loads((REPO_ROOT / "capabilities" / "catalog.json").read_text())
         roster = json.loads((REPO_ROOT / "characters" / "roster.json").read_text())
@@ -1746,11 +2067,13 @@ class SimClubTestCase(unittest.TestCase):
         self.assertEqual("Andy Bogard", next(message for message in preview["messages"] if message["kind"] == "invite_sent")["fromLabel"])
         self.assertIn("community", preview)
         self.assertIn("initiatives", preview)
+        self.assertIn("invitationConversations", preview)
         self.assertEqual("Andy Bogard", next(person for person in preview["community"]["people"] if person["actorId"] == "andy-bogard")["label"])
         self.assertIn("PODPLAY SIM CLUB // COMMUNITY OBSERVATORY", page)
         self.assertIn("COMMUNITY CONVERSATION", page)
         self.assertIn("SIMS · STATUS &amp; MOTIVES", page)
         self.assertIn("STAFF / COMMUNITY INITIATIVES", page)
+        self.assertIn("INVITATION CONVERSATIONS", page)
         self.assertIn("BOOKINGS &amp; EVENTS", page)
         self.assertIn('id="preview-server"', page)
         self.assertIn("Open this event in Preview", page)

@@ -6,14 +6,15 @@ from typing import Any, Dict, Optional
 
 from .storage import Storage
 from .time import isoformat, parse_instant
-from .team_challenges import accept_challenge, propose_captain_challenge
+from .team_challenges import accept_challenge, defer_challenge_for_capacity, propose_captain_challenge
 from .training_sessions import accept_intent as accept_training_intent, propose_pair as propose_training_pair
 from .social_engine import record_interaction_cooldown
 from .share_invitations import expire_unsent_booking_invitation
-from .share_invitations import record_share_choice
+from .share_invitations import record_share_attention, record_share_choice
 from .check_in_bridge import record_choice as record_check_in_choice
 from .session_retries import accept_retry, propose_retry
 from .result_requests import report_finished_event_result
+from .payer_approval import accept as accept_payer_approval
 
 
 def tick(root: Path, actor_id: Optional[str] = None, now: Optional[datetime] = None) -> Dict[str, Any]:
@@ -41,7 +42,7 @@ def tick(root: Path, actor_id: Optional[str] = None, now: Optional[datetime] = N
     }
     existing = {row.get("id") for row in messages if isinstance(row, dict)}
     for offer in _prioritized_player_offers(offers):
-        if offer.get("kind") not in {"invite_teammate", "challenge_rival_captain", "accept_team_challenge", "propose_team_training", "accept_team_training", "propose_session_retry", "accept_session_retry", "capture_share_invitation", "redeem_share_invitation", "check_in_training", "confirm_arcade_replay_result"}:
+        if offer.get("kind") not in {"invite_teammate", "challenge_rival_captain", "accept_team_challenge", "ask_riley_for_challenge_deferral", "approve_booking_plan", "propose_team_training", "accept_team_training", "propose_session_retry", "accept_session_retry", "capture_share_invitation", "acknowledge_share_invitation", "redeem_share_invitation", "check_in_training", "confirm_arcade_replay_result"}:
             continue
         offered_actor_id = offer.get("actorId")
         teammate_id = offer.get("teammateId")
@@ -63,12 +64,24 @@ def tick(root: Path, actor_id: Optional[str] = None, now: Optional[datetime] = N
                 root, intent_id, offered_actor_id, winner[0], now or parse_instant(None)
             )
             return {"actorId": offered_actor_id, "action": "confirm_arcade_replay_result", "detail": "confirmed the grounded Club Arcade replay result", "intentId": intent_id, "winner": result["winner"], "observedAt": result["reportedAt"], "remoteWrites": 0}
+        if offer.get("kind") == "approve_booking_plan":
+            booking_plan_id = offer.get("bookingPlanId")
+            if not isinstance(booking_plan_id, str):
+                continue
+            approval = accept_payer_approval(root, booking_plan_id, offered_actor_id, observed_at)
+            return {"actorId": offered_actor_id, "action": "approve_booking_plan", "detail": "accepted the fresh, expectation-matched booking quote as its named payer", "bookingPlanId": booking_plan_id, "observedAt": observed_at, "remoteWrites": 0, "approval": approval["status"]}
         if offer.get("kind") == "check_in_training":
             intent_id = offer.get("intentId")
             if not isinstance(intent_id, str):
                 continue
             choice = record_check_in_choice(root, intent_id=intent_id, actor_id=offered_actor_id, now=now or parse_instant(None))
             return {"actorId": offered_actor_id, "action": "check_in_training", "detail": "made a durable arrival choice; product check-in remains lead-gated", "intentId": intent_id, "observedAt": choice["observedAt"], "remoteWrites": 0}
+        if offer.get("kind") == "acknowledge_share_invitation":
+            intent_id = offer.get("intentId")
+            if not isinstance(intent_id, str):
+                continue
+            attention = record_share_attention(root, intent_id=intent_id, actor_id=offered_actor_id, now=now)
+            return {"actorId": offered_actor_id, "action": "acknowledge_share_invitation", "detail": "acknowledged the private invitation handoff; a separate recipient decision remains required", "intentId": intent_id, "observedAt": attention["observedAt"], "remoteWrites": 0}
         if offer.get("kind") in {"capture_share_invitation", "redeem_share_invitation"}:
             intent_id = offer.get("intentId")
             if not isinstance(intent_id, str):
@@ -103,6 +116,12 @@ def tick(root: Path, actor_id: Optional[str] = None, now: Optional[datetime] = N
                 continue
             intent = accept_challenge(root, intent_id, offered_actor_id, now or parse_instant(None))
             return {"actorId": offered_actor_id, "action": "accept_team_challenge", "detail": "accepted an addressed captain-to-captain challenge", "intentId": intent["id"], "observedAt": observed_at, "remoteWrites": 0}
+        if offer.get("kind") == "ask_riley_for_challenge_deferral":
+            intent_id = offer.get("intentId")
+            if not isinstance(intent_id, str):
+                continue
+            intent = defer_challenge_for_capacity(root, intent_id, offered_actor_id, now or parse_instant(None))
+            return {"actorId": offered_actor_id, "action": "ask_riley_for_challenge_deferral", "detail": "asked Riley to retain an overlapping captain challenge as a later request", "intentId": intent["id"], "observedAt": observed_at, "remoteWrites": 0}
         if offer.get("kind") == "challenge_rival_captain":
             rival = offer.get("rivalCaptainId")
             if not isinstance(rival, str):
@@ -163,5 +182,5 @@ def tick(root: Path, actor_id: Optional[str] = None, now: Optional[datetime] = N
 
 def _prioritized_player_offers(offers: Any) -> list[Dict[str, Any]]:
     rows = [row for row in offers if isinstance(row, dict)] if isinstance(offers, list) else []
-    priority = {"confirm_arcade_replay_result": 0, "check_in_training": 1, "redeem_share_invitation": 2, "capture_share_invitation": 3, "accept_session_retry": 4, "accept_team_challenge": 5, "accept_team_training": 6, "propose_session_retry": 7, "propose_team_training": 8, "challenge_rival_captain": 9, "invite_teammate": 10}
+    priority = {"confirm_arcade_replay_result": 0, "check_in_training": 1, "acknowledge_share_invitation": 2, "redeem_share_invitation": 3, "capture_share_invitation": 4, "approve_booking_plan": 5, "accept_session_retry": 6, "ask_riley_for_challenge_deferral": 7, "accept_team_challenge": 8, "accept_team_training": 9, "propose_session_retry": 10, "propose_team_training": 11, "challenge_rival_captain": 12, "invite_teammate": 13}
     return sorted(rows, key=lambda row: priority.get(row.get("kind"), 9))

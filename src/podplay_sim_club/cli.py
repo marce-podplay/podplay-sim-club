@@ -1,6 +1,7 @@
 """Repository command-line interface."""
 
 import argparse
+import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -95,7 +96,9 @@ from .arcade import ArcadeError, attach_training_replay, simulate_and_store
 from .asset_discovery import AssetDiscoveryError, discover_player_assets
 from .browser_handoff import BrowserHandoffError, serve_browser_credential_handoff
 from .team_signup import PreviewTeamMemberWriter
-from .facts import load_facts
+from .team_activation import record_verified_team_activation
+from .facts import append_fact, load_facts
+from .protocol import append_protocol_facts_locked
 from .event_lifecycle import (
     ensure_planned_locked,
     record_booked_locked,
@@ -454,6 +457,34 @@ def build_parser() -> argparse.ArgumentParser:
     state_subcommands = state.add_subparsers(dest="state_command", required=True)
     state_subcommands.add_parser("rebuild", help="replay the fact journal into deterministic projections")
     state_subcommands.add_parser("facts", help="validate and summarize the secret-free fact journal")
+    inspect = subparsers.add_parser("inspect", help="read secret-free social, belief, and booking-plan projections")
+    inspect_subcommands = inspect.add_subparsers(dest="inspect_command", required=True)
+    inspect_player = inspect_subcommands.add_parser("player", help="show one Sim's motives and self-awareness")
+    inspect_player.add_argument("--actor", required=True)
+    inspect_plan = inspect_subcommands.add_parser("booking-plan", help="show one product-neutral plan and quote explanation")
+    inspect_plan.add_argument("--id", required=True, dest="booking_plan_id")
+    inspect_subcommands.add_parser("booking-plans", help="list projected booking-plan IDs and stages")
+    assess = subparsers.add_parser("assess", help="derive a local expectation comparison without a product write")
+    assess_subcommands = assess.add_subparsers(dest="assess_command", required=True)
+    assess_plan = assess_subcommands.add_parser("booking-plan", help="compare a named payer's beliefs to an observed quote")
+    assess_plan.add_argument("--id", required=True, dest="booking_plan_id")
+    assess_plan.add_argument("--at", help="assessment timestamp; defaults to now")
+    approval = subparsers.add_parser("payer-approval", help="request or accept payer-owned approval for an expectation-matched plan")
+    approval_subcommands = approval.add_subparsers(dest="approval_command", required=True)
+    approval_request = approval_subcommands.add_parser("request", help="ask the named payer to approve one fresh quote")
+    approval_request.add_argument("--id", required=True, dest="booking_plan_id")
+    approval_request.add_argument("--at", help="request timestamp; defaults to now")
+    approval_accept = approval_subcommands.add_parser("accept", help="record the named payer's approval")
+    approval_accept.add_argument("--id", required=True, dest="booking_plan_id")
+    approval_accept.add_argument("--payer", required=True, dest="payer_actor_id")
+    approval_accept.add_argument("--at", help="acceptance timestamp; defaults to now")
+    expect = subparsers.add_parser("expect", help="record a Sim's local expectation; never a product entitlement")
+    expect_subcommands = expect.add_subparsers(dest="expect_command", required=True)
+    expect_price = expect_subcommands.add_parser("booking-price", help="record one actor's acceptable price ceiling")
+    expect_price.add_argument("--actor", required=True)
+    expect_price.add_argument("--max-amount", type=float, required=True)
+    expect_price.add_argument("--currency", required=True)
+    expect_price.add_argument("--at", help="expectation timestamp; defaults to now")
     challenge = subparsers.add_parser(
         "challenge", help="record a durable no-write team challenge from a roster scenario"
     )
@@ -513,6 +544,74 @@ def main(argv: Optional[list] = None) -> int:
             )
             return 0
         raise AssertionError(f"unhandled state command {args.state_command}")
+
+    if args.command == "inspect":
+        from .inspectors import InspectorNotFoundError, booking_plan_inspector, inspection_index, player_inspector
+        try:
+            if args.inspect_command == "player":
+                value = player_inspector(root, args.actor)
+            elif args.inspect_command == "booking-plan":
+                value = booking_plan_inspector(root, args.booking_plan_id)
+            else:
+                value = {"bookingPlans": inspection_index(root)["bookingPlans"]}
+        except InspectorNotFoundError as exc:
+            print(f"ERROR inspect: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(value, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "assess":
+        from .booking_plans import make_comparison_fact
+        from .inspectors import InspectorNotFoundError, assess_booking_plan
+        try:
+            when = args.at or datetime.now(timezone.utc).isoformat()
+            comparison = assess_booking_plan(root, args.booking_plan_id, when)
+            fact = make_comparison_fact(
+                comparison=comparison, occurred_at=when,
+                correlation_id=f"journey:{args.booking_plan_id}",
+            )
+            append_fact(root, fact)
+            rebuild_projections(root)
+        except (InspectorNotFoundError, ValueError) as exc:
+            print(f"ERROR assess: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(comparison, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "payer-approval":
+        from .payer_approval import PayerApprovalError, accept as accept_payer_approval, request as request_payer_approval
+        try:
+            when = args.at or datetime.now(timezone.utc).isoformat()
+            result = (
+                request_payer_approval(root, args.booking_plan_id, when)
+                if args.approval_command == "request"
+                else accept_payer_approval(root, args.booking_plan_id, args.payer_actor_id, when)
+            )
+        except PayerApprovalError as exc:
+            print(f"ERROR payer approval: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "expect":
+        from .self_assets import SelfAssetValidationError, make_belief_fact
+        try:
+            if args.max_amount < 0 or len(args.currency) != 3 or not args.currency.isalpha() or args.currency.upper() != args.currency:
+                raise SelfAssetValidationError("price expectation needs a non-negative amount and uppercase 3-letter currency")
+            when = args.at or datetime.now(timezone.utc).isoformat()
+            fact = make_belief_fact(
+                actor_id=args.actor, subject="acceptable_booking_price", status="expected",
+                expected_value={"maxAmount": args.max_amount, "currency": args.currency},
+                occurred_at=when, correlation_id=f"expectation:{args.actor}:booking-price",
+                source_kind="actor_expectation",
+            )
+            append_fact(root, fact)
+            rebuild_projections(root)
+        except (SelfAssetValidationError, ValueError) as exc:
+            print(f"ERROR expectation: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps({"actorId": args.actor, "subject": "acceptable_booking_price", "status": "expected", "value": {"maxAmount": args.max_amount, "currency": args.currency}, "remoteWrites": 0}, indent=2, sort_keys=True))
+        return 0
 
     if args.command == "challenge":
         try:
@@ -1134,6 +1233,8 @@ def seed_preview(root: Path, apply: bool, confirmation: Optional[str], team: Opt
                 credentials.firebase_api_key,
                 auth.id_token,
             )
+            if team:
+                record_verified_team_activation(root, team, TEAM_ACTORS[team])
         else:
             plan = build_seed_plan(root, client, identities)
             results = []
@@ -1478,9 +1579,52 @@ def plan_preview_intent(
             "virtualCredits": requested_credits,
             "evaluation": evaluation,
         }
+        # Every player-owned booking gets the canonical, product-neutral
+        # boundary record once a real availability/quote plan exists. It is
+        # still only a read-only plan; payer approval and guarded apply remain
+        # separate. Owner-created Open Play deliberately has a different
+        # authority model and does not cross this customer-payment boundary.
+        booking_plan_facts = []
+        if journey in {"customer_training", "customer_team_signup"}:
+            from .booking_plans import make_booking_plan, make_plan_fact, make_quote_evidence, make_quote_fact
+            total = evaluation.get("total")
+            currency = evaluation.get("currency")
+            errors = evaluation.get("errorCodes") if isinstance(evaluation.get("errorCodes"), list) else []
+            quote_fields = {
+                "total": {"status": "observed" if isinstance(total, (int, float)) else "unknown", "value": float(total) if isinstance(total, (int, float)) else None},
+                "currency": {"status": "observed" if isinstance(currency, str) and len(currency) == 3 and currency.isupper() else "unknown", "value": currency if isinstance(currency, str) and len(currency) == 3 and currency.isupper() else None},
+                "membershipTreatment": {"status": "unknown", "value": None},
+                "virtualCreditTreatment": {"status": "observed" if requested_credits > 0 else "not_applicable", "value": "owner_credit_requested" if requested_credits > 0 else None},
+                "passTreatment": {"status": "not_applicable", "value": None},
+                "capacityTreatment": {
+                    "status": "observed",
+                    "value": "team_guest_capacity_requested" if journey == "customer_team_signup" else "named_training_capacity_requested",
+                },
+                "cancellationTerms": {"status": "unknown", "value": None},
+                "blockingCodes": {"status": "observed", "value": errors},
+            }
+            plan = make_booking_plan(
+                occurrence_key=canonical_occurrence, owner_actor_id=booker_actor_id,
+                participant_actor_ids=intent["participants"], payer_actor_id=booker_actor_id,
+                venue_ref=f"venue:preview:{policy.pull_request_number}:{report['location']['podId']}",
+                starts_at=candidate["startTime"], ends_at=candidate["endTime"],
+                benefit_strategy="owner_only" if requested_credits > 0 else "use_none",
+                stage="quoted" if evaluation["readyForOrder"] else "blocked",
+            )
+            quote = make_quote_evidence(
+                booking_plan=plan, observed_at=report["observedAt"],
+                result="observed", fields=quote_fields,
+            )
+            intent["previewPlan"]["bookingPlanId"] = plan["bookingPlanId"]
+            booking_plan_facts = [
+                make_plan_fact(plan=plan, occurred_at=report["observedAt"], correlation_id=f"journey:{selected_id}"),
+                make_quote_fact(evidence=quote, occurred_at=report["observedAt"], correlation_id=f"journey:{selected_id}"),
+            ]
         intent["remoteWrites"] = 0
         save_intent(storage, ledger, intent)
         with storage.writer_lock():
+            if booking_plan_facts:
+                append_protocol_facts_locked(storage, booking_plan_facts)
             record_window_locked(
                 storage, occurrence_key=canonical_occurrence, intent_id=selected_id,
                 planned_window={
@@ -2100,6 +2244,16 @@ def book_preview_match(
         order_summary = state.get("order") if isinstance(state, dict) else None
         event_id = matches[0].get("id") if matches else state.get("eventId") if isinstance(state, dict) else None
         if apply and not event_id:
+            if selected_intent is not None and selected_intent.get("journey") in {"customer_training", "customer_team_signup"}:
+                from .payer_approval import PayerApprovalError, require_accepted
+                preview_plan = selected_intent.get("previewPlan") if isinstance(selected_intent.get("previewPlan"), dict) else {}
+                booking_plan_id = preview_plan.get("bookingPlanId")
+                if not isinstance(booking_plan_id, str):
+                    raise PreviewWriteError("player-owned booking apply requires a canonical booking plan")
+                try:
+                    require_accepted(root, booking_plan_id, datetime.now(timezone.utc).isoformat())
+                except PayerApprovalError as exc:
+                    raise PreviewWriteError(str(exc)) from exc
             prepared_at = datetime.now(timezone.utc).isoformat()
             write_config = replace(
                 credentials.config,
@@ -2241,6 +2395,15 @@ def signup_preview_team_challenge(root: Path, apply: bool, confirmation: Optiona
             existing_ledger = load_intent_ledger(storage)
             _, existing_intent = select_intent(existing_ledger, intent_id)
             if existing_intent.get("status") not in {"booked", "team_signup_in_progress", "team_members_registered"}:
+                from .payer_approval import PayerApprovalError, require_accepted
+                preview_plan = existing_intent.get("previewPlan") if isinstance(existing_intent.get("previewPlan"), dict) else {}
+                booking_plan_id = preview_plan.get("bookingPlanId")
+                if not isinstance(booking_plan_id, str):
+                    raise PreviewWriteError("team signup apply requires a canonical booking plan")
+                try:
+                    require_accepted(root, booking_plan_id, datetime.now(timezone.utc).isoformat())
+                except PayerApprovalError as exc:
+                    raise PreviewWriteError(str(exc)) from exc
                 if book_preview_match(root, True, confirmation, intent_id) != 0:
                     raise PreviewWriteError("team challenge booking did not become ready")
         ledger = load_intent_ledger(storage)
@@ -2426,6 +2589,10 @@ def open_preview_share_invitation(root: Path, intent_id: str, confirmation: str)
         if isinstance(record.get("maxRedeems"), int) and record["maxRedeems"] < len(recipients):
             raise PreviewWriteError("product share invitation does not have enough redeem capacity for the named recipients")
         with storage.writer_lock():
+            intent_ledger = load_intent_ledger(storage)
+            _, current_intent = select_intent(intent_ledger, intent_id)
+            current_intent["nextAction"] = "await_named_player_invitation_attention"
+            save_intent(storage, intent_ledger, current_intent, make_active=False)
             messages = storage.read_jsonl(storage.channel_path("club"))
             existing_ids = {row.get("id") for row in messages if isinstance(row, dict)}
             for recipient in recipients:
@@ -2913,8 +3080,8 @@ def check_in_training_player(
         booking = intent.get("booking")
         plan = intent.get("previewPlan")
         if (
-            intent.get("journey") != "customer_training"
-            or intent.get("status") != "booked"
+            intent.get("journey") not in {"customer_training", "customer_team_signup"}
+            or intent.get("status") not in {"booked", "team_members_registered"}
             or not isinstance(participants, list)
             or actor_id not in participants
             or not isinstance(booking, dict)
@@ -2923,7 +3090,7 @@ def check_in_training_player(
             or not isinstance(plan.get("startTime"), str)
             or not isinstance(plan.get("endTime"), str)
         ):
-            raise PreviewWriteError("training check-in requires one booked training participant")
+            raise PreviewWriteError("check-in requires one booked player-owned participant")
         start_time = datetime.fromisoformat(plan["startTime"].replace("Z", "+00:00"))
         end_time = datetime.fromisoformat(plan["endTime"].replace("Z", "+00:00"))
         eligible, window_detail = check_in_window(start_time, end_time, datetime.now(timezone.utc))

@@ -8,6 +8,7 @@
     "belief": {"path": "schemas/belief.schema.json", "canonicalStore": "state/projections/beliefs.json", "status": "active_for_local_facts"},
     "event": {"path": "schemas/event.schema.json", "canonicalStore": "state/projections/events.json", "status": "active_for_new_occurrences"},
     "participation": {"path": "schemas/participation.schema.json", "canonicalStore": "state/projections/participation.json", "status": "active_for_new_occurrences"},
-    "evidence": {"path": "schemas/evidence.schema.json", "canonicalStore": "state/evidence", "status": "active_for_sanitized_records"}
+    "evidence": {"path": "schemas/evidence.schema.json", "canonicalStore": "state/evidence", "status": "active_for_sanitized_records"},
+    "bookingPlan": {"path": "schemas/booking-plan.schema.json", "canonicalStore": "state/projections/booking-plans.json", "status": "initial_read_only_contract"}
   }
 }
