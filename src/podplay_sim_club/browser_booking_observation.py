@@ -22,6 +22,72 @@ class BrowserBookingObservationError(ValueError):
     """The supplied visible booking observation cannot reconcile an intent."""
 
 
+def recover_pair_booking(
+    root: Path, *, source_intent_id: str, owner_actor_id: str, venue_label: str,
+    start_time: str, end_time: str, group_size: int,
+    observed_at: datetime | None = None,
+) -> Mapping[str, Any]:
+    """Create a fresh ledger record for a browser booking made after an old pact.
+
+    This is deliberately a recovery record, not a retroactive agreement or
+    invitation.  It copies only the already named pair from its source pact;
+    the new member still has to receive and visibly accept a fresh invitation.
+    """
+    start = parse_instant(start_time)
+    end = parse_instant(end_time)
+    if end <= start or not venue_label or len(venue_label) > 120 or group_size < 1 or group_size > 20:
+        raise BrowserBookingObservationError("visible booking details are invalid")
+    when = isoformat(observed_at or parse_instant(None))
+    storage = Storage(root)
+    with storage.writer_lock():
+        ledger = load_intent_ledger(storage)
+        source = ledger["intents"].get(source_intent_id)
+        if not isinstance(source, dict) or source.get("journey") != "customer_training":
+            raise BrowserBookingObservationError("source training agreement is unavailable")
+        participants = source.get("participants")
+        if (source.get("bookerActorId") != owner_actor_id or not isinstance(participants, list)
+                or len(participants) != 2 or owner_actor_id not in participants or group_size < len(participants)):
+            raise BrowserBookingObservationError("source agreement does not match the visible pair booking")
+        recovery_id = f"intent:browser-recovery:{owner_actor_id}:{start.strftime('%Y%m%dT%H%M%SZ')}"
+        existing = ledger["intents"].get(recovery_id)
+        if isinstance(existing, dict):
+            return {"intentId": recovery_id, "ownerActorId": owner_actor_id, "status": existing.get("status"), "remoteWrites": 0}
+        occurrence = f"browser-observed:{recovery_id}"
+        intent = {
+            "schemaVersion": 1, "id": recovery_id, "status": "booked_browser_observed",
+            "journey": "customer_training", "reason": "browser_confirmed_pair_booking_recovery",
+            "createdAt": when, "bookerActorId": owner_actor_id, "participants": list(participants),
+            "recoveredFromIntentId": source_intent_id,
+            "booking": {"status": "observed_booked", "occurrenceKey": occurrence, "venueLabel": venue_label,
+                        "startTime": isoformat(start), "endTime": isoformat(end), "groupSize": group_size,
+                        "ownerConfirmed": True, "source": "visible_browser", "observedAt": when},
+            "previewPlan": {"occurrenceKey": occurrence, "venueLabel": venue_label, "startTime": isoformat(start),
+                            "endTime": isoformat(end), "durationMinutes": int((end - start).total_seconds() // 60),
+                            "groupSize": group_size, "source": "visible_browser"},
+            "browserBookingObservation": {"status": "confirmed", "observedAt": when,
+                "doesNotMean": ["participant_invitation", "participant_acceptance", "check_in", "attendance", "play", "result"]},
+            "nextAction": "owner_may_capture_and_deliver_player_invitation", "remoteWrites": 0,
+        }
+        save_intent(storage, ledger, intent, make_active=False)
+        append_fact_locked(storage, make_fact(
+            fact_type="event.booked", natural_key=f"{recovery_id}\0{intent['booking']['startTime']}\0visible-browser",
+            subject_ref=occurrence, correlation_id=f"journey:{recovery_id}", source_kind="visible_browser",
+            actor_id=owner_actor_id, occurred_at=when, evidence_ref=f"browser-observation:{recovery_id}:booking-confirmed",
+            payload={"kind": "customer_training", "socialIntentRef": recovery_id, "recoveredFromIntentRef": source_intent_id,
+                "plannedWindow": {"startTime": intent["booking"]["startTime"], "endTime": intent["booking"]["endTime"]},
+                "venueLabel": venue_label, "groupSize": group_size, "bookingState": "owner_confirmed_visible_browser",
+                "doesNotMean": ["participant_invitation", "participant_acceptance", "check_in", "attendance", "play", "result"]},
+        ))
+        storage.append_jsonl(storage.actor_journal_path(owner_actor_id), {"id": f"{recovery_id}:visible-booking-confirmed",
+            "actorId": owner_actor_id, "intentId": recovery_id, "step": "visible_booking_confirmed", "observedAt": when,
+            "detail": "I saw a new training booking confirmed in the player browser. The teammate still needs a current invitation and separate visible acceptance."})
+        storage.append_jsonl(storage.channel_path("club"), {"id": f"{recovery_id}:booking-observed", "channel": "club",
+            "kind": "browser_booking_observed", "speechAct": "inform", "from": owner_actor_id,
+            "to": [actor for actor in participants if actor != owner_actor_id], "intentId": recovery_id, "observedAt": when,
+            "remoteWrites": 0, "text": "I saw our pair training booking confirmed in the player browser. I will prepare a current invitation; no recipient decision is claimed yet."})
+    return {"intentId": recovery_id, "ownerActorId": owner_actor_id, "status": "booked_browser_observed", "remoteWrites": 0}
+
+
 def reconcile(
     root: Path, *, intent_id: str, owner_actor_id: str, venue_label: str,
     start_time: str, end_time: str, group_size: int,

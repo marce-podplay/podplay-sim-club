@@ -343,6 +343,16 @@ def build_parser() -> argparse.ArgumentParser:
     browser_journey_reconcile.add_argument("--end", required=True, dest="end_time")
     browser_journey_reconcile.add_argument("--group-size", required=True, type=int, dest="group_size")
     browser_journey_reconcile.add_argument("--at", help="observation time; defaults to now")
+    browser_journey_recover = browser_journey_subcommands.add_parser(
+        "recover-pair-booking", help="record a new browser-confirmed pair booking after a prior social agreement"
+    )
+    browser_journey_recover.add_argument("--source-intent", required=True, dest="source_intent_id")
+    browser_journey_recover.add_argument("--owner", required=True, dest="owner_actor_id")
+    browser_journey_recover.add_argument("--venue", required=True, dest="venue_label")
+    browser_journey_recover.add_argument("--start", required=True, dest="start_time")
+    browser_journey_recover.add_argument("--end", required=True, dest="end_time")
+    browser_journey_recover.add_argument("--group-size", required=True, type=int, dest="group_size")
+    browser_journey_recover.add_argument("--at", help="observation time; defaults to now")
     browser_journey_accept = browser_journey_subcommands.add_parser(
         "reconcile-invitation", help="reconcile a visibly confirmed player invitation acceptance into the local ledger"
     )
@@ -993,6 +1003,7 @@ def main(argv: Optional[list] = None) -> int:
         from .browser_booking_observation import (
             BrowserBookingObservationError,
             reconcile as reconcile_browser_booking,
+            recover_pair_booking,
             reconcile_invitation_acceptance,
             reconcile_staff_check_in,
         )
@@ -1009,6 +1020,13 @@ def main(argv: Optional[list] = None) -> int:
             elif args.browser_journey_command == "reconcile-booking":
                 result = reconcile_browser_booking(
                     root, intent_id=args.intent_id, owner_actor_id=args.owner_actor_id,
+                    venue_label=args.venue_label, start_time=args.start_time, end_time=args.end_time,
+                    group_size=args.group_size, observed_at=parse_instant(when),
+                )
+                rebuild_projections(root)
+            elif args.browser_journey_command == "recover-pair-booking":
+                result = recover_pair_booking(
+                    root, source_intent_id=args.source_intent_id, owner_actor_id=args.owner_actor_id,
                     venue_label=args.venue_label, start_time=args.start_time, end_time=args.end_time,
                     group_size=args.group_size, observed_at=parse_instant(when),
                 )
