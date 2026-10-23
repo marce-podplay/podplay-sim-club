@@ -87,7 +87,7 @@ def record_share_attention(
         participants = intent.get("participants") if isinstance(intent.get("participants"), list) else []
         if actor_id == owner or actor_id not in participants:
             raise ShareInvitationError("only a named non-owner participant may acknowledge a share invitation")
-        if intent.get("status") not in {"booked", "team_signup_in_progress", "team_members_registered"}:
+        if intent.get("status") not in {"booked", "booked_browser_observed", "team_signup_in_progress", "team_members_registered"}:
             raise ShareInvitationError("share invitation is not currently actionable")
         attention = intent.get("shareInvitationAttention") if isinstance(intent.get("shareInvitationAttention"), dict) else {}
         prior = attention.get(actor_id) if isinstance(attention.get(actor_id), dict) else {}
@@ -133,10 +133,16 @@ def next_share_invitation_task(root, *, now: Optional[datetime] = None) -> Mappi
     retained = sidecar.get("invitations", {}) if isinstance(sidecar, dict) else {}
     if not isinstance(retained, dict):
         retained = {}
+    private_owners = storage.load_json(storage.state / "secure-channel" / "owner-invitations.json", default={})
+    private_mailboxes = storage.load_json(storage.state / "secure-channel" / "recipient-mailboxes.json", default={})
+    if not isinstance(private_owners, dict):
+        private_owners = {}
+    if not isinstance(private_mailboxes, dict):
+        private_mailboxes = {}
     for intent_id, intent in ledger["intents"].items():
         if not isinstance(intent, dict) or intent.get("journey") not in {"customer_training", "customer_team_signup"}:
             continue
-        if intent.get("status") not in {"booked", "team_signup_in_progress", "team_members_registered"}:
+        if intent.get("status") not in {"booked", "booked_browser_observed", "team_signup_in_progress", "team_members_registered"}:
             continue
         booking = intent.get("booking") if isinstance(intent.get("booking"), dict) else {}
         plan = intent.get("previewPlan") if isinstance(intent.get("previewPlan"), dict) else {}
@@ -149,7 +155,7 @@ def next_share_invitation_task(root, *, now: Optional[datetime] = None) -> Mappi
         owner = intent.get("bookerActorId")
         choice = intent.get("shareInvitationChoice") if isinstance(intent.get("shareInvitationChoice"), dict) else {}
         if (
-            isinstance(owner, str) and occurrence not in retained
+            isinstance(owner, str) and occurrence not in retained and not isinstance(private_owners.get(intent_id), dict)
             and choice.get("actorId") == owner and choice.get("status") == "accepted"
         ):
             return {"action": "capture_share_invitation", "intentId": intent_id, "ownerActorId": owner}
@@ -168,6 +174,17 @@ def next_share_invitation_task(root, *, now: Optional[datetime] = None) -> Mappi
                     and isinstance(decision, dict) and decision.get("status") == "accepted"
                 ):
                     return {"action": "redeem_share_invitation", "intentId": intent_id, "recipientActorId": actor_id}
+        for actor_id in participants:
+            mailbox = private_mailboxes.get(f"{actor_id}:{intent_id}") if isinstance(actor_id, str) else None
+            decision = choices.get(actor_id) if isinstance(actor_id, str) else None
+            if (
+                isinstance(actor_id, str) and actor_id != owner and actor_id not in accepted_rows
+                and isinstance(mailbox, dict) and mailbox.get("status") == "delivered"
+                and mailbox.get("intentId") == intent_id and mailbox.get("recipientActorId") == actor_id
+                and mailbox.get("ownerActorId") == owner
+                and isinstance(decision, dict) and decision.get("status") == "accepted"
+            ):
+                return {"action": "redeem_share_invitation", "intentId": intent_id, "recipientActorId": actor_id}
     return {"action": "pass", "detail": "no current player-authorized share invitation task"}
 
 

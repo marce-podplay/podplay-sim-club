@@ -1,0 +1,268 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Allowlisted visible controls for sequential Club Lab Sim browser sessions.",
+  "features": {
+    "login.email": {
+      "kind": "secure_browser_handoff_fill",
+      "selector": "#loginEmail",
+      "role": "textbox",
+      "name": "Email",
+      "field": "email",
+      "evidence": "email control visibly contains a value; never capture that value"
+    },
+    "login.continue": {
+      "kind": "visible_click",
+      "selector": "form button",
+      "role": "button",
+      "name": "Continue",
+      "evidence": "the visible Continue control was activated"
+    },
+    "login.password": {
+      "kind": "secure_browser_handoff_fill",
+      "selector": "#loginPassword",
+      "role": "textbox",
+      "name": "Password",
+      "field": "password",
+      "evidence": "password control visibly contains a value; never capture that value"
+    },
+    "login.sign_in": {
+      "kind": "visible_click",
+      "selector": "[data-cy=multi-step-login-form-btn-sign-in] button",
+      "role": "button",
+      "name": "Sign in",
+      "evidence": "the visible Sign in control was activated"
+    },
+    "admin.pod.opening_hours": {
+      "kind": "visible_click",
+      "role": "tab",
+      "name": "clock-circle Opening Hours",
+      "evidence": "the visible staff Opening Hours tab was activated"
+    },
+    "admin.pod.thursday.close_2300": {
+      "kind": "visible_text_replace",
+      "coordinates": {"x": 622, "y": 338},
+      "value": "11:00 PM",
+      "evidence": "the visible Thursday closing time was changed to 11:00 PM"
+    },
+    "admin.pod.save_changes": {
+      "kind": "visible_click",
+      "role": "button",
+      "name": "Save Changes",
+      "evidence": "the visible staff Save Changes control was activated"
+    },
+    "admin.pod.discard_changes": {
+      "kind": "visible_click",
+      "role": "button",
+      "name": "Discard Changes",
+      "evidence": "the visible staff draft was discarded"
+    },
+    "navigation.booking": {
+      "kind": "visible_click",
+      "role": "link",
+      "name": "Booking",
+      "evidence": "the visible Booking navigation control was activated"
+    },
+    "navigation.more": {
+      "kind": "visible_click",
+      "role": "link",
+      "name": "More",
+      "evidence": "the visible More navigation control was activated"
+    },
+    "navigation.reservations": {
+      "kind": "visible_click",
+      "role": "link",
+      "name": "Reservations",
+      "evidence": "the visible Reservations navigation control was activated"
+    },
+    "reservation.manage_booking": {
+      "kind": "visible_click",
+      "role": "link",
+      "name": "Manage booking",
+      "evidence": "the visible reservation-management control was opened"
+    },
+    "reservation.open_external_link": {
+      "kind": "visible_click",
+      "role": "button",
+      "name": "Open external link",
+      "evidence": "the visible reservation external-management control was activated"
+    },
+    "reservation.upcoming": {
+      "kind": "visible_click",
+      "role": "link",
+      "name": "Upcoming",
+      "evidence": "the visible Upcoming reservation list was opened"
+    },
+    "reservation.check_in": {
+      "kind": "visible_click",
+      "role": "button",
+      "name": "Check in",
+      "evidence": "the visible reservation check-in control was activated"
+    },
+    "home.book_a_pod": {
+      "kind": "visible_click",
+      "role": "link",
+      "name": "Book a Pod",
+      "evidence": "the visible homepage Book a Pod control was activated"
+    },
+    "home.lets_play": {
+      "kind": "visible_click",
+      "role": "link",
+      "name": "LET’S PLAY!",
+      "evidence": "the visible homepage LET’S PLAY call-to-action was activated"
+    },
+    "onboarding.region.new_york_new_jersey": {
+      "kind": "visible_click",
+      "role": "radio",
+      "name": "New York / New Jersey 12 locations",
+      "key": "Space",
+      "evidence": "the visible New York / New Jersey region option was selected"
+    },
+    "onboarding.region.confirm": {
+      "kind": "visible_click",
+      "role": "button",
+      "name": "Confirm",
+      "evidence": "the visible region-confirmation control was activated"
+    },
+    "booking.area.west_37th_manhattan": {
+      "kind": "visible_click",
+      "role": "button",
+      "name": "Select West 37th Manhattan area",
+      "evidence": "the visible West 37th Manhattan area control was activated"
+    },
+    "booking.experience.open_pod": {
+      "kind": "visible_click",
+      "role": "link",
+      "name": "Open Pod",
+      "evidence": "the visible Open Pod experience was selected"
+    },
+    "booking.availability.try_again": {
+      "kind": "visible_click",
+      "role": "button",
+      "name": "Try again",
+      "evidence": "the visible availability retry control was activated"
+    },
+    "booking.slot.continue": {
+      "kind": "visible_click",
+      "selector": "[data-cy=booking-cta-checkout-button]",
+      "role": "button",
+      "name": "Continue",
+      "evidence": "the visible selected-slot Continue control was activated"
+    },
+    "booking.slot.tonight_2200": {
+      "kind": "visible_click",
+      "role": "button",
+      "name": "10:00pm 4 open Pods",
+      "evidence": "the visible 10:00 pm Open Pod slot was selected"
+    },
+    "booking.slot.today_1000": {
+      "kind": "visible_click",
+      "role": "button",
+      "name": "10:00am 4 open Pods",
+      "evidence": "the visible 10:00 am Open Pod slot was selected"
+    },
+    "booking.slot.today_1400": {
+      "kind": "visible_click",
+      "role": "button",
+      "name": "2:00pm 4 open Pods",
+      "evidence": "the visible 2:00 pm Open Pod slot was selected"
+    },
+    "booking.slot.today_1500": {
+      "kind": "visible_click",
+      "role": "button",
+      "name": "3:00pm 4 open Pods",
+      "evidence": "the visible 3:00 pm Open Pod slot was selected"
+    },
+    "booking.group.fewer_players": {
+      "kind": "visible_click",
+      "role": "button",
+      "name": "Fewer Players",
+      "evidence": "the visible group-size decrease control was activated"
+    },
+    "booking.payment.submit": {
+      "kind": "visible_click",
+      "role": "button",
+      "name": "Submit Payment",
+      "evidence": "the visible reviewed booking payment was submitted"
+    },
+    "booking.payment.add_card": {
+      "kind": "visible_click",
+      "role": "button",
+      "name": "Add card",
+      "evidence": "the visible payment-method entry flow was opened"
+    },
+    "booking.payment.card_number": {
+      "kind": "visible_text_replace",
+      "coordinates": {"x": 485, "y": 330},
+      "value": "4242424242424242",
+      "evidence": "the visible Preview test card number field was completed"
+    },
+    "booking.payment.card_expiration": {
+      "kind": "visible_text_replace",
+      "coordinates": {"x": 480, "y": 408},
+      "value": "1230",
+      "evidence": "the visible Preview test card expiration field was completed"
+    },
+    "booking.payment.card_security_code": {
+      "kind": "visible_text_replace",
+      "coordinates": {"x": 690, "y": 408},
+      "value": "123",
+      "evidence": "the visible Preview test card security-code field was completed"
+    },
+    "booking.payment.confirm_card": {
+      "kind": "visible_click",
+      "role": "button",
+      "name": "Confirm",
+      "evidence": "the visible Preview payment-method confirmation was activated"
+    },
+    "booking.pod.choose": {
+      "kind": "visible_click",
+      "role": "button",
+      "name": "Pod Select your Pod",
+      "evidence": "the visible pod-selection control was activated"
+    },
+    "booking.pod.auto_assign": {
+      "kind": "visible_click",
+      "role": "radio",
+      "name": "Auto-assign FREE",
+      "key": "Space",
+      "evidence": "the visible free auto-assigned pod option was selected"
+    },
+    "booking.pod.confirm": {
+      "kind": "visible_click",
+      "role": "button",
+      "name": "Select",
+      "evidence": "the visible pod-selection confirmation was activated"
+    },
+    "booking.invite_players": {
+      "kind": "visible_click",
+      "role": "button",
+      "name": "Invite Players",
+      "evidence": "the visible player-invitation flow was opened"
+    },
+    "booking.invitation.guest_pays": {
+      "kind": "visible_click",
+      "role": "radio",
+      "name": "They pay for their spot Each person who accepts pays their own share. up to $10.00",
+      "key": "Space",
+      "evidence": "the visible self-pay invitation option was selected"
+    },
+    "booking.invitation.send_link": {
+      "kind": "visible_click",
+      "role": "button",
+      "name": "Send invite link ➤",
+      "evidence": "the visible self-pay invitation link was generated"
+    },
+    "booking.invitation.share": {
+      "kind": "visible_click",
+      "role": "button",
+      "name": "Share invite",
+      "evidence": "the visible product share-invite control was activated"
+    },
+    "booking.invitation.accept": {
+      "kind": "visible_click",
+      "role": "button",
+      "name": "Accept invite",
+      "evidence": "the visible player invitation acceptance was activated"
+    }
+  }
+}

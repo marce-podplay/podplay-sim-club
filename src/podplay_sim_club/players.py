@@ -26,10 +26,19 @@ def rewrite_legacy_ids(value: str) -> str:
     return value
 
 
-def actor_auth_cache(root: Path, actor_id: str) -> Path:
-    """Prefer the named-player cache, and still open a retired filename."""
+def actor_auth_cache(root: Path, actor_id: str, context_key: str = "club-lab") -> Path:
+    """Return a private Firebase token cache for one Club Lab context.
+
+    Firebase credentials are global to the fictional person, but a token cache
+    is operational state.  Future Club Labs must not race by writing the same
+    file.  The original Club Lab keeps its legacy path for compatibility.
+    """
     actor_id = canonical_actor_id(actor_id)
     directory = root / "secrets" / "actor-auth"
+    if context_key != "club-lab":
+        if not context_key or not context_key.replace("-", "").isalnum():
+            raise ValueError("club context key is invalid")
+        return directory / context_key / f"{actor_id}.json"
     current = directory / f"{actor_id}.json"
     if current.is_file():
         return current

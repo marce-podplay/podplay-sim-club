@@ -87,6 +87,7 @@ class IdentityRegistry:
                     "password": _password(),
                     "firebaseUid": "",
                     "podplayUserId": "",
+                    "verifiedContexts": {},
                 }
                 changed = True
         if changed or not self.path.is_file():
@@ -113,6 +114,7 @@ class IdentityRegistry:
         podplay_user_id: str,
         preview_origin: str,
         tenant_id: str,
+        context_key: str = "club-lab",
     ) -> None:
         actor_id = canonical_actor_id(actor_id)
         data = self._read()
@@ -122,16 +124,64 @@ class IdentityRegistry:
         actor = actors.get(actor_id)
         if not isinstance(actor, dict):
             raise IdentityRegistryError(f"actor is missing from registry: {actor_id}")
-        actor.update(
-            {
-                "firebaseUid": firebase_uid,
-                "podplayUserId": podplay_user_id,
-                "lastVerifiedAt": datetime.now(timezone.utc).isoformat(),
-                "lastPreviewOrigin": preview_origin,
-                "lastTenantId": tenant_id,
-            }
-        )
+        if not _context_key(context_key):
+            raise IdentityRegistryError("club context key is invalid")
+        verified_at = datetime.now(timezone.utc).isoformat()
+        contexts = actor.setdefault("verifiedContexts", {})
+        if not isinstance(contexts, dict):
+            raise IdentityRegistryError("actor verified contexts are invalid")
+        # This private mapping is deliberately context-scoped.  One Firebase
+        # person may have a different app-side user record after each Preview
+        # database copy; never reuse a prior context's product identifier.
+        contexts[context_key] = {
+            "firebaseUid": firebase_uid,
+            "podplayUserId": podplay_user_id,
+            "verifiedAt": verified_at,
+            "previewOrigin": preview_origin,
+            "tenantId": tenant_id,
+        }
+        # Retain the legacy current-context fields so existing one-context
+        # commands remain compatible.  New multi-context code must use
+        # identities_for_context() below.
+        actor.update({
+            "firebaseUid": firebase_uid,
+            "podplayUserId": podplay_user_id,
+            "lastVerifiedAt": verified_at,
+            "lastPreviewOrigin": preview_origin,
+            "lastTenantId": tenant_id,
+        })
         self._write(data)
+
+    def identities_for_context(self, context_key: str) -> Dict[str, ActorIdentity]:
+        """Return identities whose product IDs are verified for one Club Lab.
+
+        Email/password/Firebase identity stays global; the selected PodPlay
+        user identifier comes only from that local club context.  Missing
+        verification intentionally produces an empty product ID rather than
+        borrowing one from another Preview database.
+        """
+        if not _context_key(context_key):
+            raise IdentityRegistryError("club context key is invalid")
+        data = self._read()
+        result = {}
+        for actor_id, actor in data.get("actors", {}).items():
+            if not isinstance(actor, dict):
+                raise IdentityRegistryError("preview actor registry has an invalid actor")
+            contexts = actor.get("verifiedContexts", {})
+            context = contexts.get(context_key, {}) if isinstance(contexts, dict) else {}
+            if not isinstance(context, dict):
+                raise IdentityRegistryError("actor verification context is invalid")
+            identity = self._identity(actor_id, actor)
+            result[actor_id] = ActorIdentity(
+                actor_id=identity.actor_id,
+                email=identity.email,
+                first_name=identity.first_name,
+                last_name=identity.last_name,
+                password=identity.password,
+                firebase_uid=str(context.get("firebaseUid") or identity.firebase_uid),
+                podplay_user_id=str(context.get("podplayUserId") or ""),
+            )
+        return result
 
     def _read(self) -> Dict[str, Any]:
         if not self.path.is_file():
@@ -153,10 +203,14 @@ class IdentityRegistry:
         for actor_id, actor in data.get("actors", {}).items():
             if not isinstance(actor, dict):
                 raise IdentityRegistryError("preview actor registry has an invalid actor")
-            required = ("email", "firstName", "lastName", "password")
-            if any(not isinstance(actor.get(key), str) or not actor[key] for key in required):
-                raise IdentityRegistryError(f"preview actor registry is incomplete: {actor_id}")
-            result[actor_id] = ActorIdentity(
+            result[actor_id] = self._identity(actor_id, actor)
+        return result
+
+    def _identity(self, actor_id: str, actor: Dict[str, Any]) -> ActorIdentity:
+        required = ("email", "firstName", "lastName", "password")
+        if any(not isinstance(actor.get(key), str) or not actor[key] for key in required):
+            raise IdentityRegistryError(f"preview actor registry is incomplete: {actor_id}")
+        return ActorIdentity(
                 actor_id=actor_id,
                 email=actor["email"],
                 first_name=actor["firstName"],
@@ -165,7 +219,6 @@ class IdentityRegistry:
                 firebase_uid=str(actor.get("firebaseUid") or ""),
                 podplay_user_id=str(actor.get("podplayUserId") or ""),
             )
-        return result
 
     def _write(self, data: Dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -192,3 +245,7 @@ class IdentityRegistry:
 def _password() -> str:
     alphabet = string.ascii_letters + string.digits + "-_"
     return "S7" + "".join(secrets.choice(alphabet) for _ in range(30))
+
+
+def _context_key(value: str) -> bool:
+    return isinstance(value, str) and bool(value) and value.replace("-", "").isalnum()

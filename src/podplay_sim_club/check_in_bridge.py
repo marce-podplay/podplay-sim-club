@@ -14,7 +14,7 @@ from .time import isoformat, parse_instant
 # Check-in authority belongs to that shared contract, not to the social reason
 # (practice versus a team challenge) which originally created the booking.
 PLAYER_OWNED_CHECK_IN_JOURNEYS = {"customer_training", "customer_team_signup"}
-CHECK_IN_ELIGIBLE_BOOKING_STATUSES = {"booked", "team_members_registered"}
+CHECK_IN_ELIGIBLE_BOOKING_STATUSES = {"booked", "booked_browser_observed", "team_members_registered"}
 
 
 def record_choice(root: Path, *, intent_id: str, actor_id: str, now: datetime) -> Dict[str, Any]:

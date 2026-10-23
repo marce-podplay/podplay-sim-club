@@ -55,12 +55,13 @@ class _HandoffState:
 
 def serve_browser_credential_handoff(
     root: Path,
-    actor_id: str,
+    actor_id: Optional[str] = None,
     *,
+    use_admin: bool = False,
     port: int = 0,
     lifetime_seconds: int = 120,
 ) -> int:
-    """Expose one actor's email/password to the exact Preview origin briefly.
+    """Expose one approved browser identity to the exact Preview origin briefly.
 
     Returns the selected loopback port after serving either both fields or the
     bounded lifetime.  It prints only actor id, origin, port, and completion
@@ -68,17 +69,26 @@ def serve_browser_credential_handoff(
     """
     if lifetime_seconds <= 0:
         raise BrowserHandoffError("handoff lifetime must be positive")
-    actor_id = canonical_actor_id(actor_id)
-    identities = IdentityRegistry(root / "secrets" / "preview-actors.json").stored()
-    identity = identities.get(actor_id)
-    if identity is None:
-        raise IdentityRegistryError(f"actor is missing from the private registry: {actor_id}")
+    if use_admin and actor_id is not None:
+        raise BrowserHandoffError("choose either an actor or the approved administrator")
+    if not use_admin and not actor_id:
+        raise BrowserHandoffError("an actor or the approved administrator is required")
     credentials = PreviewCredentials.load(root)
     policy = TargetPolicy.from_config(credentials.config)
+    if use_admin:
+        handoff_actor_id = "podplay-admin"
+        email, password = credentials.admin_email, credentials.admin_password
+    else:
+        handoff_actor_id = canonical_actor_id(str(actor_id))
+        identities = IdentityRegistry(root / "secrets" / "preview-actors.json").stored()
+        identity = identities.get(handoff_actor_id)
+        if identity is None:
+            raise IdentityRegistryError(f"actor is missing from the private registry: {handoff_actor_id}")
+        email, password = identity.email, identity.password
     state = _HandoffState(
-        actor_id=actor_id,
-        email=identity.email,
-        password=identity.password,
+        actor_id=handoff_actor_id,
+        email=email,
+        password=password,
         allowed_origin=policy.target_origin,
     )
 
@@ -134,8 +144,8 @@ def serve_browser_credential_handoff(
         raise BrowserHandoffError("could not bind the loopback handoff server") from exc
     server.timeout = 0.25
     selected_port = int(server.server_address[1])
-    print("PREVIEW PLAYER BROWSER HANDOFF // LOCAL ONLY", flush=True)
-    print(f"actor: {actor_id}", flush=True)
+    print("PREVIEW BROWSER HANDOFF // LOCAL ONLY", flush=True)
+    print(f"actor: {handoff_actor_id}", flush=True)
     print(f"origin: {state.allowed_origin}", flush=True)
     print(f"port: {selected_port}", flush=True)
     print(f"expiresInSeconds: {lifetime_seconds}", flush=True)
