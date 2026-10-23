@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
 from .facts import reject_private_data
+from .protocol import append_protocol_facts_locked, conversation_id_for, make_message, reply_causation
 from .preview_readonly import PreviewReadError, collection_items
 from .preview_seed import SIGNUP_SETTINGS, load_preview_seed
 from .storage import Storage
@@ -129,6 +130,69 @@ def acknowledge_verification(
         return deepcopy(probe)
 
 
+def run_response_tick(root: Path, *, probe_id: str, turns: int = 1) -> Dict[str, Any]:
+    """Run a tiny local dialogue queue for one bounded verification request.
+
+    This is not an operator override: each turn acts as the *named* verifier
+    and applies only the roster's standing read-only-research policy.  A probe
+    with a write, entitlement, attendance, or unbounded request never receives
+    an automatic acceptance; it remains for an explicit human-directed choice.
+    """
+    if not 1 <= turns <= 10:
+        raise ProductResearchError("research response turns must be between 1 and 10")
+    actions = []
+    for _ in range(turns):
+        storage = Storage(root)
+        with storage.writer_lock():
+            state = _load(storage)
+            probe = deepcopy(_probe(state, probe_id))
+            if probe["status"] != "awaiting_acknowledgement":
+                break
+            delivery_id = f"research:{probe_id}:requested"
+            delivered = any(row.get("id") == delivery_id for row in storage.read_jsonl(storage.channel_path("club")))
+            now = isoformat(_utc(datetime.now(timezone.utc)))
+            if not delivered:
+                _append_club_message_locked(storage, {
+                    "id": delivery_id, "channel": "club", "kind": "feature_verification_requested",
+                    "from": probe["requestedBy"], "to": [row["actorId"] for row in probe["verifiers"]],
+                    "text": f"{probe['requestedBy']} requests a bounded, read-only team-signup configuration verification. Accept or pass for yourself; this is not a booking or feature claim.",
+                    "probeId": probe_id, "observedAt": now, "remoteWrites": 0,
+                })
+                append_protocol_facts_locked(storage, [make_message(
+                    message_id=delivery_id, conversation_id=conversation_id_for(probe_id), correlation_id=probe_id,
+                    sender_actor_id=probe["requestedBy"], recipient_actor_ids=[row["actorId"] for row in probe["verifiers"]],
+                    speech_act="request", content_code="feature_verification_request", occurred_at=now,
+                    parameters={"featureId": probe["featureId"], "scope": "read_only_configuration"},
+                )])
+                actions.append({"action": "delivered_request", "remoteWrites": 0})
+                continue
+            verifier = next((row["actorId"] for row in probe["verifiers"] if row["decision"] is None), None)
+            if verifier is None:
+                break
+            decision = _standing_response(probe)
+        # The decision is made by the named verifier, outside the preceding
+        # read lock; acknowledge_verification revalidates identity and state.
+        updated = acknowledge_verification(root, probe_id=probe_id, actor_id=verifier, decision=decision)
+        observed_at = next(row["decidedAt"] for row in updated["verifiers"] if row["actorId"] == verifier)
+        message_id = f"research:{probe_id}:{verifier}:response"
+        with storage.writer_lock():
+            _append_club_message_locked(storage, {
+                "id": message_id, "channel": "club", "kind": "feature_verification_response",
+                "from": verifier, "to": [updated["requestedBy"]], "probeId": probe_id,
+                "text": f"{verifier} {decision}s this bounded verification request. This is not product enrolment, attendance, or feature acceptance.",
+                "observedAt": observed_at, "remoteWrites": 0,
+            })
+            append_protocol_facts_locked(storage, [make_message(
+                message_id=message_id, conversation_id=conversation_id_for(probe_id), correlation_id=probe_id,
+                sender_actor_id=verifier, recipient_actor_ids=[updated["requestedBy"]], speech_act="acknowledge",
+                content_code="feature_verification_response", occurred_at=observed_at,
+                in_reply_to=delivery_id, causation_id=reply_causation(delivery_id),
+                parameters={"featureId": updated["featureId"], "decision": decision, "meaning": "verification_scope_only"},
+            )])
+        actions.append({"action": "verifier_response", "actorId": verifier, "decision": decision, "remoteWrites": 0})
+    return {"probe": research_probe(root, probe_id), "turns": actions, "remoteWrites": 0}
+
+
 def discover_team_signup_context_with_client(
     root: Path, *, probe_id: str, client: Any, target_fingerprint: str, observed_at: datetime
 ) -> Dict[str, Any]:
@@ -189,6 +253,28 @@ def issue_candidate(root: Path, *, probe_id: str, reason: str) -> Dict[str, Any]
 def research_snapshot(root: Path) -> Dict[str, Any]:
     state = _load(Storage(root))
     return {"contracts": [feature_contract(FEATURE_TEAM_SIGNUP)], "probes": list(state["probes"].values())}
+
+
+def research_probe(root: Path, probe_id: str) -> Dict[str, Any]:
+    return deepcopy(_probe(_load(Storage(root)), probe_id))
+
+
+def _standing_response(probe: Dict[str, Any]) -> str:
+    """The characters' narrow standing policy; anything broader must be explicit."""
+    contract = feature_contract(probe["featureId"])
+    bounded = (
+        contract["probe"]["writes"] == 0
+        and contract["discoveryBoundary"]["remoteMethods"] == ["GET"]
+        and "team-signup entitlement" in contract["discoveryBoundary"]["notExposed"]
+        and "attendance" in contract["discoveryBoundary"]["notExposed"]
+    )
+    return "accept" if bounded else "pass"
+
+
+def _append_club_message_locked(storage: Storage, row: Dict[str, Any]) -> None:
+    path = storage.channel_path("club")
+    if not any(existing.get("id") == row["id"] for existing in storage.read_jsonl(path)):
+        storage.append_jsonl(path, row)
 
 
 def _configuration_observation(root: Path, client: Any) -> Dict[str, Any]:
