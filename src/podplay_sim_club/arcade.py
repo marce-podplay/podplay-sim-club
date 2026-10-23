@@ -216,6 +216,54 @@ def attach_completed_training_replay(
     }
 
 
+def attach_ended_active_session_replay(
+    root, *, now: datetime | None = None, season_id: str = "season-001"
+) -> Dict[str, Any]:
+    """Attach one fictional replay after a locally inferred session ends.
+
+    This path is intentionally distinct from product attendance.  It relies on
+    the local active-session rule (open booking window plus visible staff
+    check-ins for every named player), and carries that boundary forward into
+    the later reporter-confirmed result.
+    """
+    from .active_sessions import sessions as active_sessions
+    from .booking_intents import load_intent_ledger
+
+    storage = Storage(root)
+    ended = [row for row in active_sessions(root) if row.get("status") == "ENDED"]
+    if not ended:
+        return {"action": "pass", "detail": "no ended local active session awaits an Arcade replay", "remoteWrites": 0}
+    with storage.writer_lock():
+        ledger = load_intent_ledger(storage)
+        candidates = []
+        for session in ended:
+            intent_id = session.get("intentId")
+            intent = ledger["intents"].get(intent_id) if isinstance(intent_id, str) else None
+            if not isinstance(intent, dict) or isinstance(intent.get("arcadeReplay"), dict):
+                continue
+            if intent.get("journey") not in {"customer_training", "customer_team_signup"}:
+                continue
+            booking = intent.get("booking") if isinstance(intent.get("booking"), dict) else {}
+            if booking.get("occurrenceKey") != session.get("occurrenceKey"):
+                continue
+            try:
+                _session_sides(intent)
+            except ArcadeError:
+                continue
+            candidates.append((str(intent_id), session))
+    if not candidates:
+        return {"action": "pass", "detail": "ended local active sessions already have a replay or lack named sides", "remoteWrites": 0}
+    intent_id, session = sorted(candidates, key=lambda row: str(row[1].get("endedAt") or ""))[0]
+    replay = attach_session_replay(root, intent_id=intent_id, season_id=season_id)
+    return {
+        "action": "local_active_session_arcade_replay_attached",
+        "intentId": intent_id,
+        "occurrenceKey": replay["replay"]["occurrenceKey"],
+        "endedAt": session.get("endedAt"),
+        "remoteWrites": 0,
+    }
+
+
 def _simulate_under_lock(storage: Storage, occurrence_key: str, left: Sequence[str], right: Sequence[str], season_id: str) -> Dict[str, Any]:
     """Store a replay while the caller owns the state writer lock."""
     ledger = storage.load_json(storage.state / MATCHES_FILE, default={"schemaVersion": 1, "matches": {}})

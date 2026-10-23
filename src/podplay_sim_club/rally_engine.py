@@ -11,7 +11,7 @@ from .booking_intents import load_intent_ledger
 from .social_engine import tick as run_social_tick
 from .front_desk import tick as run_front_desk_tick
 from .event_observation import observe_finished_events, observe_finished_training_sessions
-from .arcade import attach_completed_training_replay
+from .arcade import attach_completed_training_replay, attach_ended_active_session_replay
 from .result_requests import request_finished_event_result
 from .owner_engagement import tick as run_owner_engagement_tick
 from .club_rounds import tick as run_club_round
@@ -107,7 +107,9 @@ def tick(
             break
     observation = observe_finished_events(root, now=instant)
     training_observation = observe_finished_training_sessions(root, now=instant)
+    active_sessions = tick_active_sessions(root, now=instant)
     arcade_replay = attach_completed_training_replay(root, now=instant)
+    local_arcade_replay = attach_ended_active_session_replay(root, now=instant)
     training_recovery = {
         "action": "pass",
         "detail": "missed sessions require a fresh grounded player proposal and acceptance",
@@ -156,7 +158,6 @@ def tick(
         )
         if check_in_bridge.get("action") != "pass" and result_request.get("action") == "pass":
             result = check_in_bridge
-    active_sessions = tick_active_sessions(root, now=instant)
     evidence_capture = capture_live_play_receipts(root, observed_at=instant)
     with storage.writer_lock():
         state = storage.load_json(storage.state / STATE_FILE, default=state)
@@ -166,7 +167,7 @@ def tick(
         state["schedulerCursor"] = cursor
         storage.write_json(storage.state / STATE_FILE, state)
         _write_interpretation_audit(storage, rounds, isoformat(instant))
-    return {"status": state["status"], "state": state, "action": result["action"], "socialOffers": social["offers"], "rounds": rounds, "ownerEngagement": owner_engagement, "player": player, "frontDesk": front_desk, "staffFollowUp": staff_follow_up, "observation": observation, "trainingObservation": training_observation, "arcadeReplay": arcade_replay, "trainingRecovery": training_recovery, "resultRequest": result_request, "training": training, "teamSignup": team_signup, "bookingBridge": booking_bridge, "shareInvitationTask": share_task, "shareInvitationBridge": share_bridge, "checkInTask": check_in_task, "checkInBridge": check_in_bridge, "browserJourney": browser_bridge if apply_preview else None, "activeSessions": active_sessions, "evidenceCapture": evidence_capture, "remoteWrites": int(booking_bridge.get("remoteWrites", 0)) + int(share_bridge.get("remoteWrites", 0)) + int(check_in_bridge.get("remoteWrites", 0))}
+    return {"status": state["status"], "state": state, "action": result["action"], "socialOffers": social["offers"], "rounds": rounds, "ownerEngagement": owner_engagement, "player": player, "frontDesk": front_desk, "staffFollowUp": staff_follow_up, "observation": observation, "trainingObservation": training_observation, "arcadeReplay": arcade_replay, "localArcadeReplay": local_arcade_replay, "trainingRecovery": training_recovery, "resultRequest": result_request, "training": training, "teamSignup": team_signup, "bookingBridge": booking_bridge, "shareInvitationTask": share_task, "shareInvitationBridge": share_bridge, "checkInTask": check_in_task, "checkInBridge": check_in_bridge, "browserJourney": browser_bridge if apply_preview else None, "activeSessions": active_sessions, "evidenceCapture": evidence_capture, "remoteWrites": int(booking_bridge.get("remoteWrites", 0)) + int(share_bridge.get("remoteWrites", 0)) + int(check_in_bridge.get("remoteWrites", 0))}
 
 
 def _write_interpretation_audit(storage: Storage, rounds: list[Dict[str, Any]], observed_at: str) -> None:

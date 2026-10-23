@@ -10,7 +10,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from podplay_sim_club.active_sessions import sessions, tick  # noqa: E402
+from podplay_sim_club.arcade import attach_ended_active_session_replay  # noqa: E402
 from podplay_sim_club.local_evidence import capture_live_play_receipts  # noqa: E402
+from podplay_sim_club.result_requests import request_finished_event_result  # noqa: E402
 from podplay_sim_club.storage import Storage  # noqa: E402
 
 
@@ -25,6 +27,8 @@ class ActiveSessionTests(unittest.TestCase):
                 "intents": {intent_id: {
                     "id": intent_id,
                     "status": "booked_browser_observed",
+                    "journey": "customer_training",
+                    "bookerActorId": "andy-bogard",
                     "participants": ["andy-bogard", "terry-bogard"],
                     "booking": {
                         "occurrenceKey": "browser-observed:training:one",
@@ -48,6 +52,11 @@ class ActiveSessionTests(unittest.TestCase):
             ended = tick(root, now=datetime(2026, 10, 23, 18, 30, tzinfo=timezone.utc))
             self.assertEqual("ended", ended["action"])
             self.assertEqual("ENDED", sessions(root)[0]["status"])
+            replay = attach_ended_active_session_replay(root, now=datetime(2026, 10, 23, 18, 31, tzinfo=timezone.utc))
+            request = request_finished_event_result(root, now=datetime(2026, 10, 23, 18, 31, tzinfo=timezone.utc))
+            self.assertEqual("local_active_session_arcade_replay_attached", replay["action"])
+            self.assertEqual("event_result_requested", request["action"])
+            self.assertTrue(request["eventId"].startswith("local-arcade-"))
             facts = (storage.state / "journal" / "facts.jsonl").read_text()
             self.assertIn("event.local_play_started", facts)
             self.assertIn("event.local_play_ended", facts)

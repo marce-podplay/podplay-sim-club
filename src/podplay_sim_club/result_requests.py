@@ -1,6 +1,7 @@
 """Sofia's bounded, no-score result-request capability."""
 
 from datetime import datetime
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -85,10 +86,14 @@ def request_finished_event_result(root: Path, now: Optional[datetime] = None) ->
             return {"action": "pass", "detail": "attended event has no accountable reporter", "remoteWrites": 0}
         observation = intent.get("eventObservation") if isinstance(intent.get("eventObservation"), dict) else {}
         booking = intent.get("booking") if isinstance(intent.get("booking"), dict) else {}
+        replay = intent.get("arcadeReplay") if isinstance(intent.get("arcadeReplay"), dict) else None
+        plan = intent.get("previewPlan") if isinstance(intent.get("previewPlan"), dict) else {}
+        occurrence = intent.get("occurrenceKey") or booking.get("occurrenceKey") or plan.get("occurrenceKey")
         event_id = observation.get("eventId") or booking.get("eventId")
         if not isinstance(event_id, str):
-            return {"action": "pass", "detail": "attended event is missing its event identifier", "remoteWrites": 0}
-        replay = intent.get("arcadeReplay") if isinstance(intent.get("arcadeReplay"), dict) else None
+            if replay is None or not isinstance(occurrence, str):
+                return {"action": "pass", "detail": "attended event is missing its event identifier", "remoteWrites": 0}
+            event_id = _local_arcade_event_ref(occurrence)
         evidence = "arcade_replay" if replay is not None else "verified_check_in_only"
         request = {
             "eventId": event_id,
@@ -129,8 +134,6 @@ def request_finished_event_result(root: Path, now: Optional[datetime] = None) ->
             content_code="event.result.requested", occurred_at=observed_at,
             parameters={"intentRef": intent["id"], "eventRef": event_id, "evidenceKind": evidence},
         )])
-        plan = intent.get("previewPlan") if isinstance(intent.get("previewPlan"), dict) else {}
-        occurrence = intent.get("occurrenceKey") or booking.get("occurrenceKey") or plan.get("occurrenceKey")
         if isinstance(occurrence, str):
             intent["occurrenceKey"] = occurrence
             ensure_planned_locked(storage, intent, observed_at, {
@@ -315,6 +318,12 @@ def _result_candidate_end_time(intent: Dict[str, Any]) -> str:
     booking = intent.get("booking") if isinstance(intent.get("booking"), dict) else {}
     plan = intent.get("previewPlan") if isinstance(intent.get("previewPlan"), dict) else {}
     return str(observation.get("endTime") or booking.get("endTime") or plan.get("endTime") or "")
+
+
+def _local_arcade_event_ref(occurrence_key: str) -> str:
+    """Create an opaque local-only reference when PodPlay has no event id."""
+    digest = sha256(occurrence_key.encode("utf-8")).hexdigest()[:16]
+    return f"local-arcade-{digest}"
 
 
 def _replay_winner_label(intent: Dict[str, Any], replay: Any) -> str:
