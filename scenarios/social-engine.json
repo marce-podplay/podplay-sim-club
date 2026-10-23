@@ -9,7 +9,12 @@
     "competitionWindowMinutes": 360,
     "trainingDesireDrop": 35,
     "competitionBoost": 30,
-    "cohesionBoost": 10
+    "cohesionBoost": 10,
+    "competenceBoost": 6,
+    "winnerCompetenceBoost": 5,
+    "autonomyBoost": 4,
+    "relatednessBoost": 8,
+    "completionFrustrationDrop": 10
   },
   "quietClubPromotion": {
     "desireBoost": 40,

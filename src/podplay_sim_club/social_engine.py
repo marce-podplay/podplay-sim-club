@@ -39,8 +39,9 @@ def tick(root: Path, now: Optional[datetime] = None) -> Dict[str, Any]:
         elapsed = max(0.0, (instant - parse_instant(previous)).total_seconds() / 60) if isinstance(previous, str) else 0.0
         motives = state.setdefault("motives", {})
         for actor_id in people:
-            motive = motives.setdefault(actor_id, {"desireToPlay": 40, "curiosity": 0, "frustration": 0, "competition": 0})
-            motive.setdefault("competition", 0)
+            motive = motives.setdefault(actor_id, _default_motives())
+            for key, value in _default_motives().items():
+                motive.setdefault(key, value)
             _age_motive(motive, elapsed, scenario["clock"])
         _apply_release_notes(storage, motives, state)
         opportunities = _published_opportunities(storage, people)
@@ -141,7 +142,13 @@ def _reconcile_reported_training_completions(root: Path, instant: datetime) -> N
             completed_at = parse_instant(reported_at) if isinstance(reported_at, str) else instant
         except ValueError:
             completed_at = instant
-        record_completed_event(root, participants, now=completed_at, team_id=team_id, occurrence_key=occurrence)
+        replay = intent.get("arcadeReplay") if isinstance(intent.get("arcadeReplay"), dict) else {}
+        winners = replay.get("winner") if result.get("evidence") == "arcade_replay_captain_confirmation" else []
+        record_completed_event(
+            root, participants, now=completed_at, team_id=team_id, occurrence_key=occurrence,
+            winner_actor_ids=[actor_id for actor_id in winners if isinstance(actor_id, str)],
+            reporter_actor_id=result.get("reporterActorId") if isinstance(result.get("reporterActorId"), str) else None,
+        )
 
 
 def _result_confirmation_offers(storage: Storage, people: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -194,7 +201,7 @@ def record_blocked(root: Path, actor_id: str, reason: str, now: Optional[datetim
     with storage.writer_lock():
         state = storage.load_json(storage.state / STATE_FILE, default={})
         motives = state.setdefault("motives", {})
-        motive = motives.setdefault(actor_id, {"desireToPlay": 40, "curiosity": 0, "frustration": 0})
+        motive = motives.setdefault(actor_id, _default_motives())
         causes = state.setdefault("frustrationCauses", {})
         key = f"{actor_id}:{reason}"
         if key not in causes:
@@ -207,6 +214,7 @@ def record_blocked(root: Path, actor_id: str, reason: str, now: Optional[datetim
 def record_completed_event(
     root: Path, participants: List[str], now: Optional[datetime] = None, *,
     team_id: Optional[str] = None, occurrence_key: Optional[str] = None,
+    winner_actor_ids: Optional[List[str]] = None, reporter_actor_id: Optional[str] = None,
 ) -> None:
     """Apply one verified shared-completion consequence, never a check-in guess.
 
@@ -230,14 +238,27 @@ def record_completed_event(
         desire_drop = int(post.get("trainingDesireDrop", 35))
         competition_boost = int(post.get("competitionBoost", 30))
         cohesion_boost = int(post.get("cohesionBoost", 10))
+        competence_boost = int(post.get("competenceBoost", 6))
+        winner_competence_boost = int(post.get("winnerCompetenceBoost", 5))
+        autonomy_boost = int(post.get("autonomyBoost", 4))
+        relatedness_boost = int(post.get("relatednessBoost", 8))
+        frustration_drop = int(post.get("completionFrustrationDrop", 10))
+        winners = set(winner_actor_ids or [])
         for left in participants:
             for right in participants:
                 if left < right:
                     key = f"{left}|{right}"
                     closeness[key] = min(100, int(closeness.get(key, 0)) + 10)
-            motive = state.setdefault("motives", {}).setdefault(left, {"desireToPlay": 40, "curiosity": 0, "frustration": 0, "competition": 0})
+            motive = state.setdefault("motives", {}).setdefault(left, _default_motives())
+            for key, value in _default_motives().items():
+                motive.setdefault(key, value)
             motive["desireToPlay"] = max(0, int(motive["desireToPlay"]) - desire_drop)
             motive["competition"] = min(100, int(motive.get("competition", 0)) + competition_boost)
+            motive["competence"] = min(100, int(motive["competence"]) + competence_boost + (winner_competence_boost if left in winners else 0))
+            motive["relatedness"] = min(100, int(motive["relatedness"]) + relatedness_boost)
+            motive["frustration"] = max(0, int(motive["frustration"]) - frustration_drop)
+            if left == reporter_actor_id:
+                motive["autonomy"] = min(100, int(motive["autonomy"]) + autonomy_boost)
         if isinstance(team_id, str) and team_id:
             teams = state.setdefault("teamDynamics", {})
             team = teams.setdefault(team_id, {"cohesion": 0, "competition": 0})
@@ -248,13 +269,26 @@ def record_completed_event(
         storage.write_json(storage.state / STATE_FILE, state)
 
 
+def _default_motives() -> Dict[str, int]:
+    """Motives held by every active Sim, including outcome-driven needs."""
+    return {
+        "desireToPlay": 40,
+        "curiosity": 0,
+        "frustration": 0,
+        "competition": 0,
+        "competence": 0,
+        "autonomy": 0,
+        "relatedness": 0,
+    }
+
+
 def record_feature_trial(root: Path, actor_id: str, release_note_id: str, now: Optional[datetime] = None) -> None:
     """A feature trial consumes curiosity for that release once."""
     storage = Storage(root)
     observed_at = isoformat(now or parse_instant(None))
     with storage.writer_lock():
         state = storage.load_json(storage.state / STATE_FILE, default={})
-        motive = state.setdefault("motives", {}).setdefault(actor_id, {"desireToPlay": 40, "curiosity": 0, "frustration": 0})
+        motive = state.setdefault("motives", {}).setdefault(actor_id, _default_motives())
         motive["curiosity"] = 0
         state.setdefault("triedReleases", {}).setdefault(actor_id, {})[release_note_id] = observed_at
         state["lastTickAt"] = observed_at

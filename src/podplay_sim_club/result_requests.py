@@ -267,6 +267,12 @@ def report_finished_event_result(
             root,
             [actor for actor in intent.get("participants", []) if isinstance(actor, str)],
             now=parse_instant(observed_at), team_id=team_id, occurrence_key=occurrence if isinstance(occurrence, str) else result["eventId"],
+            winner_actor_ids=(
+                [actor for actor in replay.get("winner", []) if isinstance(actor, str)]
+                if evidence == "arcade_replay_captain_confirmation" and isinstance(replay, dict)
+                else []
+            ),
+            reporter_actor_id=reporter_actor_id,
         )
     return result
 

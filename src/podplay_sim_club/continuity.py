@@ -145,7 +145,7 @@ def _progression(storage: Storage, actor_ids: list[str]) -> Dict[str, Any]:
     state = storage.load_json(storage.state / "social-engine.json", default={})
     source = state.get("motives") if isinstance(state, dict) else {}
     motives = {
-        actor_id: {key: value for key, value in row.items() if key in {"desireToPlay", "curiosity", "frustration", "competition"}}
+        actor_id: {key: value for key, value in row.items() if key in {"desireToPlay", "curiosity", "frustration", "competition", "competence", "autonomy", "relatedness"}}
         for actor_id, row in source.items() if actor_id in actor_ids and isinstance(row, dict)
     } if isinstance(source, dict) else {}
     progression = {"motives": motives}
@@ -157,7 +157,7 @@ def _validate_progression(progression: Dict[str, Any], actor_ids: list[str]) -> 
     motives = progression.get("motives")
     if not isinstance(motives, dict):
         raise ContinuityError("continuity progression is invalid")
-    permitted = {"desireToPlay", "curiosity", "frustration", "competition"}
+    permitted = {"desireToPlay", "curiosity", "frustration", "competition", "competence", "autonomy", "relatedness"}
     for actor_id, row in motives.items():
         if actor_id not in actor_ids or not isinstance(row, dict) or not set(row).issubset(permitted):
             raise ContinuityError("continuity motives are invalid")
