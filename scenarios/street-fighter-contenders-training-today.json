@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "street-fighter-contenders-training-today-001",
+  "journey": "customer_training",
+  "teamId": "street-fighter-contenders",
+  "captainActorId": "blanka",
+  "teammateActorId": "zangief",
+  "durationMinutes": 30,
+  "daysAhead": [0, 0],
+  "localWindows": ["00:00-24:00"],
+  "slotPolicy": "nearest_valid_low_contention"
+}

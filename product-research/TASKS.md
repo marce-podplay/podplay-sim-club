@@ -9,6 +9,7 @@
 | PR-005 | queued | Can an invited guest consume the owner’s pass or their own pass? | owner + guest invitation/redeem flow | one explicitly logged test booking | guest-consumption evidence |
 | PR-006 | queued | What is the cancellation/refund/pass-restoration behavior? | product UI/API + isolated approved test | one explicitly logged cancellation | cancellation evidence |
 | PR-007 | queued | Which booking screen/API contracts should be monitored after releases? | source contract + UI journey | read-only | journey probe specification |
+| PR-008 | in progress | Which safe tenant/venue/booking settings can frame a team-signup probe? | accepted GET-only configuration discovery | read-only | sanitized team-signup contract read-back |
 
 Use one evidence note per task run.  Mark a task `blocked` only with a precise
 missing product capability, permission, or required approval.
@@ -29,3 +30,18 @@ default booking-context rule. The live actors had no active package items and
 no membership enrollment expansion, so PR-001 and PR-002 remain in progress:
 the run verifies empty/unknown semantics but cannot establish benefit text or
 non-empty package meaning.
+
+## Change-detection source review — 2026-10-08
+
+Existing Preview integration establishes these approved GET surfaces:
+
+| Surface | Known read | Safe retained result | Does not prove |
+|---|---|---|---|
+| Tenant feature/settings | `/apis/v2/tenants/current/settings` | allowlisted signup requirement booleans | a customer's team-signup eligibility |
+| Venue/pod configuration | `/apis/v2/areas`, then configured area pods | configured area/pod presence | a court's availability or a price |
+| Customer booking configuration | current user's booking settings for the configured area | quota-shape presence | a booking, enrollment, or attendance |
+| Release/change information | no supported read identified | `unknown` | absence of a release or regression |
+
+PR-008 implements the team-signup feature contract around these surfaces. Its
+probe requires every named verifier to accept before the GET-only read-back.
+A `pass` closes the request without treating it as rejection of the feature.

@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "key": "club-lab",
+  "displayName": "The Club Lab",
+  "staffActorIds": ["riley", "morgan-vale"],
+  "playerActorIds": [
+    "sofia",
+    "andy-bogard",
+    "terry-bogard",
+    "kyo-captain",
+    "benimaru",
+    "king-captain",
+    "mai",
+    "yuri",
+    "ryu",
+    "ken-masters",
+    "chun-li",
+    "blanka",
+    "zangief",
+    "dhalsim"
+  ]
+}

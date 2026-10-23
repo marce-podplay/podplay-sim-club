@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "clubContextKey": "club-lab",
+  "staff": [
+    {
+      "actorId": "riley",
+      "displayName": "Riley Chen",
+      "role": "Club Lab research coordinator",
+      "productAccess": "existing bounded staff fixture",
+      "may": ["request research", "prepare player-facing instructions", "write a consultation plan"],
+      "mustNot": ["approve a product configuration change", "accept for a player", "claim a price"]
+    },
+    {
+      "actorId": "morgan-vale",
+      "displayName": "Morgan Vale",
+      "role": "Club Lab configuration liaison",
+      "productAccess": "none",
+      "may": ["review a staff consultation", "accept planning", "pass", "request changes"],
+      "mustNot": ["authenticate to Preview", "change configuration", "publish a rate card", "create a player entitlement"]
+    }
+  ]
+}

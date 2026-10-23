@@ -2,9 +2,48 @@
 
 PodPlay Sim Club is a persistent fictional club whose characters will exercise
 an approved PodPlay PR preview, talk to one another, try release features, and
-leave inspectable evidence when something does not work. Preview Club is a
+leave inspectable evidence when something does not work. **Club Lab** is the
 clearly marked group of simulated users inside a PR-specific copy of PingPod
 staging, not a separate tenant.
+
+### Vocabulary
+
+- **Club Lab** is the fictional community: its players, staff, messages,
+  research experiments, and seasons.
+- **Preview environment** is the disposable, PR-specific technical deployment
+  that Club Lab observes or uses through guarded adapters.
+- **Dry run** means a command makes no product write. It does not name an
+  environment or a social state.
+- **Season** is Club Lab's bounded run against one Preview environment.
+
+## Community identity and Club Lab contexts
+
+People are not copied when a new Preview environment is created.  Sofia and
+the other players have one durable fictional identity, one private Firebase
+credential, and (when cross-club visits begin) one shared physical-time
+calendar.  They may visit different Club Labs, but a product booking,
+membership, credit balance, attendance record, and research observation stay
+inside the club context where they happened.
+
+**The Club Lab** is the current, single context, declared in
+[`seed/club-context.json`](seed/club-context.json).  It can observe a new
+Preview URL without becoming a new community.  Its employee Riley is a Club
+Lab employee, not a global player identity.  A future **Club Lab Unified** or
+**Club Experiment** must declare a different context key and a distinct staff
+roster; it must never reuse Riley's staff memory or authority.
+
+Private identity verification is also context-scoped: the same Firebase login
+may be accepted by two Preview environments, but its app-side user record is
+verified separately in each database.  A missing record is `unavailable`, not
+authorization to create a replacement user.  Context-specific auth-token
+caches prevent simultaneous future labs from overwriting each other's local
+operational state.
+
+When Club Lab staff need agreement on a complex experiment, use the local
+`staff-planning` consultation channel. It addresses a named person with a
+written, reversible plan and records `accept`, `pass`, or `request_changes`.
+It is persuasion and shared planning—not an authority bypass or a Preview
+configuration mechanism.
 
 The current implementation is the dependency-free **durable local world plus
 guarded PR-preview adapter milestone**. Direct calls are limited to
@@ -275,6 +314,24 @@ weekly PingPod staging snapshot does start one. Firebase identities live outside
 that database and may persist across seasons; PodPlay user rows and roles must be
 read back in each season.
 
+At the start of a new season, run the lead-gated identity bootstrap rather than
+asking simulated people to sign up again or relying on inbox aliases:
+
+```console
+./club season-recovery plan
+./club season-recovery request --actor riley
+./club season-recovery approve --actor lead
+./club season-recovery apply --confirm-origin "$preview_origin"
+```
+
+`plan` is GET-only. It stores a one-way, local profile-continuity fingerprint
+and distinguishes a continuing target from the strong reset signal that every
+previously present product profile is now absent. The plan prepares the next
+steps but does not create Firebase identities, send email, or enable player
+actions. `apply` remains a separate, exact-origin, lead-approved Preview
+bootstrap: it reconciles only the declared product profiles and required staff
+roles, then reads every profile back before browser journeys are eligible.
+
 ## Tests
 
 ```console
@@ -350,6 +407,14 @@ unknown/error belief for that subject without discarding successful reads from
 the others. Transaction history, coupon discovery, quote evaluation, checkout,
 and all product writes are outside this command.
 
+`research` adds a separate product-health boundary for Club Lab. The first
+slice is a team-signup configuration probe: Sofia or Riley can request review,
+but named players/staff must explicitly accept or pass before the existing
+admin performs a bounded, GET-only configuration read-back. It never creates
+or reconciles Preview/Firebase users. The local Observatory exposes only safe
+probe status and sanitized result summaries; it intentionally no longer emits
+Preview origins or event URLs.
+
 Nearest-slot selection is a temporary operator-controlled bootstrap path. The
 long-running simulation is intended to create bookings only after changing
 character needs produce a proposal, conversation, and agreement. Scenario
@@ -417,6 +482,33 @@ It also records only non-secret identity and payment-element metadata in
 `state/preview-payment-methods.json`. On a new preview season, readiness must
 reconcile those actors; a card is never detached or deleted automatically.
 
+Keep Stripe's test secret canonical in the web-v2 checkout. If a local reminder
+is useful, copy `secrets/local-paths.example.json` to the ignored
+`secrets/local-paths.json` and set only `stripeTestEnvPath`; do not copy the
+secret value into this repository. Continue to pass that path explicitly to
+`--stripe-env` so the payment write remains visible at invocation time.
+
+### Bounded continuous Unified Booking research
+
+The rate-card campaign runner represents ordinary simulated use, rather than a
+fictional social-engine result. Its first explicit run may create **at most two**
+future 30-minute weekday bookings: Andy/Terry off-peak and Kyo/Benimaru peak.
+Each campaign has a fixed roster, one booking quota, a booker-covers invitation,
+and teammate terms acknowledgement. Subsequent runs make direct owner read-backs
+only; they create no further bookings and add a diary entry only when the exposed
+booking state changes.
+
+```console
+./club research continuous-unified --apply --confirm-origin "$preview_origin"
+```
+
+Product booking IDs and invitation tokens live only in the ignored,
+permission-restricted `secrets/unified-research-campaigns.json` ledger. Club
+channels and journals contain only the band, duration, declared people, safe
+price evidence, and uncertainty boundary. The runner never checks players in,
+claims attendance or play, pays, cancels, awards a benefit, or calls a changed
+status a regression.
+
 After `booking-preview` reports ready, plan and explicitly create the first
 booking:
 
@@ -459,7 +551,7 @@ remote PR-preview state and the sanitized local ledger of scheduled preview
 matches. Scenario and intent files remain the simulator's private planning
 mechanism; the local fake world is not presented as product state.
 
-Plan the persistent Preview Club identities and selected low-activity pod:
+Plan the persistent Club Lab identities and selected low-activity pod:
 
 ```console
 ./club preview seed --dry-run

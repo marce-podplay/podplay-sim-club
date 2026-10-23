@@ -1,6 +1,6 @@
-# Preview Club knowledge base
+# Club Lab knowledge base
 
-This directory contains the durable design model for Preview Club. It explains
+This directory contains the durable design model for Club Lab. It explains
 why the simulator behaves as it does; executable rules remain in `rules/`,
 scenario inputs remain in `scenarios/`, and observed product research remains
 in `product-research/`.
@@ -29,8 +29,20 @@ Start here:
   multi-sport ratings.
 - [Evolution plan](evolution-plan.md) — incremental changes that do not require
   replacing the current engine at once.
+- [Preview continuity and portability](preview-continuity-and-portability.md) —
+  durable fictional-community state, Preview-season rollover, and fact
+  compatibility/freshness rules.
+- [Operator control plane and club protocol](operator-control-plane-and-club-protocol.md) —
+  the Big Brother boundary, staff handoffs, communication primitives, and
+  release-research workflow.
+- [Community identities and Club Lab contexts](community-and-club-contexts.md) —
+  one persistent player identity across club visits, separate club employees,
+  and safe per-context product identity verification.
 - [Shared-session loop plan](shared-session-loop-plan.md) — the staged path from
   a reason to play through invitation, participation, result, and learning.
+- [Sim browser capability lab](sim-browser-capability-lab.md) — the separation
+  between the social engine, a Sim's rendered browser journey, dashboard
+  observation, and bounded experiments used to discover reusable routines.
 
 The short version is:
 

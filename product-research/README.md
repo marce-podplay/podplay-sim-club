@@ -27,6 +27,38 @@ evidence is sufficient to define a simulator policy or probe.
 - A completed test is evidence about one observed condition, not a permanent
   guarantee of product behavior.
 
+## Change-detection contract (Slice 1)
+
+The first contract is **team signup**. Sofia and Riley may use the display
+role “Big Brother” to make a verification request visible, but it grants no
+product or social authority: each named player or staff verifier must record
+their own `accept` or `pass`. A request is not acceptance, an accepted probe is
+not an entitlement, and a booking read-back is not attendance evidence.
+
+Run the local, explicit flow:
+
+```console
+./club research contract --feature team-signup
+./club research request --feature team-signup --requester sofia \
+  --verifier andy-bogard --verifier terry-bogard
+./club research acknowledge --probe "probe:feature:…" --actor andy-bogard --decision accept
+./club research acknowledge --probe "probe:feature:…" --actor terry-bogard --decision accept
+./club research discover --probe "probe:feature:…"
+```
+
+The last command authenticates only the already configured Preview admin and
+makes four bounded GET reads: tenant signup flags, areas, pods for the
+configured area, and the caller's booking-settings shape for the configured
+pod. It retains only boolean presence/requirement summaries and an opaque PR
+fingerprint. It does not create users, change configuration, create a booking,
+or retain raw IDs, tenant setting values, private URLs, credentials, or raw
+responses. Preview exposes no supported release/change feed in the reviewed
+surface, so that portion is stored as `unknown`, not inferred.
+
+An `issue-candidate` created after a read-back is explicitly **not** a
+regression. It needs a passing baseline or a repeated controlled probe before
+that label becomes available.
+
 ## Promotion path
 
 ```text
@@ -40,3 +72,13 @@ complaint; it never authorizes a blind retry or a fabricated credit/pass use.
 
 See [ROADMAP.md](ROADMAP.md), [TASKS.md](TASKS.md), and
 [evidence-template.md](evidence-template.md).
+
+## Rate Cards and Unified Pricing
+
+The Rate Cards workflow begins with a separate, admin-owned configuration
+exploration. Its first phase is read-only and terminal: it records whether the
+feature is configured, then stops. It cannot enable Unified Pricing, publish a
+schedule, make a booking, or ask a player to test. The structured JSON and
+human-readable evidence are local state, while the durable workflow and admin
+handoff are documented in
+[rate-cards-unified-pricing-workflow.md](rate-cards-unified-pricing-workflow.md).

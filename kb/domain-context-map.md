@@ -1,6 +1,6 @@
-# Preview Club domain context map
+# Club Lab domain context map
 
-Preview Club is not one giant “social engine.”  It is a collection of bounded
+Club Lab is not one giant “social engine.” It is a collection of bounded
 contexts connected by explicit facts and commands.  This keeps an evolving
 PodPlay feature from rewriting character motivation, and keeps a character
 story from claiming a product outcome.

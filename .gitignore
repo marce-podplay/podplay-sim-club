@@ -13,3 +13,4 @@ state/*
 !state/.gitkeep
 secrets/*
 !secrets/.gitkeep
+!secrets/local-paths.example.json

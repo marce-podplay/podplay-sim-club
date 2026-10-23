@@ -2,6 +2,7 @@
   "schemaVersion": 1,
   "ticket": "PP-7444",
   "marker": "preview-club",
+  "clubContextKey": "club-lab",
   "location": {
     "areaId": "w37",
     "areaName": "West 37th Manhattan",
@@ -12,7 +13,12 @@
   "productIdentities": [
     "sofia",
     "andy-bogard",
-    "terry-bogard"
+    "terry-bogard",
+    "kyo-captain",
+    "benimaru",
+    "blanka",
+    "ryu",
+    "ken-masters"
   ],
   "operatorMappings": {
     "alex": "marcelo@podplay.app"

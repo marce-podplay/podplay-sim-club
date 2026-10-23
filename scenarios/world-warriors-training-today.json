@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "world-warriors-training-today-001",
+  "journey": "customer_training",
+  "teamId": "world-warriors",
+  "captainActorId": "ryu",
+  "teammateActorId": "ken-masters",
+  "durationMinutes": 30,
+  "daysAhead": [0, 0],
+  "localWindows": ["00:00-24:00"],
+  "slotPolicy": "nearest_valid_low_contention"
+}
