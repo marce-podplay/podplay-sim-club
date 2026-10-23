@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import threading
 from typing import Optional
-from urllib.parse import quote, unquote
+from urllib.parse import unquote
 
 from .actor_runtime import run_tick as run_actor_tick
 from .identity_registry import TEAM_ACTOR_NAMES
@@ -15,6 +15,11 @@ from .preview_match_ledger import sanitized_match_index
 from .tournament import acknowledge_result_request, report_winner
 from .result_requests import report_finished_event_result
 from .inspectors import InspectorNotFoundError, booking_plan_inspector, inspection_index, player_inspector
+from .product_research import research_snapshot
+from .season_recovery import snapshot as season_recovery_snapshot
+from .control_plane import snapshot as control_plane_snapshot
+from .research_rewards import snapshot as research_rewards_snapshot
+from .local_evidence import evidence_index
 
 
 class ObservatoryServer:
@@ -66,7 +71,6 @@ class ObservatoryServer:
                         else {"activeOccurrenceKey": None, "matches": []}
                     )
                     tournament = _tournament_fixture(orchestrator)
-                    preview_origin = _preview_origin(orchestrator)
                     if tournament is not None:
                         match_index["matches"] = [
                             match
@@ -85,9 +89,9 @@ class ObservatoryServer:
                     match_index = _with_social_lifecycle_offers(orchestrator, match_index)
                     match_index = _attach_share_invitation_links(orchestrator, match_index)
                     match_index = _with_known_venue(orchestrator, match_index)
-                    _attach_preview_links(match_index, preview_origin)
+                    venue_activity = _venue_activity(orchestrator, match_index)
+                    inspectors = _link_booking_plans(match_index, inspection_index(orchestrator.storage.root))
                     self._json(HTTPStatus.OK, {
-                        "previewOrigin": preview_origin,
                         "previewMatch": snapshot if isinstance(snapshot, dict) else None,
                         "previewMatches": match_index,
                         "messages": _recent_messages(orchestrator),
@@ -95,18 +99,36 @@ class ObservatoryServer:
                         # smaller staff-initiative projection instead of raw storylines.
                         "storylines": _active_storylines(orchestrator),
                         "community": _community_snapshot(orchestrator),
+                        "researchActivity": _research_activity(orchestrator),
+                        "venueActivity": venue_activity,
                         "initiatives": _staff_initiatives(orchestrator),
                         "invitationConversations": _invitation_conversations(orchestrator),
                         "clubState": _club_state(orchestrator),
                         "arcade": _arcade_snapshot(orchestrator),
-                        "inspectors": inspection_index(orchestrator.storage.root),
+                        "inspectors": inspectors,
+                        "productHealth": research_snapshot(orchestrator.storage.root),
+                        "seasonRecovery": season_recovery_snapshot(orchestrator.storage.root),
+                        "controlPlane": control_plane_snapshot(orchestrator.storage.root),
+                        "researchRewards": research_rewards_snapshot(orchestrator.storage.root),
+                        "evidence": evidence_index(orchestrator.storage.root),
                     })
                     return
+                if self.path.startswith("/evidence/"):
+                    name = Path(unquote(self.path.rsplit("/", 1)[-1])).name
+                    if not name.endswith(".svg") or name != self.path.rsplit("/", 1)[-1]:
+                        self._send(HTTPStatus.NOT_FOUND, b"not found", "text/plain; charset=utf-8")
+                        return
+                    image = orchestrator.storage.state / "evidence" / "images" / name
+                    if not image.is_file():
+                        self._send(HTTPStatus.NOT_FOUND, b"not found", "text/plain; charset=utf-8")
+                        return
+                    self._send(HTTPStatus.OK, image.read_bytes(), "image/svg+xml")
+                    return
                 if self.path.startswith("/api/inspect/player/"):
-                    self._inspection(lambda: player_inspector(orchestrator.storage.root, unquote(self.path.rsplit("/", 1)[-1])))
+                    self._inspection(lambda: _public_player_view(player_inspector(orchestrator.storage.root, unquote(self.path.rsplit("/", 1)[-1]))))
                     return
                 if self.path.startswith("/api/inspect/booking-plan/"):
-                    self._inspection(lambda: booking_plan_inspector(orchestrator.storage.root, unquote(self.path.rsplit("/", 1)[-1])))
+                    self._inspection(lambda: _public_booking_plan_view(booking_plan_inspector(orchestrator.storage.root, unquote(self.path.rsplit("/", 1)[-1]))) )
                     return
                 if self.path == "/health":
                     self._json(
@@ -229,36 +251,83 @@ def _recent_messages(orchestrator: Orchestrator):
     return messages[-80:]
 
 
-def _preview_origin(orchestrator: Orchestrator) -> Optional[str]:
-    """Return the approved preview origin already stored on local product state."""
-    ledger = orchestrator.storage.load_json(
-        orchestrator.storage.state / "preview-matches.json", default={}
-    )
-    origin = ledger.get("targetOrigin") if isinstance(ledger, dict) else None
-    if isinstance(origin, str) and origin.startswith("https://"):
-        return origin.rstrip("/")
-    intents = orchestrator.storage.load_json(
-        orchestrator.storage.state / "booking-intents.json", default={}
-    )
-    rows = intents.get("intents", {}) if isinstance(intents, dict) else {}
-    if isinstance(rows, dict):
-        for intent in rows.values():
-            plan = intent.get("previewPlan") if isinstance(intent, dict) else None
-            origin = plan.get("targetOrigin") if isinstance(plan, dict) else None
-            if isinstance(origin, str) and origin.startswith("https://"):
-                return origin.rstrip("/")
-    return None
+def _public_booking_plan_view(value):
+    """Remove opaque references before a local inspector reaches the browser."""
+    if not isinstance(value, dict):
+        return value
+    view = dict(value)
+    for key in ("bookingPlanId", "occurrenceKey", "ownerActorId", "payerActorId", "venueRef"):
+        view.pop(key, None)
+    quote = view.get("quote")
+    if isinstance(quote, dict):
+        quote = dict(quote)
+        quote.pop("evidenceRef", None)
+        view["quote"] = quote
+    approval = view.get("payerApproval")
+    if isinstance(approval, dict):
+        approval = dict(approval)
+        approval.pop("payerActorId", None)
+        approval.pop("commitmentId", None)
+        approval.pop("quoteEvidenceRef", None)
+        view["payerApproval"] = approval
+    return view
 
 
-def _attach_preview_links(match_index, origin: Optional[str]) -> None:
-    for match in match_index.get("matches", []):
-        if not isinstance(match, dict):
+def _public_player_view(value):
+    """Keep character introspection useful without exposing local fact IDs."""
+    if not isinstance(value, dict):
+        return value
+    view = dict(value)
+    view.pop("actorId", None)
+    beliefs = view.get("beliefs")
+    if isinstance(beliefs, list):
+        safe_beliefs = []
+        for belief in beliefs:
+            if not isinstance(belief, dict):
+                continue
+            safe = dict(belief)
+            safe.pop("sourceEvidenceRef", None)
+            safe["sourceLabel"] = "local evidence" if belief.get("sourceEvidenceRef") else "not observed"
+            safe_beliefs.append(safe)
+        view["beliefs"] = safe_beliefs
+    return view
+
+
+def _link_booking_plans(match_index, inspector_index):
+    """Attach a local-only navigation relationship without merging the two facts.
+
+    A plan is an intention/quote workflow; an event is a separately observed
+    lifecycle.  Their shared occurrence key permits navigation, never a claim
+    that either layer proves the other.
+    """
+    plans = inspector_index.get("bookingPlans", []) if isinstance(inspector_index, dict) else []
+    by_occurrence = {
+        row.get("occurrenceKey"): row for row in plans
+        if isinstance(row, dict) and isinstance(row.get("occurrenceKey"), str)
+    }
+    events = {
+        row.get("occurrenceKey"): row for row in match_index.get("matches", [])
+        if isinstance(row, dict) and isinstance(row.get("occurrenceKey"), str)
+    }
+    for occurrence_key, event in events.items():
+        plan = by_occurrence.get(occurrence_key)
+        if plan is None:
             continue
-        event_id = match.get("eventId")
-        if isinstance(origin, str) and isinstance(event_id, str) and event_id:
-            match["eventUrl"] = f"{origin}/admin/v2/events?eventId={quote(event_id, safe='')}"
-        else:
-            match["eventUrl"] = None
+        event["relatedPlan"] = {
+            "bookingPlanId": plan.get("bookingPlanId"),
+            "stage": plan.get("stage"),
+            "quoteStatus": plan.get("quoteStatus"),
+        }
+        plan["relatedOccurrenceKey"] = occurrence_key
+        plan["relatedEvent"] = {
+            "label": event.get("label"),
+            "startTime": event.get("startTime"),
+            "status": event.get("eventStatus") or event.get("phase"),
+        }
+    for plan in plans:
+        if isinstance(plan, dict):
+            plan.pop("occurrenceKey", None)
+    return inspector_index
 
 
 def _actor_directory(orchestrator: Orchestrator):
@@ -367,6 +436,7 @@ def _community_snapshot(orchestrator: Orchestrator):
             "motives": {
                 "play": motive.get("desireToPlay"),
                 "curiosity": motive.get("curiosity"),
+                "competition": motive.get("competition"),
                 "frustration": motive.get("frustration"),
             },
             "offers": actor_offers,
@@ -374,6 +444,41 @@ def _community_snapshot(orchestrator: Orchestrator):
         })
     people.sort(key=lambda row: (row["role"] not in {"club_owner", "club_staff"}, row["label"]))
     return {"people": people, "updatedAt": social.get("lastTickAt") if isinstance(social, dict) else None}
+
+
+def _research_activity(orchestrator: Orchestrator):
+    """Project safe campaign placement data for the Club Floor.
+
+    The ignored private campaign ledger is the only place booking correlations
+    exist.  This projection deliberately emits neither IDs, tokens, origins,
+    nor a claim that a checked-in player actually played.
+    """
+    private = orchestrator.storage.load_json(
+        orchestrator.storage.root / "secrets" / "unified-research-campaigns.json",
+        default={},
+    )
+    campaigns = private.get("campaigns") if isinstance(private, dict) else {}
+    rows = []
+    for campaign_id, row in (campaigns.items() if isinstance(campaigns, dict) else []):
+        if not isinstance(campaign_id, str) or not isinstance(row, dict):
+            continue
+        owner, teammate = row.get("owner"), row.get("teammate")
+        if not isinstance(owner, str) or not isinstance(teammate, str):
+            continue
+        checkins = row.get("checkIns") if isinstance(row.get("checkIns"), dict) else {}
+        checked_in = sorted(actor for actor, state in checkins.items() if state == "confirmed" and isinstance(actor, str))
+        band = row.get("band") if isinstance(row.get("band"), str) else "scheduled"
+        rows.append({
+            "campaign": "rate-cards-unified-pricing",
+            "label": f"{band.replace('_', ' ').title()} training",
+            "participants": [owner, teammate],
+            "checkedIn": checked_in,
+            "startsAt": row.get("startsAt") if isinstance(row.get("startsAt"), str) else None,
+            "endsAt": row.get("endsAt") if isinstance(row.get("endsAt"), str) else None,
+            "bookingStatus": row.get("lastObservedStatus") if isinstance(row.get("lastObservedStatus"), str) else "confirmed",
+        })
+    rows.sort(key=lambda row: str(row.get("startsAt") or ""))
+    return {"campaigns": rows, "boundary": "check-in is arrival evidence, not play or attendance"}
 
 
 def _staff_initiatives(orchestrator: Orchestrator):
@@ -405,6 +510,10 @@ def _staff_initiatives(orchestrator: Orchestrator):
         orchestrator.storage.state / "lead-booking-bridge.json", default={}
     )
     last_bridge = bridge_state.get("lastAttempt") if isinstance(bridge_state, dict) else None
+    follow_up_state = orchestrator.storage.load_json(
+        orchestrator.storage.state / "staff-follow-up.json", default={}
+    )
+    watched = follow_up_state.get("watched", {}) if isinstance(follow_up_state, dict) else {}
     rows = []
     terminal = {"complete", "cancelled", "missed_session", "expired"}
     for intent_id, intent in ledger["intents"].items():
@@ -423,8 +532,10 @@ def _staff_initiatives(orchestrator: Orchestrator):
             last_bridge if isinstance(last_bridge, dict)
             and last_bridge.get("intentId") == intent_id else None
         )
+        follow_up = watched.get(intent_id) if isinstance(watched, dict) else None
         rows.append({
             "id": intent_id,
+            "createdAt": intent.get("agreedAt") or intent.get("createdAt"),
             "status": status,
             "reason": intent.get("reason", "community initiative"),
             "journey": intent.get("journey", "planning"),
@@ -435,8 +546,15 @@ def _staff_initiatives(orchestrator: Orchestrator):
                 "action": bridge.get("action"), "detail": bridge.get("detail"),
                 "observedAt": bridge.get("observedAt"),
             } if bridge else None,
+            "staffFollowUp": {
+                "owner": "Riley Chen", "status": follow_up.get("status"),
+                "nextAction": follow_up.get("nextAction"), "observedAt": follow_up.get("observedAt"),
+                "blocker": follow_up.get("blocker"),
+                "requestedFrom": follow_up.get("requestedFrom"),
+                "staffAction": follow_up.get("staffAction"),
+            } if isinstance(follow_up, dict) else None,
         })
-    rows.sort(key=lambda row: (row["status"] != "agreed", row["id"]))
+    rows.sort(key=lambda row: str(row.get("createdAt") or row["id"]), reverse=True)
     return rows[:8]
 
 
@@ -521,6 +639,79 @@ def _club_state(orchestrator: Orchestrator):
     }
 
 
+def _venue_activity(orchestrator: Orchestrator, match_index):
+    """Project observed courts/pods without confusing lifecycle facts for play.
+
+    A pod appears when an existing sanitized match provides an area/pod label.
+    People are rendered *inside* it only for an explicit ``PLAYING`` lifecycle
+    step.  Booked, checked-in, completed, and result-reported records remain
+    useful context but are deliberately not treated as current occupancy.
+    """
+    pods = {}
+    readiness = orchestrator.storage.load_json(
+        orchestrator.storage.state / "preview-readiness.json", default={}
+    )
+    location = readiness.get("location") if isinstance(readiness, dict) else None
+    if isinstance(location, dict):
+        area, pod = location.get("areaName"), location.get("podName")
+        if isinstance(area, str) and area and isinstance(pod, str) and pod:
+            baseline = {
+                "area": area,
+                "pod": pod,
+                "occupants": [],
+                "scheduledCount": 0,
+                "historyCount": 0,
+            }
+            court_count = location.get("availableCourtCount")
+            if isinstance(court_count, int) and court_count >= 0:
+                baseline["courtCount"] = court_count
+            pods[(area, pod)] = baseline
+    matches = match_index.get("matches") if isinstance(match_index, dict) else []
+    for match in matches if isinstance(matches, list) else []:
+        if not isinstance(match, dict):
+            continue
+        venue = match.get("venue") if isinstance(match.get("venue"), dict) else {}
+        area, pod = venue.get("areaName"), venue.get("podName")
+        if not isinstance(pod, str) or not pod:
+            continue
+        area = area if isinstance(area, str) and area else "Observed area"
+        key = (area, pod)
+        entry = pods.setdefault(key, {
+            "area": area,
+            "pod": pod,
+            "occupants": [],
+            "scheduledCount": 0,
+            "historyCount": 0,
+        })
+        lifecycle = match.get("lifecycle") if isinstance(match.get("lifecycle"), dict) else {}
+        steps = lifecycle.get("steps") if isinstance(lifecycle.get("steps"), dict) else {}
+        play = str(steps.get("play") or "").upper()
+        participants = match.get("participants") if isinstance(match.get("participants"), list) else []
+        if play == "PLAYING":
+            for person in participants:
+                if isinstance(person, dict) and isinstance(person.get("label"), str):
+                    entry["occupants"].append(person["label"])
+        elif play in {"RESULT_REPORTED", "ATTENDANCE_OBSERVED"}:
+            entry["historyCount"] += 1
+        else:
+            entry["scheduledCount"] += 1
+    rows = []
+    for entry in pods.values():
+        entry["occupants"] = sorted(set(entry["occupants"]))
+        entry["state"] = (
+            "playing" if entry["occupants"]
+            else "historical_play" if entry["historyCount"]
+            else "scheduled" if entry["scheduledCount"]
+            else "unknown"
+        )
+        rows.append(entry)
+    rows.sort(key=lambda row: (row["area"], row["pod"]))
+    return {
+        "pods": rows,
+        "boundary": "Only explicit live-play evidence places a Sim inside a pod; check-in is not play.",
+    }
+
+
 def _with_known_venue(orchestrator: Orchestrator, match_index):
     """Attach the latest known venue to every record using the same pod."""
     directory = _actor_directory(orchestrator)
@@ -549,11 +740,39 @@ def _arcade_snapshot(orchestrator):
     """Expose replay-safe local Arcade records; they are never product evidence."""
     value = orchestrator.storage.load_json(orchestrator.storage.state / "arcade" / "matches.json", default={})
     matches = value.get("matches") if isinstance(value, dict) else {}
+    directory = _actor_directory(orchestrator)
+
+    def labels(values):
+        return [directory.get(actor_id, "Unnamed Sim") for actor_id in values if isinstance(actor_id, str)] if isinstance(values, list) else []
+
+    def safe_rally(row):
+        if not isinstance(row, dict):
+            return None
+        score = row.get("score") if isinstance(row.get("score"), dict) else {}
+        return {
+            "rally": row.get("rally"),
+            "winnerSide": row.get("winnerSide"),
+            "winner": directory.get(row.get("winner"), "Unnamed Sim"),
+            "score": {side: score.get(side) for side in ("left", "right")},
+            "reason": row.get("reason"),
+        }
+
     rows = []
     for match in matches.values() if isinstance(matches, dict) else []:
         if not isinstance(match, dict):
             continue
-        rows.append({key: match.get(key) for key in ("occurrenceKey", "game", "left", "right", "score", "winner", "winnerSide", "rallies", "status")})
+        rows.append({
+            "occurrenceKey": match.get("occurrenceKey"),
+            "game": match.get("game"),
+            "left": labels(match.get("left")),
+            "right": labels(match.get("right")),
+            "score": match.get("score"),
+            "winner": labels(match.get("winner")),
+            "winnerSide": match.get("winnerSide"),
+            "rallies": [rally for rally in (safe_rally(row) for row in match.get("rallies", [])) if rally is not None],
+            "status": match.get("status"),
+            "simulatedAt": match.get("simulatedAt"),
+        })
     return {"kind": "arcade_simulation", "matches": sorted(rows, key=lambda row: str(row.get("occurrenceKey") or ""))}
 
 
@@ -988,7 +1207,7 @@ def serve(
         beat_every_seconds=beat_every_seconds,
         turns_per_beat=turns_per_beat,
     )
-    print(f"Preview Club observatory: http://{host}:{port}")
+    print(f"Club Lab observatory: http://{host}:{port}")
     if beat_every_seconds is None:
         print("Actor scheduler: disabled")
     else:

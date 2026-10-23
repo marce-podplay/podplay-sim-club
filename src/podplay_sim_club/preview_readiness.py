@@ -36,7 +36,12 @@ def inspect_preview_readiness(
     pod_id = seed_plan["podId"]
     area_id = seed_plan["areaId"]
     pod_query = urlencode(
-        [("expand", "_links.tables"), ("expand", "_links.area")]
+        [
+            ("expand", "_links.tables"),
+            ("expand", "_links.area"),
+            ("expand", "_links.settings"),
+            ("scope", "admin"),
+        ]
     )
     pod = admin_client.get(f"/apis/v2/pods/{pod_id}?{pod_query}")
     if not isinstance(pod, dict) or pod.get("id") != pod_id:
@@ -107,6 +112,7 @@ def inspect_preview_readiness(
             "timezone": pod.get("timezone"),
             "openingHours": pod.get("openingHours"),
             "availableCourtCount": _available_court_count(pod),
+            "bookingEngine": _booking_engine(pod),
         },
         "waiverRequired": waiver_required,
         "actors": actors,
@@ -129,6 +135,20 @@ def inspect_preview_readiness(
     storage = Storage(root)
     storage.write_json(storage.state / READINESS_STATE, report)
     return report
+
+
+def _booking_engine(pod: Dict[str, Any]) -> Optional[str]:
+    """Read only the bounded engine selector; no IDs or setting payloads leak."""
+    candidates = (pod.get("venueSettingsOverrides"), pod.get("settings"))
+    for candidate in candidates:
+        items = candidate.get("items") if isinstance(candidate, dict) else None
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if isinstance(item, dict) and item.get("id") == "feature.bookingEngine":
+                value = item.get("value")
+                return value if isinstance(value, str) and value in {"LEGACY", "UNIFIED"} else None
+    return None
 
 
 def summarize_payment(value: Any) -> Dict[str, Any]:

@@ -5,7 +5,7 @@ from typing import Any, Callable, Dict, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, build_opener
 
-from .preview_participation import _RejectRedirects
+from .preview_participation import _RejectRedirects, find_actor_invitation
 from .preview_readonly import MAX_RESPONSE_BYTES, PreviewReadError, PreviewReadonlyClient, collection_items
 from .preview_write import PreviewWriteError
 from .target_policy import TargetPolicy
@@ -23,6 +23,46 @@ def find_event_signup(client: PreviewReadonlyClient, event_id: str, user_id: str
     if len(matches) > 1:
         raise PreviewReadError("multiple active Preview Club signups found for one player")
     return matches[0] if matches else None
+
+
+def read_captain_attendance_invitation(
+    client: PreviewReadonlyClient, event_id: str, signup_id: str
+) -> Dict[str, Any]:
+    """Resolve a captain's self-signup to its real attendance invitation.
+
+    A team captain's signup ID identifies a ``SIGNUP`` open invitation, not the
+    accepted ``EVENT_SIGNUP`` invitation used by the check-in endpoint.  The
+    player-visible signup detail is the bounded bridge between those records.
+    We then read the matching invitation collection item so check-in status is
+    available for the normal read-back contract.
+    """
+    if not isinstance(signup_id, str) or not signup_id:
+        raise PreviewReadError("captain signup reference is missing")
+    detail = client.get(f"/apis/v2/events/{event_id}/signups/{signup_id}")
+    if not isinstance(detail, dict) or detail.get("id") != signup_id:
+        raise PreviewReadError("captain signup detail did not match the stored signup")
+    summary = detail.get("summary")
+    if not isinstance(summary, dict):
+        raise PreviewReadError("captain signup detail has an unexpected shape")
+    open_invitation = summary.get("openInvitation")
+    invitation = summary.get("invitation")
+    if (
+        not isinstance(open_invitation, dict)
+        or open_invitation.get("id") != signup_id
+        or not isinstance(invitation, dict)
+        or not isinstance(invitation.get("id"), str)
+        or invitation.get("status") not in {"ACCEPTED", "CHECKED_IN", "COMPLETE"}
+        or not isinstance(invitation.get("openInvitation"), dict)
+        or invitation["openInvitation"].get("id") != signup_id
+    ):
+        raise PreviewReadError("captain signup did not resolve to an accepted attendance invitation")
+    profile = invitation.get("inviteeProfile")
+    if not isinstance(profile, dict) or not isinstance(profile.get("id"), str):
+        raise PreviewReadError("captain attendance invitation has no named invitee")
+    current = find_actor_invitation(client, event_id, profile["id"])
+    if not isinstance(current, dict) or current.get("id") != invitation["id"]:
+        raise PreviewReadError("captain attendance invitation read-back is ambiguous")
+    return current
 
 
 class PreviewEventSignupWriter:
@@ -49,6 +89,11 @@ class PreviewEventSignupWriter:
             "type": "PREVIEW", "termsAgreed": True, "liabilityWaiverAgreed": True,
             "kidsWaiverAgreed": True, "virtualCredits": 0, "passesStrategy": "USE_ALL",
         })
+        errors = preview.get("errors") if isinstance(preview, dict) else None
+        if isinstance(errors, list) and errors:
+            codes = [row.get("code") for row in errors if isinstance(row, dict) and isinstance(row.get("code"), str)]
+            suffix = f" ({','.join(codes)})" if codes else ""
+            raise PreviewWriteError(f"event signup preview returned validation errors{suffix}")
         virtual_credits = preview.get("summary", {}).get("virtualCredits", 0)
         if not isinstance(virtual_credits, (int, float)):
             raise PreviewWriteError("event signup preview returned invalid virtual credits")

@@ -1,6 +1,7 @@
 """Origin-locked, non-persisting evaluation of one baseline booking."""
 
 import json
+import re
 from typing import Any, Callable, Dict, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -167,6 +168,88 @@ class PreviewBookingEvaluator:
                     raise PreviewEvaluationError("booking preview sessionGuests reference is invalid")
 
 
+class UnifiedBookingQuoteEvaluator:
+    """Read one Unified Booking quote without creating a booking.
+
+    Unified venues intentionally reject the legacy ``/bookings`` PREVIEW
+    payload.  Their safe discovery primitive is a quote.  This adapter keeps
+    that boundary explicit: it can never call the quote-confirm endpoint.
+    """
+
+    def __init__(
+        self,
+        policy: TargetPolicy,
+        id_token: str,
+        transport: Optional[Transport] = None,
+    ):
+        if policy.writes_allowed:
+            raise PreviewEvaluationError("unified quote requires read-only target mode")
+        self.policy = policy
+        self._id_token = id_token
+        if transport is None:
+            opener = build_opener(_RejectRedirects())
+            self._transport = lambda request, timeout: opener.open(request, timeout=timeout)
+        else:
+            self._transport = transport
+
+    def evaluate(
+        self, pod_id: str, starts_at: str, ends_at: str, group_size: int
+    ) -> Dict[str, Any]:
+        payload = {
+            "slot": {
+                "pod": {"id": pod_id},
+                "startsAt": starts_at,
+                "endsAt": ends_at,
+            },
+            "groupSize": group_size,
+        }
+        self._validate_payload(payload)
+        url = self.policy.target_origin + "/apis/v2/bookings/quotes"
+        self.policy.assert_url(url)
+        request = Request(
+            url,
+            data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self._id_token}",
+                "User-Agent": "podplay-sim-club/0.1 unified-booking-quote",
+            },
+            method="POST",
+        )
+        try:
+            response = self._transport(request, 20)
+            with response:
+                self.policy.assert_url(response.geturl())
+                body = response.read(MAX_RESPONSE_BYTES + 1)
+        except PreviewEvaluationError:
+            raise
+        except HTTPError as exc:
+            if exc.code == 422:
+                codes = _nested_error_codes(_decode_object(exc.read(MAX_RESPONSE_BYTES + 1)))
+                detail = f" ({','.join(codes)})" if codes else ""
+                raise PreviewEvaluationError(f"unified booking quote rejected with HTTP 422{detail}") from exc
+            raise PreviewEvaluationError(f"unified booking quote failed with HTTP {exc.code}") from exc
+        except URLError as exc:
+            raise PreviewEvaluationError("unified booking quote network request failed") from exc
+        return _decode_object(body)
+
+    @staticmethod
+    def _validate_payload(payload: Dict[str, Any]) -> None:
+        if set(payload) != {"slot", "groupSize"}:
+            raise PreviewEvaluationError("only the fixed Unified Booking quote payload is allowed")
+        slot = payload.get("slot")
+        if not isinstance(slot, dict) or set(slot) != {"pod", "startsAt", "endsAt"}:
+            raise PreviewEvaluationError("unified booking quote slot is invalid")
+        pod = slot.get("pod")
+        if not isinstance(pod, dict) or set(pod) != {"id"} or not isinstance(pod.get("id"), str) or not pod["id"]:
+            raise PreviewEvaluationError("unified booking quote pod reference is invalid")
+        if not all(isinstance(slot.get(key), str) and slot[key] for key in ("startsAt", "endsAt")):
+            raise PreviewEvaluationError("unified booking quote times are invalid")
+        if not isinstance(payload.get("groupSize"), int) or payload["groupSize"] < 1:
+            raise PreviewEvaluationError("unified booking quote group size is invalid")
+
+
 def summarize_booking_preview(value: Any) -> Dict[str, Any]:
     if not isinstance(value, dict) or value.get("type") != "PREVIEW":
         raise PreviewReadError("booking preview response has an unexpected type")
@@ -191,6 +274,32 @@ def summarize_booking_preview(value: Any) -> Dict[str, Any]:
         "maxChargableAmount": float(summary.get("maxChargableAmount") or 0),
         "errorCodes": errors,
         "readyForOrder": not errors and value.get("status") != "INVALID",
+    }
+
+
+def summarize_unified_booking_quote(value: Any) -> Dict[str, Any]:
+    """Return portable, non-identifying evidence from a Unified quote."""
+    if not isinstance(value, dict):
+        raise PreviewReadError("unified booking quote has an unexpected shape")
+    pricing = value.get("pricing")
+    due = pricing.get("due") if isinstance(pricing, dict) else None
+    total = due.get("total") if isinstance(due, dict) else None
+    if not isinstance(total, dict) or not isinstance(total.get("amount"), int):
+        raise PreviewReadError("unified booking quote is missing its total")
+    currency = total.get("currency")
+    if not isinstance(currency, str) or len(currency) != 3 or not currency.isupper():
+        raise PreviewReadError("unified booking quote currency is invalid")
+    issues = value.get("issues")
+    codes = sorted(set(_error_codes(issues)))
+    return {
+        "type": "UNIFIED_QUOTE",
+        "status": "QUOTED",
+        "total": total["amount"] / 100,
+        "currency": currency,
+        "virtualCredits": 0.0,
+        "maxChargableAmount": total["amount"] / 100,
+        "errorCodes": codes,
+        "readyForOrder": not codes,
     }
 
 
@@ -222,7 +331,10 @@ def _nested_error_codes(value: Any) -> list:
     result = []
     if isinstance(value, dict):
         code = value.get("code")
-        if isinstance(code, str) and code.isalnum() and len(code) <= 16:
+        # Preview uses both compact codes (``EB016``) and stable symbolic
+        # codes (``payment_method_required``).  Keep only a short code-shaped
+        # token; never surface arbitrary server text, IDs, or payload fields.
+        if isinstance(code, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", code):
             result.append(code)
         for child in value.values():
             result.extend(_nested_error_codes(child))

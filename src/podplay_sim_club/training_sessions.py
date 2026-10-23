@@ -24,7 +24,206 @@ class TrainingSessionError(ValueError):
 
 
 BOOKING_AUTHORITY_LIFETIME = timedelta(hours=2)
-ACTIONABLE_TRAINING_STATUSES = {"captain_invited", "agreed", "preview_ready", "planned"}
+ACTIONABLE_TRAINING_STATUSES = {"captain_invited", "agreed", "preview_ready", "planned", "awaiting_third_player"}
+
+
+def invite_third_player(root: Path, intent_id: str, captain: str, third_player: str, now: datetime) -> Dict[str, Any]:
+    """Address an optional local third-player request for a team practice.
+
+    This is social evidence only: it neither books nor promises payment.  The
+    existing pair remains a fact, while booking pauses until the recipient
+    explicitly accepts.
+    """
+    storage = Storage(root)
+    observed_at = isoformat(now)
+    with storage.writer_lock():
+        ledger = load_intent_ledger(storage)
+        original = ledger["intents"].get(intent_id)
+        if not isinstance(original, dict) or original.get("journey") != "customer_training":
+            raise TrainingSessionError("training agreement is unavailable")
+        participants = original.get("participants")
+        if (original.get("bookerActorId") != captain or not isinstance(participants, list)
+                or len(participants) != 2 or captain not in participants or third_player in participants):
+            raise TrainingSessionError("third-player invitation does not match this captain-led pair")
+        roster = storage.load_json(storage.root / "characters" / "roster.json", default={})
+        known = {row.get("actorId") for row in roster.get("characters", [])
+                 if isinstance(row, dict) and isinstance(row.get("actorId"), str)} if isinstance(roster, dict) else set()
+        if third_player not in known:
+            raise TrainingSessionError("third player is not in the Club roster")
+        existing = original.get("thirdPlayerInvitation")
+        if isinstance(existing, dict):
+            if existing.get("actorId") != third_player:
+                raise TrainingSessionError("a different third-player invitation is already awaiting a decision")
+            return deepcopy(original)
+        intent = deepcopy(original)
+        invitation_id = f"{intent_id}:third-player:{third_player}"
+        intent.update({
+            "status": "awaiting_third_player",
+            "thirdPlayerInvitation": {"actorId": third_player, "status": "invited", "invitedAt": observed_at,
+                                      "reason": "captain_requested_optional_group_training"},
+            "nextAction": "await_third_player_acceptance_before_player_booking",
+        })
+        save_intent(storage, ledger, intent)
+        message = {
+            "id": invitation_id, "channel": "club", "kind": "training_third_player_invitation",
+            "conversationId": intent.get("conversationId"), "commitmentId": intent.get("commitmentId"),
+            "speechAct": "request", "from": captain, "to": [third_player], "intentId": intent_id,
+            "text": "Would you join this 30-minute training? The booking party size can be adjusted before any payment. Your reply is not a booking or payment commitment.",
+            "observedAt": observed_at, "remoteWrites": 0,
+        }
+        storage.append_jsonl(storage.channel_path("club"), message)
+        message_fact = make_message(
+            message_id=invitation_id, conversation_id=str(intent["conversationId"]), correlation_id=f"journey:{intent_id}",
+            sender_actor_id=captain, recipient_actor_ids=[third_player], speech_act="request",
+            content_code="training.third_player.requested", occurred_at=observed_at,
+            commitment_id=str(intent["commitmentId"]),
+            parameters={"intentRef": intent_id, "reason": "captain_requested_optional_group_training"},
+        )
+        append_protocol_facts_locked(storage, [message_fact])
+    return intent
+
+
+def withdraw_third_player_invitation(root: Path, intent_id: str, captain: str, now: datetime) -> Dict[str, Any]:
+    """Withdraw an unaccepted optional third-player request.
+
+    This corrects a social plan before a recipient responds; it never affects
+    a product booking, payment, or player identity.
+    """
+    storage = Storage(root)
+    observed_at = isoformat(now)
+    with storage.writer_lock():
+        ledger = load_intent_ledger(storage)
+        original = ledger["intents"].get(intent_id)
+        invitation = original.get("thirdPlayerInvitation") if isinstance(original, dict) else None
+        if (
+            not isinstance(original, dict)
+            or original.get("journey") != "customer_training"
+            or original.get("bookerActorId") != captain
+            or original.get("status") != "awaiting_third_player"
+            or not isinstance(invitation, dict)
+            or invitation.get("status") != "invited"
+        ):
+            raise TrainingSessionError("third-player invitation is not available to withdraw")
+        recipient = invitation.get("actorId")
+        if not isinstance(recipient, str):
+            raise TrainingSessionError("third-player invitation has no recipient")
+        intent = deepcopy(original)
+        intent.update({
+            "status": "agreed",
+            "thirdPlayerInvitation": {**invitation, "status": "withdrawn", "withdrawnAt": observed_at,
+                                      "withdrawalReason": "party_size_is_adjustable_at_visible_checkout"},
+            "nextAction": "plan_live_w37_availability_then_player_booking",
+        })
+        save_intent(storage, ledger, intent)
+        message_id = f"{intent_id}:third-player:{recipient}:withdrawal"
+        message = {
+            "id": message_id, "channel": "club", "kind": "training_third_player_withdrawal",
+            "conversationId": intent.get("conversationId"), "commitmentId": intent.get("commitmentId"),
+            "speechAct": "inform", "from": captain, "to": [recipient], "intentId": intent_id,
+            "text": "The optional third-player request was withdrawn: the visible checkout supports the original pair. No booking or payment was made.",
+            "observedAt": observed_at, "remoteWrites": 0,
+        }
+        storage.append_jsonl(storage.channel_path("club"), message)
+        append_protocol_facts_locked(storage, [make_message(
+            message_id=message_id, conversation_id=str(intent["conversationId"]), correlation_id=f"journey:{intent_id}",
+            sender_actor_id=captain, recipient_actor_ids=[recipient], speech_act="inform",
+            content_code="training.third_player.withdrawn", occurred_at=observed_at,
+            commitment_id=str(intent["commitmentId"]),
+            parameters={"intentRef": intent_id, "reason": "party_size_is_adjustable_at_visible_checkout"},
+        )])
+    return intent
+
+
+def remaining_team_member(root: Path, intent: Dict[str, Any]) -> Optional[str]:
+    """Return the sole rostered teammate not yet named on a team practice.
+
+    This is only a social suggestion for an optional larger practice.  The
+    player-facing checkout owns the actual party-size choice and may allow the
+    existing pair to book directly.
+    """
+    team_id = intent.get("trainingTeamId")
+    participants = intent.get("participants")
+    if not isinstance(team_id, str) or not isinstance(participants, list) or len(participants) != 2:
+        return None
+    storage = Storage(root)
+    roster = storage.load_json(storage.root / "characters" / "roster.json", default={})
+    if not isinstance(roster, dict):
+        return None
+    team = next((row for row in roster.get("teams", []) if isinstance(row, dict) and row.get("id") == team_id), None)
+    characters = {
+        row.get("id"): row for row in roster.get("characters", [])
+        if isinstance(row, dict) and isinstance(row.get("id"), str)
+    }
+    if not isinstance(team, dict):
+        return None
+    member_actors = [
+        characters.get(member_id, {}).get("actorId")
+        for member_id in team.get("members", []) if isinstance(member_id, str)
+        and isinstance(characters.get(member_id), dict)
+    ]
+    remaining = [actor_id for actor_id in member_actors if isinstance(actor_id, str) and actor_id not in participants]
+    return remaining[0] if len(remaining) == 1 else None
+
+
+def accept_third_player(root: Path, intent_id: str, third_player: str, now: datetime) -> Dict[str, Any]:
+    """Persist the addressed third player's own response to an Open Pod request."""
+    storage = Storage(root)
+    observed_at = isoformat(now)
+    with storage.writer_lock():
+        ledger = load_intent_ledger(storage)
+        original = ledger["intents"].get(intent_id)
+        if not isinstance(original, dict) or original.get("journey") != "customer_training":
+            raise TrainingSessionError("third-player invitation is unavailable")
+        invitation = original.get("thirdPlayerInvitation")
+        participants = original.get("participants")
+        captain = original.get("bookerActorId")
+        if (
+            original.get("status") != "awaiting_third_player"
+            or not isinstance(invitation, dict)
+            or invitation.get("actorId") != third_player
+            or invitation.get("status") != "invited"
+            or not isinstance(participants, list)
+            or len(participants) != 2
+            or not isinstance(captain, str)
+        ):
+            raise TrainingSessionError("third-player invitation is not awaiting this player's decision")
+        roster = storage.load_json(storage.root / "characters" / "roster.json", default={})
+        names = {
+            row.get("actorId"): str(row.get("name") or row.get("actorId"))
+            for row in roster.get("characters", [])
+            if isinstance(row, dict) and isinstance(row.get("actorId"), str)
+        } if isinstance(roster, dict) else {}
+        if third_player not in names:
+            raise TrainingSessionError("third player is not in the Club roster")
+        intent = deepcopy(original)
+        intent["participants"] = [*participants, third_player]
+        intent["status"] = "agreed"
+        intent["thirdPlayerInvitation"] = {**invitation, "status": "accepted", "acceptedAt": observed_at}
+        intent["nextAction"] = "plan_live_w37_availability_then_player_booking"
+        save_intent(storage, ledger, intent)
+        message_id = f"{intent_id}:third-player:{third_player}:acceptance"
+        message = {
+            "id": message_id, "channel": "club", "kind": "training_third_player_acceptance",
+            "conversationId": intent.get("conversationId"), "commitmentId": intent.get("commitmentId"), "speechAct": "accept",
+            "from": third_player, "to": [captain], "intentId": intent_id,
+            "inReplyTo": f"{intent_id}:third-player:{third_player}",
+            "text": f"{names[third_player]} accepts the third-player request for this 30-minute training. The lead may now plan one available W37 Open Pod booking.",
+            "observedAt": observed_at, "remoteWrites": 0,
+        }
+        storage.append_jsonl(storage.channel_path("club"), message)
+        conversation_id = intent.get("conversationId")
+        commitment_id = intent.get("commitmentId")
+        if isinstance(conversation_id, str) and isinstance(commitment_id, str):
+            fact = make_message(
+                message_id=message_id, conversation_id=conversation_id, correlation_id=f"journey:{intent_id}",
+                sender_actor_id=third_player, recipient_actor_ids=[captain], speech_act="accept",
+                content_code="training.third_player.accepted", occurred_at=observed_at, commitment_id=commitment_id,
+                in_reply_to=f"{intent_id}:third-player:{third_player}",
+                causation_id=reply_causation(f"{intent_id}:third-player:{third_player}"),
+                parameters={"intentRef": intent_id, "reason": invitation.get("reason")}, grounding="understood",
+            )
+            append_protocol_facts_locked(storage, [fact])
+    return intent
 
 
 def propose(root: Path, scenario_name: str, now: datetime) -> Dict[str, Any]:
@@ -358,7 +557,7 @@ def next_booking_task(root: Path, now: Optional[datetime] = None) -> Dict[str, A
             "invite_player",
             "accept_invitation",
         ],
-        "detail": "both named training players agreed; plan live W37 availability before the guarded player booking",
+        "detail": f"{len(intent['participants'])} named training players agreed; plan live W37 availability before the guarded player booking",
     }
 
 

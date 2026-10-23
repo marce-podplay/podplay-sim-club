@@ -471,6 +471,26 @@ def _training_offers(storage: Storage, people: Dict[str, Dict[str, Any]], roster
             offers.append({"actorId": actor_id, "kind": "propose_team_training", "teammateId": teammate, "reason": "owner_training_nudge_and_desire"})
     ledger = storage.load_json(storage.state / "booking-intents.json", default={})
     for intent in ledger.get("intents", {}).values() if isinstance(ledger, dict) else []:
+        if (
+            isinstance(intent, dict)
+            and intent.get("journey") == "customer_training"
+            and intent.get("status") == "awaiting_third_player"
+        ):
+            invitation = intent.get("thirdPlayerInvitation")
+            third_player = invitation.get("actorId") if isinstance(invitation, dict) else None
+            if (
+                isinstance(third_player, str)
+                and third_player in people
+                and int(motives[third_player].get("desireToPlay", 0)) >= threshold
+                and invitation.get("status") == "invited"
+            ):
+                offers.append({
+                    "actorId": third_player,
+                    "kind": "accept_training_third_player",
+                    "intentId": intent.get("id"),
+                    "reason": "addressed_open_pod_minimum_group_request_and_desire",
+                })
+            continue
         if not isinstance(intent, dict) or intent.get("journey") != "customer_training" or intent.get("status") != "captain_invited":
             continue
         participants = intent.get("participants")
@@ -532,6 +552,8 @@ def _booked_share_invitation_offers(
     intents = ledger.get("intents", {}) if isinstance(ledger, dict) else {}
     sidecar = storage.load_json(storage.state / "share-invitations.json", default={})
     retained = sidecar.get("invitations", {}) if isinstance(sidecar, dict) else {}
+    private_sidecar = storage.load_json(storage.state / "secure-channel" / "owner-invitations.json", default={})
+    private_retained = private_sidecar if isinstance(private_sidecar, dict) else {}
     if not isinstance(intents, dict) or not isinstance(retained, dict):
         return []
     offers: List[Dict[str, Any]] = []
@@ -540,22 +562,21 @@ def _booked_share_invitation_offers(
             continue
         if intent.get("journey") not in {"customer_training", "customer_team_signup"}:
             continue
-        if intent.get("status") not in {"booked", "team_signup_in_progress", "team_members_registered"}:
+        if intent.get("status") not in {"booked", "booked_browser_observed", "team_signup_in_progress", "team_members_registered"}:
             continue
         owner = intent.get("bookerActorId")
         participants = intent.get("participants")
         booking = intent.get("booking") if isinstance(intent.get("booking"), dict) else {}
         plan = intent.get("previewPlan") if isinstance(intent.get("previewPlan"), dict) else {}
         occurrence = booking.get("occurrenceKey")
-        event_id = booking.get("eventId")
         recipients = [
             actor_id for actor_id in participants
             if isinstance(actor_id, str) and actor_id != owner
         ] if isinstance(participants, list) else []
         if (
             not isinstance(owner, str) or owner not in people
-            or not isinstance(occurrence, str) or not isinstance(event_id, str)
-            or not recipients or occurrence in retained
+            or not isinstance(occurrence, str)
+            or not recipients or occurrence in retained or intent_id in private_retained
         ):
             continue
         end_time = plan.get("endTime")
@@ -580,6 +601,8 @@ def _share_redemption_offers(
     intents = ledger.get("intents", {}) if isinstance(ledger, dict) else {}
     sidecar = storage.load_json(storage.state / "share-invitations.json", default={})
     retained = sidecar.get("invitations", {}) if isinstance(sidecar, dict) else {}
+    private_sidecar = storage.load_json(storage.state / "secure-channel" / "recipient-mailboxes.json", default={})
+    private_mailboxes = private_sidecar if isinstance(private_sidecar, dict) else {}
     if not isinstance(intents, dict) or not isinstance(retained, dict):
         return []
     offers: List[Dict[str, Any]] = []
@@ -591,7 +614,7 @@ def _share_redemption_offers(
         booking = intent.get("booking") if isinstance(intent.get("booking"), dict) else {}
         plan = intent.get("previewPlan") if isinstance(intent.get("previewPlan"), dict) else {}
         occurrence, owner = booking.get("occurrenceKey"), intent.get("bookerActorId")
-        if not isinstance(occurrence, str) or not isinstance(owner, str) or not isinstance(retained.get(occurrence), dict):
+        if not isinstance(occurrence, str) or not isinstance(owner, str):
             continue
         end_time = plan.get("endTime")
         if isinstance(end_time, str) and parse_instant(end_time) <= instant:
@@ -601,7 +624,18 @@ def _share_redemption_offers(
             if isinstance(row, dict) and row.get("status") == "ACCEPTED"
         }
         for recipient in intent.get("participants", []) if isinstance(intent.get("participants"), list) else []:
+            mailbox = private_mailboxes.get(f"{recipient}:{intent_id}") if isinstance(recipient, str) else None
+            has_legacy_handoff = isinstance(retained.get(occurrence), dict)
+            has_private_handoff = (
+                isinstance(mailbox, dict)
+                and mailbox.get("status") == "delivered"
+                and mailbox.get("intentId") == intent_id
+                and mailbox.get("recipientActorId") == recipient
+                and mailbox.get("ownerActorId") == owner
+            )
             if isinstance(recipient, str) and recipient != owner and recipient in people and recipient not in accepted:
+                if not (has_legacy_handoff or has_private_handoff):
+                    continue
                 attention = intent.get("shareInvitationAttention") if isinstance(intent.get("shareInvitationAttention"), dict) else {}
                 acknowledgement = attention.get(recipient) if isinstance(attention.get(recipient), dict) else {}
                 offers.append({

@@ -35,7 +35,7 @@ def render(view: Dict[str, Any]) -> str:
     clock = view["observedAt"]
     preview_state = "ONLINE" if view["preview"]["reachable"] else "OFFLINE"
     header = [
-        f"PREVIEW CLUB // WORLD SIGNAL   {preview_state} {clock}",
+        f"CLUB LAB // WORLD SIGNAL   Preview {preview_state} {clock}",
         f"{view['season']}   beat {view['beat']['count']}   "
         f"last turns {view['beat']['lastTurnCount']}",
         "",
@@ -89,7 +89,7 @@ def render_needs(view: Dict[str, Any]) -> str:
     needs = view.get("needs", {})
     intents = view.get("bookingIntents", [])
     lines = [
-        f"PREVIEW CLUB // NEEDS SIGNAL   {view['observedAt']}",
+        f"CLUB LAB // NEEDS SIGNAL   {view['observedAt']}",
         f"{view['season']}   beat {view['beat']['count']}   "
         f"last turns {view['beat']['lastTurnCount']}",
         "",

@@ -1,6 +1,7 @@
 """Durable occurrence ledger for PR-preview matches."""
 
 from copy import deepcopy
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -21,6 +22,18 @@ def load_match_ledger(storage: Storage, target_origin: str) -> JsonObject:
 
     path = storage.state / LEDGER_FILE
     value = storage.load_json(path, default=None)
+    # Preview environments are disposable and their origins rotate.  Preserve
+    # the prior season's ledger rather than treating it as a reason to block a
+    # new, explicitly approved target.  Scoped files remain local-only and
+    # use a digest so the origin never appears in the filename/dashboard.
+    if isinstance(value, dict) and value.get("targetOrigin") not in {None, target_origin}:
+        scoped_path = _scoped_path(storage, target_origin)
+        scoped = storage.load_json(scoped_path, default=None)
+        if scoped is None:
+            scoped = _new_ledger(target_origin)
+            storage.write_json(scoped_path, scoped)
+        _validate_ledger(scoped, target_origin)
+        return scoped
     if value is None:
         value = _new_ledger(target_origin)
         legacy_path = storage.state / LEGACY_FILE
@@ -33,14 +46,7 @@ def load_match_ledger(storage: Storage, target_origin: str) -> JsonObject:
             storage.write_json(path, value)
         return value
 
-    if not isinstance(value, dict) or value.get("schemaVersion") != 2:
-        raise PreviewMatchLedgerError("preview match ledger has an unsupported schema")
-    _assert_origin(value, target_origin, "preview match ledger")
-    if not isinstance(value.get("matches"), dict):
-        raise PreviewMatchLedgerError("preview match ledger is missing matches")
-    active = value.get("activeOccurrenceKey")
-    if active is not None and active not in value["matches"]:
-        raise PreviewMatchLedgerError("active preview occurrence is missing from the ledger")
+    _validate_ledger(value, target_origin)
     return value
 
 
@@ -55,7 +61,7 @@ def save_match(
     ledger["matches"][key] = deepcopy(match)
     if make_active:
         ledger["activeOccurrenceKey"] = key
-    storage.write_json(storage.state / LEDGER_FILE, ledger)
+    storage.write_json(_write_path(storage, ledger), ledger)
     return key
 
 
@@ -83,7 +89,7 @@ def select_active(storage: Storage, ledger: JsonObject, occurrence: str) -> None
             f"preview occurrence is not in the ledger: {occurrence}"
         )
     ledger["activeOccurrenceKey"] = occurrence
-    storage.write_json(storage.state / LEDGER_FILE, ledger)
+    storage.write_json(_write_path(storage, ledger), ledger)
 
 
 def sanitized_match_index(ledger: JsonObject) -> JsonObject:
@@ -213,6 +219,32 @@ def _new_ledger(target_origin: str) -> JsonObject:
         "activeOccurrenceKey": None,
         "matches": {},
     }
+
+
+def _scoped_path(storage: Storage, target_origin: str) -> Path:
+    digest = sha256(target_origin.encode("utf-8")).hexdigest()[:16]
+    return storage.state / f"preview-matches-{digest}.json"
+
+
+def _write_path(storage: Storage, ledger: JsonObject) -> Path:
+    primary = storage.load_json(storage.state / LEDGER_FILE, default=None)
+    if isinstance(primary, dict) and primary.get("targetOrigin") not in {None, ledger.get("targetOrigin")}:
+        target = ledger.get("targetOrigin")
+        if not isinstance(target, str) or not target:
+            raise PreviewMatchLedgerError("preview match ledger target is invalid")
+        return _scoped_path(storage, target)
+    return storage.state / LEDGER_FILE
+
+
+def _validate_ledger(value: Any, target_origin: str) -> None:
+    if not isinstance(value, dict) or value.get("schemaVersion") != 2:
+        raise PreviewMatchLedgerError("preview match ledger has an unsupported schema")
+    _assert_origin(value, target_origin, "preview match ledger")
+    if not isinstance(value.get("matches"), dict):
+        raise PreviewMatchLedgerError("preview match ledger is missing matches")
+    active = value.get("activeOccurrenceKey")
+    if active is not None and active not in value["matches"]:
+        raise PreviewMatchLedgerError("active preview occurrence is missing from the ledger")
 
 
 def _assert_origin(value: JsonObject, target_origin: str, label: str) -> None:

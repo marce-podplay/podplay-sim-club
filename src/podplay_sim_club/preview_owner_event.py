@@ -27,13 +27,15 @@ class PreviewOwnerEventWriter:
         opener = build_opener(_RejectRedirects())
         self._transport = transport or (lambda request, timeout: opener.open(request, timeout=timeout))
 
-    def create_open_play(self, items: List[Dict[str, str]], name: str, total_teams: int = 2) -> Dict[str, Any]:
+    def create_open_play(self, items: List[Dict[str, str]], name: str, total_teams: int = 2, team_size: int = 1) -> Dict[str, Any]:
         if self._used:
             raise PreviewWriteError("owner event write budget exhausted")
-        if not isinstance(name, str) or not name.startswith("Preview Club ") or len(name) > 120:
-            raise PreviewWriteError("owner event name must be a bounded Preview Club name")
+        if not isinstance(name, str) or not name.startswith("Club Lab ") or len(name) > 120:
+            raise PreviewWriteError("owner event name must be a bounded Club Lab name")
         if not isinstance(total_teams, int) or not 1 <= total_teams <= 8:
             raise PreviewWriteError("owner event team capacity must be between 1 and 8")
+        if not isinstance(team_size, int) or not 1 <= team_size <= 8:
+            raise PreviewWriteError("owner event team size must be between 1 and 8")
         if not isinstance(items, list) or not items:
             raise PreviewWriteError("owner event requires one or more session items")
         normalized_items = []
@@ -48,7 +50,7 @@ class PreviewOwnerEventWriter:
             "eventSubtype": "OPEN_PLAY",
             "eventCustomType": "Open Play",
             "eventName": name,
-            "eventDescription": "Preview Club simulated owner event.",
+            "eventDescription": "Club Lab simulated owner event.",
             "eventStatus": "PUBLISHED",
             "visibility": "LISTED",
             "admission": "OPEN",
@@ -57,7 +59,7 @@ class PreviewOwnerEventWriter:
             "admissionRating": {"type": "DOUBLES"},
             "admissionRate": {"regular": 0, "membersDefault": 0, "memberships": {"items": []}},
             "allowedMemberships": {"items": []},
-            "teamSize": 1,
+            "teamSize": team_size,
             "totalTeams": total_teams,
             "maxGuests": 0,
             "coachRate": None,

@@ -20,6 +20,7 @@ from .booking_intents import (
 from .actor_runtime import run_tick as run_actor_tick
 from .tournament import report_winner, run_tick as run_tournament_tick
 from .rally_engine import tick as run_rally_tick
+from .event_observation import observe_finished_events, observe_finished_training_sessions
 from .config import ClubConfig, ConfigurationError, RunMode
 from .credentials import CredentialsError, PreviewCredentials
 from .communications import record_invite_sent, record_training_check_in
@@ -31,14 +32,19 @@ from .player_login import session_check_record, verify_player_session
 from .preview_evaluation import (
     PreviewBookingEvaluator,
     PreviewEvaluationError,
+    UnifiedBookingQuoteEvaluator,
     summarize_booking_preview,
+    summarize_unified_booking_quote,
 )
 from .preview_booking import (
     PreviewBookingWriter,
+    UnifiedBookingWriter,
     find_matching_events,
     occurrence_key,
+    payment_method_id,
     read_back_event,
     summarize_order,
+    summarize_unified_order,
 )
 from .preview_funding import apply_funding_plan, build_funding_plan
 from .preview_match_ledger import (
@@ -56,7 +62,11 @@ from .preview_payment import (
 )
 from .preview_owner_event import PreviewOwnerEventWriter
 from .preview_owner_event import PreviewEventRescheduleWriter
-from .preview_event_signup import PreviewEventSignupWriter, find_event_signup
+from .preview_event_signup import (
+    PreviewEventSignupWriter,
+    find_event_signup,
+    read_captain_attendance_invitation,
+)
 from .preview_participation import (
     ACCEPTED_STATUSES,
     PreviewAcceptanceEvaluator,
@@ -79,12 +89,31 @@ from .preview_readiness import (
 )
 from .preview_seed import apply_identity_seed, build_seed_plan, load_preview_seed, seed_actor_ids
 from .preview_write import PreviewWriteError
+from .continuous_unified import (
+    ContinuousResearchError,
+    check_in_arrivals as check_in_continuous_unified_arrivals,
+    run_campaigns as run_continuous_unified_campaigns,
+)
+from .ambient_health import AmbientHealthError, check as check_ambient_health
 from .server import serve
 from .storage import Storage
 from .target_policy import TargetPolicy, TargetPolicyError
-from .team_challenges import TeamChallengeError, plan_challenge, resolve_booking_owner
+from .team_challenges import (
+    TeamChallengeError,
+    accept_challenge,
+    plan_challenge,
+    propose_captain_challenge,
+    resolve_booking_owner,
+)
+from .staff_team_event import StaffTeamEventError, acknowledge as acknowledge_staff_team_event, offer as offer_staff_team_event
 from .result_requests import report_finished_event_result
-from .training_sessions import TrainingSessionError, accept as accept_training, propose as propose_training
+from .training_sessions import (
+    TrainingSessionError,
+    accept as accept_training,
+    invite_third_player,
+    propose as propose_training,
+    withdraw_third_player_invitation,
+)
 from .share_invitations import (
     ShareInvitationError,
     open_share_invitation,
@@ -107,6 +136,89 @@ from .event_lifecycle import (
 )
 from .projections import rebuild_projections
 from .self_assets import SelfAssetValidationError
+from .product_research import (
+    ProductResearchError,
+    acknowledge_verification,
+    create_verification_request,
+    discover_team_signup_context_with_client,
+    feature_contract,
+    issue_candidate,
+    research_snapshot,
+    run_response_tick as run_research_response_tick,
+)
+from .continuity import ContinuityError, export_bundle, import_bundle, inspect_bundle
+from .season_recovery import (
+    SeasonRecoveryError,
+    approve as approve_season_recovery,
+    apply as apply_season_recovery,
+    plan as plan_season_recovery,
+    request as request_season_recovery,
+    snapshot as season_recovery_snapshot,
+)
+from .control_plane import (
+    ControlPlaneError,
+    acknowledge as acknowledge_control_notice,
+    acknowledge_awareness as acknowledge_control_awareness,
+    announce as announce_control_notice,
+    acknowledge_handoff as acknowledge_research_handoff,
+    acknowledge_release_notice as acknowledge_release,
+    authorize_rate_cards_planning,
+    request_rate_cards_pricing_basis,
+    propose_rate_cards_pricing_basis as create_rate_cards_pricing_basis_proposal,
+    respond_to_rate_cards_pricing_basis,
+    preauthorize_rate_cards_configuration_run,
+    offer_rate_cards_future_pilot_interest,
+    respond_to_rate_cards_future_pilot_interest,
+    request_rate_cards_price_verification,
+    respond_to_rate_cards_price_verification,
+    record_rate_cards_price_verification_observation,
+    research_handoff as create_research_handoff,
+    release_notice as create_release_notice,
+    season_notice as create_season_notice,
+    tick as tick_control_plane,
+)
+from .research_rewards import (
+    ResearchRewardError,
+    apply as apply_research_reward,
+    approve as approve_research_reward,
+    offer as offer_research_reward,
+    respond as respond_research_reward,
+    snapshot as research_rewards_snapshot,
+)
+from .configuration_experiments import (
+    ConfigurationExperimentError,
+    add_diary_note as add_configuration_diary_note,
+    decide_configuration_exploration,
+    discover_live_configuration,
+    discover_live_scope_path,
+    experiment_snapshot,
+    issue_technical_handoff,
+    record_configuration_observation,
+    propose_configuration_change,
+    prepare_rate_cards_change_packet,
+    prepare_rate_cards_configuration_proposal,
+    render_rate_cards_dry_run_manifest,
+    enact_rate_cards_pod_pilot,
+    record_rate_cards_enactment_scope_readback,
+    prepare_rate_cards_price_prediction,
+    adopt_rate_cards_checkout_tax_tolerance,
+    refresh_uncertainty as refresh_configuration_uncertainty,
+    request_configuration_exploration,
+    workflow_contract as configuration_workflow_contract,
+)
+from .research_portfolio import (
+    ResearchPortfolioError,
+    portfolio_snapshot,
+    sync_rate_cards_experiment,
+)
+from .staff_consultation import (
+    StaffConsultationError,
+    attach_rate_cards_scope_readback,
+    propose_rate_cards_plan,
+    revise_rate_cards_plan,
+    respond as respond_staff_consultation,
+    snapshot as staff_consultation_snapshot,
+)
 from .terminal import render, render_needs
 from .time import parse_instant
 
@@ -204,6 +316,57 @@ def build_parser() -> argparse.ArgumentParser:
     rally_tick.add_argument("--apply-preview", action="store_true", help="allow one guarded player-owned booking adapter invocation")
     rally_tick.add_argument("--confirm-origin", help="required with --apply-preview; exact Preview origin")
 
+    browser_journey = subparsers.add_parser(
+        "browser-journey",
+        help="claim or record one named Sim's local visible-browser work item",
+    )
+    browser_journey_subcommands = browser_journey.add_subparsers(dest="browser_journey_command", required=True)
+    browser_journey_claim = browser_journey_subcommands.add_parser("claim", help="let the named Sim take the next visible-browser step")
+    browser_journey_claim.add_argument("--job", required=True, dest="job_key")
+    browser_journey_claim.add_argument("--actor", required=True, dest="actor_id")
+    browser_journey_claim.add_argument("--at", help="observation time; defaults to now")
+    browser_journey_observe = browser_journey_subcommands.add_parser("observe", help="record a bounded visible-browser observation")
+    browser_journey_observe.add_argument("--job", required=True, dest="job_key")
+    browser_journey_observe.add_argument("--actor", required=True, dest="actor_id")
+    browser_journey_observe.add_argument(
+        "--kind", required=True,
+        choices=["visible_observation", "visible_action_completed", "unexpected_ui", "browser_pass"],
+    )
+    browser_journey_observe.add_argument("--at", help="observation time; defaults to now")
+    browser_journey_reconcile = browser_journey_subcommands.add_parser(
+        "reconcile-booking", help="reconcile a visibly confirmed player booking into the social ledger"
+    )
+    browser_journey_reconcile.add_argument("--intent", required=True, dest="intent_id")
+    browser_journey_reconcile.add_argument("--owner", required=True, dest="owner_actor_id")
+    browser_journey_reconcile.add_argument("--venue", required=True, dest="venue_label")
+    browser_journey_reconcile.add_argument("--start", required=True, dest="start_time")
+    browser_journey_reconcile.add_argument("--end", required=True, dest="end_time")
+    browser_journey_reconcile.add_argument("--group-size", required=True, type=int, dest="group_size")
+    browser_journey_reconcile.add_argument("--at", help="observation time; defaults to now")
+    browser_journey_accept = browser_journey_subcommands.add_parser(
+        "reconcile-invitation", help="reconcile a visibly confirmed player invitation acceptance into the local ledger"
+    )
+    browser_journey_accept.add_argument("--intent", required=True, dest="intent_id")
+    browser_journey_accept.add_argument("--recipient", required=True, dest="recipient_actor_id")
+    browser_journey_accept.add_argument("--at", help="observation time; defaults to now")
+    browser_journey_check_in = browser_journey_subcommands.add_parser(
+        "reconcile-staff-check-in", help="reconcile one visibly confirmed staff-browser check-in into the local ledger"
+    )
+    browser_journey_check_in.add_argument("--intent", required=True, dest="intent_id")
+    browser_journey_check_in.add_argument("--participant", required=True, dest="participant_actor_id")
+    browser_journey_check_in.add_argument("--at", help="observation time; defaults to now")
+
+    secure_channel = subparsers.add_parser("secure-channel", help="retain and deliver browser-created invitations privately")
+    secure_channel_subcommands = secure_channel.add_subparsers(dest="secure_channel_command", required=True)
+    secure_retain = secure_channel_subcommands.add_parser("retain-browser-invite", help="read one visible invite URL from stdin into the owner's private mailbox")
+    secure_retain.add_argument("--intent", required=True, dest="intent_id")
+    secure_retain.add_argument("--owner", required=True, dest="owner_actor_id")
+    secure_retain.add_argument("--origin", required=True, dest="expected_origin")
+    secure_deliver = secure_channel_subcommands.add_parser("deliver", help="immediately deliver a retained invitation to named private mailboxes")
+    secure_deliver.add_argument("--intent", required=True, dest="intent_id")
+    secure_deliver.add_argument("--owner", required=True, dest="owner_actor_id")
+    secure_deliver.add_argument("--recipient", required=True, action="append", dest="recipient_actor_ids")
+
     serve_parser = subparsers.add_parser("serve", help="serve the local observatory")
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8787)
@@ -222,6 +385,212 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[mode.value for mode in RunMode],
         help="override PODPLAY_SIM_MODE for this check",
     )
+
+    research = subparsers.add_parser(
+        "research", help="manage explicit, secret-free feature verification requests"
+    )
+    research_subcommands = research.add_subparsers(dest="research_command", required=True)
+    contract = research_subcommands.add_parser("contract", help="show the bounded feature contract")
+    contract.add_argument("--feature", required=True, choices=["team-signup"])
+    request = research_subcommands.add_parser("request", help="ask named players or staff to verify a feature")
+    request.add_argument("--feature", required=True, choices=["team-signup"])
+    request.add_argument("--requester", required=True, choices=["sofia", "riley"])
+    request.add_argument("--verifier", action="append", required=True, help="named player or staff actor; repeat")
+    acknowledge = research_subcommands.add_parser("acknowledge", help="record one named verifier's accept or pass")
+    acknowledge.add_argument("--probe", required=True)
+    acknowledge.add_argument("--actor", required=True)
+    acknowledge.add_argument("--decision", required=True, choices=["accept", "pass"])
+    discover = research_subcommands.add_parser("discover", help="run the accepted team-signup GET-only configuration read-back")
+    discover.add_argument("--probe", required=True)
+    candidate = research_subcommands.add_parser("issue-candidate", help="record a non-regression issue candidate after read-back")
+    candidate.add_argument("--probe", required=True)
+    candidate.add_argument("--reason", required=True)
+    research_tick = research_subcommands.add_parser("tick", help="run bounded named-verifier response turns for one local research request")
+    research_tick.add_argument("--probe", required=True)
+    research_tick.add_argument("--turns", type=int, default=1)
+    research_subcommands.add_parser("status", help="show safe feature contracts and probe state")
+    research_continuous = research_subcommands.add_parser(
+        "continuous-unified",
+        help="run the bounded normal-use off-peak and peak Unified Booking campaigns",
+    )
+    research_continuous.add_argument("--apply", action="store_true", required=True)
+    research_continuous.add_argument("--confirm-origin", required=True, help="exact approved Preview origin")
+    research_arrivals = research_subcommands.add_parser(
+        "continuous-unified-arrivals",
+        help="let named campaign players accept and perform their own check-in only when the product arrival window opens",
+    )
+    research_arrivals.add_argument("--apply", action="store_true", required=True)
+    research_arrivals.add_argument("--confirm-origin", required=True, help="exact approved Preview origin")
+
+    health = subparsers.add_parser("health", help="run isolated, safe public-app health observations")
+    health_subcommands = health.add_subparsers(dest="health_command", required=True)
+    health_subcommands.add_parser("check", help="check the public login shell and record only a status transition")
+    reward = research_subcommands.add_parser("reward", help="offer, accept, approve, and guarded-apply research recognition rewards")
+    reward_subcommands = reward.add_subparsers(dest="research_reward_command", required=True)
+    reward_offer = reward_subcommands.add_parser("offer", help="offer an earned virtual-credit reward without granting it")
+    reward_offer.add_argument("--probe", required=True)
+    reward_offer.add_argument("--actor", required=True)
+    reward_offer.add_argument("--kind", required=True, choices=["participation", "finding"])
+    reward_respond = reward_subcommands.add_parser("respond", help="let the offered player accept or pass")
+    reward_respond.add_argument("--reward", required=True)
+    reward_respond.add_argument("--actor", required=True)
+    reward_respond.add_argument("--decision", required=True, choices=["accept", "pass"])
+    reward_approve = reward_subcommands.add_parser("approve", help="let Sofia approve an accepted reward locally")
+    reward_approve.add_argument("--reward", required=True)
+    reward_approve.add_argument("--actor", required=True, choices=["sofia"])
+    reward_apply = reward_subcommands.add_parser("apply", help="apply an approved reward with exact-origin confirmation and read-back")
+    reward_apply.add_argument("--reward", required=True)
+    reward_apply.add_argument("--confirm-origin", required=True)
+    reward_subcommands.add_parser("status", help="show safe research-reward and recognition state")
+
+    experiment = subparsers.add_parser("experiment", help="run the evidence-first Club Lab configuration workflow")
+    experiment_subcommands = experiment.add_subparsers(dest="experiment_command", required=True)
+    experiment_subcommands.add_parser("workflow", help="show roles, boundaries, and state-machine phases")
+    experiment_request = experiment_subcommands.add_parser("request-configuration", help="Riley or Sofia requests a read-only configuration exploration")
+    experiment_request.add_argument("--requester", required=True, choices=["sofia", "riley"])
+    experiment_handoff = experiment_subcommands.add_parser("admin-handoff", help="Riley or Sofia issues the code-derived read-only checklist to the admin")
+    experiment_handoff.add_argument("--actor", required=True, choices=["sofia", "riley"])
+    experiment_decision = experiment_subcommands.add_parser("admin-decision", help="authorized PodPlay admin accepts or passes the exploration")
+    experiment_decision.add_argument("--actor", required=True, choices=["podplay-admin"])
+    experiment_decision.add_argument("--decision", required=True, choices=["accept", "pass"])
+    experiment_subcommands.add_parser("discover-configuration", help="run the accepted admin GET-only configuration read-back")
+    experiment_subcommands.add_parser("discover-scope-path", help="read Tenant → Area → Pod Booking Engine summaries; never writes Preview")
+    experiment_record = experiment_subcommands.add_parser("record-configuration", help="record sanitized admin configuration read-back; never writes Preview")
+    experiment_record.add_argument("--actor", required=True, choices=["podplay-admin"])
+    experiment_record.add_argument("--booking-engine", required=True, choices=["LEGACY", "UNIFIED", "UNKNOWN"])
+    experiment_record.add_argument("--effective-scope", required=True, choices=["region", "area", "pod", "unknown"])
+    experiment_record.add_argument("--schedule", required=True, choices=["active", "future_only", "draft_only", "missing", "unknown"])
+    experiment_record.add_argument("--rate-card", required=True, choices=["effective", "missing", "unknown"])
+    experiment_record.add_argument("--readiness", required=True, choices=["ready", "generate", "missing_rate_card", "blocked_schedule", "conversion_failed", "unknown"])
+    experiment_diary = experiment_subcommands.add_parser("diary", help="write a concise, secret-free operational diary note")
+    experiment_diary.add_argument("--actor", required=True, choices=["sofia", "riley", "morgan-vale", "podplay-admin"])
+    experiment_diary.add_argument("--note", required=True)
+    experiment_subcommands.add_parser("refresh-uncertainty", help="re-project uncertainty from the current safe evidence")
+    experiment_proposal = experiment_subcommands.add_parser("propose-change", help="ask the admin whether to plan a configuration change; never writes Preview")
+    experiment_proposal.add_argument("--actor", required=True, choices=["sofia", "riley"])
+    experiment_packet = experiment_subcommands.add_parser("prepare-change-packet", help="prepare a pod-scoped Rate Cards packet; never writes Preview")
+    experiment_packet.add_argument("--actor", required=True, choices=["sofia", "riley"])
+    experiment_configuration_proposal = experiment_subcommands.add_parser("prepare-configuration-proposal", help="prepare the manifest-bound Rate Cards proposal; never writes Preview")
+    experiment_configuration_proposal.add_argument("--actor", required=True, choices=["sofia", "riley"])
+    experiment_manifest = experiment_subcommands.add_parser("render-dry-run-manifest", help="render the Rate Cards no-write manifest from current evidence")
+    experiment_manifest.add_argument("--actor", required=True, choices=["sofia", "riley"])
+    experiment_subcommands.add_parser("enact-rate-cards-pod-pilot", help="apply the accepted manifest to the selected Preview pod and retain sanitized read-back evidence")
+    experiment_subcommands.add_parser("record-enactment-scope-readback", help="classify a post-enactment safe scope read-back without asserting a regression")
+    experiment_prediction = experiment_subcommands.add_parser("prepare-price-prediction", help="prepare one exact no-booking price prediction after verified enactment")
+    experiment_prediction.add_argument("--actor", required=True, choices=["sofia", "riley"])
+    experiment_tax_policy = experiment_subcommands.add_parser("adopt-checkout-tax-tolerance", help="keep configured-price predictions exact while allowing bounded checkout tax")
+    experiment_tax_policy.add_argument("--actor", required=True, choices=["sofia", "riley"])
+    experiment_subcommands.add_parser("status", help="show safe experiment state and evidence references")
+
+    portfolio = subparsers.add_parser("portfolio", help="inspect the compact, release-scoped Club Lab research portfolio")
+    portfolio_subcommands = portfolio.add_subparsers(dest="portfolio_command", required=True)
+    portfolio_subcommands.add_parser("status", help="show compact experiment cards and template catalog")
+    portfolio_subcommands.add_parser("sync-rate-cards", help="link the active PP-7827 experiment into the portfolio")
+
+    consultation = subparsers.add_parser("consultation", help="send a non-coercive written plan to a named staff or partner character")
+    consultation_subcommands = consultation.add_subparsers(dest="consultation_command", required=True)
+    consultation_propose = consultation_subcommands.add_parser("propose-rate-cards", help="address the reversible pod-scoped Rate Cards plan to a named person")
+    consultation_propose.add_argument("--proposer", required=True, choices=["sofia", "riley"])
+    consultation_propose.add_argument("--recipient", required=True)
+    consultation_response = consultation_subcommands.add_parser("respond", help="record the named recipient's plan response; never performs a product action")
+    consultation_response.add_argument("--plan", required=True)
+    consultation_response.add_argument("--actor", required=True)
+    consultation_response.add_argument("--decision", required=True, choices=["accept", "pass", "request_changes"])
+    consultation_response.add_argument("--note", default="")
+    consultation_revise = consultation_subcommands.add_parser("revise-rate-cards", help="reply to a named recipient's change request without performing product work")
+    consultation_revise.add_argument("--proposer", required=True, choices=["sofia", "riley"])
+    consultation_revise.add_argument("--plan", required=True)
+    consultation_revise.add_argument("--note", required=True)
+    consultation_evidence = consultation_subcommands.add_parser("attach-rate-cards-scope", help="attach the current safe live scope read-back to addressed Rate Cards plans")
+    consultation_evidence.add_argument("--actor", required=True, choices=["sofia", "riley"])
+    consultation_subcommands.add_parser("status", help="show the local staff-planning channel")
+
+    continuity = subparsers.add_parser(
+        "continuity", help="export or import a secret-free fictional community bundle"
+    )
+    continuity_subcommands = continuity.add_subparsers(dest="continuity_command", required=True)
+    continuity_export = continuity_subcommands.add_parser(
+        "export", help="write a new bundle; Preview accounts and state are excluded"
+    )
+    continuity_export.add_argument("--output", required=True, type=Path)
+    continuity_inspect = continuity_subcommands.add_parser(
+        "inspect", help="validate and summarize a bundle without changing local state"
+    )
+    continuity_inspect.add_argument("--input", required=True, type=Path)
+    continuity_import = continuity_subcommands.add_parser(
+        "import", help="merge compatible safe facts and rebuild projections"
+    )
+    continuity_import.add_argument("--input", required=True, type=Path)
+    continuity_import.add_argument(
+        "--replace-progression", action="store_true",
+        help="also replace local fictional motives; omitted by default",
+    )
+
+    recovery = subparsers.add_parser(
+        "season-recovery", help="Riley-inspectable, lead-gated Preview season reconciliation"
+    )
+    recovery_subcommands = recovery.add_subparsers(dest="season_recovery_command", required=True)
+    recovery_subcommands.add_parser("status", help="show the latest safe recovery plan and request")
+    recovery_subcommands.add_parser("plan", help="perform the administrator's GET-only recovery inspection")
+    recovery_request = recovery_subcommands.add_parser("request", help="let Riley or Sofia request the planned reconciliation")
+    recovery_request.add_argument("--actor", required=True, choices=["riley", "sofia"])
+    recovery_approve = recovery_subcommands.add_parser("approve", help="record external-lead approval without a remote write")
+    recovery_approve.add_argument("--actor", required=True, choices=["lead"])
+    recovery_apply = recovery_subcommands.add_parser("apply", help="execute the approved reconciliation through the existing seed adapter")
+    recovery_apply.add_argument("--confirm-origin", required=True, help="exact approved Preview origin")
+
+    control = subparsers.add_parser(
+        "control", help="operate the local-only operator-to-club season-transition protocol"
+    )
+    control_subcommands = control.add_subparsers(dest="control_command", required=True)
+    control_notice = control_subcommands.add_parser("season-notice", help="address a safe season-transition notice to Riley")
+    control_notice.add_argument("--season", required=True, help="safe PR label, for example pr-7488")
+    control_ack = control_subcommands.add_parser("acknowledge", help="have Riley acknowledge a private control notice")
+    control_ack.add_argument("--notice", required=True)
+    control_ack.add_argument("--actor", required=True, choices=["riley"])
+    control_announce = control_subcommands.add_parser("announce-season", help="let Riley inform named players through the normal club channel")
+    control_announce.add_argument("--notice", required=True)
+    control_announce.add_argument("--actor", required=True, choices=["riley"])
+    control_player_ack = control_subcommands.add_parser("acknowledge-awareness", help="record one player's awareness-only response")
+    control_player_ack.add_argument("--notice", required=True)
+    control_player_ack.add_argument("--actor", required=True, choices=["andy-bogard", "terry-bogard"])
+    control_handoff = control_subcommands.add_parser("research-handoff", help="address an observed research result to Sofia and Riley")
+    control_handoff.add_argument("--probe", required=True)
+    control_handoff_ack = control_subcommands.add_parser("acknowledge-handoff", help="record Sofia or Riley's receipt of a research handoff")
+    control_handoff_ack.add_argument("--handoff", required=True)
+    control_handoff_ack.add_argument("--actor", required=True, choices=["sofia", "riley"])
+    control_release = control_subcommands.add_parser("release-notice", help="address a safe release notice to Sofia and Riley")
+    control_release.add_argument("--feature", required=True, help="safe feature identifier, for example rate-cards-unified-pricing")
+    control_release.add_argument("--release", required=True, help="safe release reference, for example PP-7827")
+    control_release_ack = control_subcommands.add_parser("acknowledge-release", help="record Sofia or Riley's receipt of a release notice")
+    control_release_ack.add_argument("--notice", required=True)
+    control_release_ack.add_argument("--actor", required=True, choices=["sofia", "riley"])
+    control_subcommands.add_parser("authorize-rate-cards-planning", help="record a bounded lead authorization for planning only; never changes Preview")
+    control_subcommands.add_parser("request-rate-cards-pricing-basis", help="open the explicit external pricing-basis request; never changes Preview")
+    control_subcommands.add_parser("propose-rate-cards-pricing-basis", help="send a reviewable 30-minute USD proposal to external product authority; never changes Preview")
+    control_pricing_response = control_subcommands.add_parser("respond-rate-cards-pricing-basis", help="record external product authority's explicit response; never changes Preview")
+    control_pricing_response.add_argument("--actor", required=True, choices=["external-product-authority"])
+    control_pricing_response.add_argument("--decision", required=True, choices=["accept", "request_changes", "pass"])
+    control_pricing_response.add_argument("--note", default="")
+    control_run = control_subcommands.add_parser("preauthorize-rate-cards-run", help="record three explicit confirmations for a future manifest-bound run; never changes Preview")
+    control_run.add_argument("--pricing-basis", required=True, help="exactly yes")
+    control_run.add_argument("--configuration-proposal", required=True, help="exactly yes")
+    control_run.add_argument("--preview-write-after-dry-run", required=True, help="exactly yes")
+    control_offer = control_subcommands.add_parser("offer-rate-cards-pilot-interest", help="let Riley ask named players about future pilot contact only")
+    control_offer.add_argument("--actor", required=True, choices=["riley"])
+    control_interest_response = control_subcommands.add_parser("respond-rate-cards-pilot-interest", help="record one player's future-pilot accept or pass")
+    control_interest_response.add_argument("--offer", required=True)
+    control_interest_response.add_argument("--actor", required=True, choices=["andy-bogard", "terry-bogard"])
+    control_interest_response.add_argument("--decision", required=True, choices=["accept", "pass"])
+    control_price_request = control_subcommands.add_parser("request-rate-cards-price-verification", help="let Riley ask opted-in Andy for one no-booking displayed-price observation")
+    control_price_request.add_argument("--actor", required=True, choices=["riley"])
+    control_price_response = control_subcommands.add_parser("respond-rate-cards-price-verification", help="record Andy's accept or pass for the no-booking display observation")
+    control_price_response.add_argument("--request", required=True)
+    control_price_response.add_argument("--actor", required=True, choices=["andy-bogard"])
+    control_price_response.add_argument("--decision", required=True, choices=["accept", "pass"])
+    control_price_observation = control_subcommands.add_parser("record-rate-cards-price-observation", help="record the normalized no-booking quote observation")
+    control_price_observation.add_argument("--request", required=True)
+    control_subcommands.add_parser("tick", help="project the explicit control queue; performs no autonomous actions")
 
     preview = subparsers.add_parser(
         "preview", help="perform bounded operations against an approved PR preview"
@@ -265,9 +634,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     preview_browser_handoff = preview_subcommands.add_parser(
         "browser-credential-handoff",
-        help="serve one existing actor's login fields locally for the exact Preview browser origin",
+        help="serve one existing actor or the approved administrator's login fields locally for the exact Preview browser origin",
     )
-    preview_browser_handoff.add_argument("--actor", required=True, help="existing actor id")
+    preview_handoff_identity = preview_browser_handoff.add_mutually_exclusive_group(required=True)
+    preview_handoff_identity.add_argument("--actor", help="existing actor id")
+    preview_handoff_identity.add_argument("--admin", action="store_true", help="approved Preview administrator only")
     preview_browser_handoff.add_argument(
         "--port", type=int, default=0, help="loopback port; default selects an ephemeral port"
     )
@@ -422,6 +793,10 @@ def build_parser() -> argparse.ArgumentParser:
     preview_training_check_in.add_argument("--confirm-origin", help="required with --apply; must equal the exact preview origin")
     preview_training_check_in.add_argument("--intent", required=True, help="booked customer-training intent")
     preview_training_check_in.add_argument("--actor", required=True, help="accepted training player who is arriving")
+    preview_subcommands.add_parser(
+        "observe-finished",
+        help="record one finished event's read-back without making Preview writes",
+    )
     preview_status = preview_subcommands.add_parser(
         "match-status", help="read and assert the selected preview-match state"
     )
@@ -491,6 +866,23 @@ def build_parser() -> argparse.ArgumentParser:
     challenge.add_argument(
         "--scenario", default="andy-vs-kyo-doubles.json", help="scenario file under scenarios/"
     )
+    challenge.add_argument(
+        "--propose", action="store_true",
+        help="send one named captain-to-captain proposal locally instead of using a pre-agreed scenario",
+    )
+    challenge.add_argument("--challenger", help="rostered captain making a --propose challenge")
+    challenge.add_argument("--opponent", help="rostered opposing captain for a --propose challenge")
+    challenge.add_argument("--accept", action="store_true", help="record the addressed captain's acceptance of --intent")
+    challenge.add_argument("--intent", help="team challenge intent to accept")
+    challenge.add_argument("--actor", help="addressed captain accepting --intent")
+    staff_team_event = subparsers.add_parser("staff-team-event", help="offer and acknowledge one staff-published free team research event")
+    staff_team_event_subcommands = staff_team_event.add_subparsers(dest="staff_team_event_command", required=True)
+    staff_team_event_offer = staff_team_event_subcommands.add_parser("offer")
+    staff_team_event_offer.add_argument("--challenge", required=True)
+    staff_team_event_ack = staff_team_event_subcommands.add_parser("acknowledge")
+    staff_team_event_ack.add_argument("--intent", required=True)
+    staff_team_event_ack.add_argument("--actor", required=True)
+    staff_team_event_ack.add_argument("--decision", required=True, choices=["accept", "pass"])
     training = subparsers.add_parser(
         "training", help="record a captain-led two-player training proposal or acceptance locally"
     )
@@ -499,6 +891,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     training.add_argument(
         "--accept", action="store_true", help="record the named teammate's acceptance after the captain proposal")
+    training.add_argument("--intent", help="existing training agreement for a third-player social invitation")
+    training.add_argument("--invite-third", dest="third_player", help="address one rostered third player; local social request only")
+    training.add_argument("--withdraw-third", action="store_true", help="withdraw an unaccepted optional third-player request")
     arcade = subparsers.add_parser("arcade", help="run a local-only deterministic Club Arcade match")
     arcade.add_argument("--occurrence", required=True, help="local Arcade occurrence key; never a product event mutation")
     arcade.add_argument("--left", required=True, help="one or two comma-separated player actor IDs")
@@ -511,7 +906,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[list] = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
     root = args.home.resolve()
     if args.command != "test":
         migrate_legacy_actor_files(root)
@@ -527,14 +923,14 @@ def main(argv: Optional[list] = None) -> int:
     if args.command == "state":
         if args.state_command == "facts":
             facts = load_facts(root)
-            print(f"PREVIEW CLUB FACT JOURNAL // {len(facts)} VALID FACTS")
+            print(f"CLUB LAB FACT JOURNAL // {len(facts)} VALID FACTS")
             if facts:
                 print(f"last: {facts[-1]['factId']} // {facts[-1]['type']}")
             return 0
         if args.state_command == "rebuild":
             result = rebuild_projections(root)
             print(
-                "PREVIEW CLUB PROJECTIONS // REBUILT // "
+                "CLUB LAB PROJECTIONS // REBUILT // "
                 f"{result['metadata']['factCount']} FACTS // "
                 f"{len(result['conversations']['conversations'])} CONVERSATIONS // "
                 f"{len(result['commitments']['commitments'])} COMMITMENTS // "
@@ -593,6 +989,67 @@ def main(argv: Optional[list] = None) -> int:
         print(json.dumps(result, indent=2, sort_keys=True))
         return 0
 
+    if args.command == "browser-journey":
+        from .browser_booking_observation import (
+            BrowserBookingObservationError,
+            reconcile as reconcile_browser_booking,
+            reconcile_invitation_acceptance,
+            reconcile_staff_check_in,
+        )
+        from .journey_policy import claim as claim_browser_journey, record_observation
+        try:
+            when = args.at or datetime.now(timezone.utc).isoformat()
+            if args.browser_journey_command == "claim":
+                result = claim_browser_journey(root, job_key=args.job_key, actor_id=args.actor_id, observed_at=when)
+            elif args.browser_journey_command == "observe":
+                result = record_observation(
+                    root, job_key=args.job_key, actor_id=args.actor_id,
+                    kind=args.kind, observed_at=when,
+                )
+            elif args.browser_journey_command == "reconcile-booking":
+                result = reconcile_browser_booking(
+                    root, intent_id=args.intent_id, owner_actor_id=args.owner_actor_id,
+                    venue_label=args.venue_label, start_time=args.start_time, end_time=args.end_time,
+                    group_size=args.group_size, observed_at=parse_instant(when),
+                )
+                rebuild_projections(root)
+            elif args.browser_journey_command == "reconcile-invitation":
+                result = reconcile_invitation_acceptance(
+                    root, intent_id=args.intent_id, recipient_actor_id=args.recipient_actor_id,
+                    observed_at=parse_instant(when),
+                )
+                rebuild_projections(root)
+            else:
+                result = reconcile_staff_check_in(
+                    root, intent_id=args.intent_id, participant_actor_id=args.participant_actor_id,
+                    observed_at=parse_instant(when),
+                )
+                rebuild_projections(root)
+        except (BrowserBookingObservationError, ValueError) as exc:
+            print(f"ERROR browser journey: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "secure-channel":
+        from .secure_channel import SecureChannelError, deliver_invitation, retain_invitation_link
+        try:
+            if args.secure_channel_command == "retain-browser-invite":
+                result = retain_invitation_link(
+                    root, intent_id=args.intent_id, owner_actor_id=args.owner_actor_id,
+                    invitation_url=sys.stdin.read().strip(), expected_origin=args.expected_origin,
+                )
+            else:
+                result = deliver_invitation(
+                    root, intent_id=args.intent_id, owner_actor_id=args.owner_actor_id,
+                    recipient_actor_ids=args.recipient_actor_ids,
+                )
+        except SecureChannelError as exc:
+            print(f"ERROR secure channel: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
+
     if args.command == "expect":
         from .self_assets import SelfAssetValidationError, make_belief_fact
         try:
@@ -613,33 +1070,291 @@ def main(argv: Optional[list] = None) -> int:
         print(json.dumps({"actorId": args.actor, "subject": "acceptable_booking_price", "status": "expected", "value": {"maxAmount": args.max_amount, "currency": args.currency}, "remoteWrites": 0}, indent=2, sort_keys=True))
         return 0
 
+    if args.command == "research":
+        try:
+            if args.research_command == "contract":
+                result = feature_contract(args.feature)
+            elif args.research_command == "request":
+                result = create_verification_request(
+                    root, feature_id=args.feature, requester=args.requester, verifier_ids=args.verifier
+                )
+            elif args.research_command == "acknowledge":
+                result = acknowledge_verification(
+                    root, probe_id=args.probe, actor_id=args.actor, decision=args.decision
+                )
+            elif args.research_command == "issue-candidate":
+                result = issue_candidate(root, probe_id=args.probe, reason=args.reason)
+            elif args.research_command == "discover":
+                result = discover_feature_context(root, args.probe)
+            elif args.research_command == "tick":
+                result = run_research_response_tick(root, probe_id=args.probe, turns=args.turns)
+            elif args.research_command == "continuous-unified":
+                result = run_continuous_unified_campaigns(root, args.confirm_origin)
+            elif args.research_command == "continuous-unified-arrivals":
+                result = check_in_continuous_unified_arrivals(root, args.confirm_origin)
+            elif args.research_command == "reward":
+                if args.research_reward_command == "offer":
+                    result = offer_research_reward(root, probe_id=args.probe, actor_id=args.actor, kind=args.kind)
+                elif args.research_reward_command == "respond":
+                    result = respond_research_reward(root, reward_id=args.reward, actor_id=args.actor, decision=args.decision)
+                elif args.research_reward_command == "approve":
+                    result = approve_research_reward(root, reward_id=args.reward, actor_id=args.actor)
+                elif args.research_reward_command == "apply":
+                    result = apply_research_reward(root, reward_id=args.reward, confirmation=args.confirm_origin)
+                else:
+                    result = research_rewards_snapshot(root)
+            else:
+                result = research_snapshot(root)
+        except (ProductResearchError, ResearchRewardError, ContinuousResearchError, CredentialsError, FirebaseAuthError, IdentityRegistryError, PreviewReadError, PreviewWriteError, TargetPolicyError) as exc:
+            print(f"ERROR research: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "health":
+        try:
+            result = check_ambient_health(root)
+        except (AmbientHealthError, CredentialsError, TargetPolicyError) as exc:
+            print(f"ERROR health: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "experiment":
+        try:
+            if args.experiment_command == "workflow":
+                result = configuration_workflow_contract()
+            elif args.experiment_command == "request-configuration":
+                result = request_configuration_exploration(root, requester=args.requester)
+            elif args.experiment_command == "admin-handoff":
+                result = issue_technical_handoff(root, actor_id=args.actor)
+            elif args.experiment_command == "admin-decision":
+                result = decide_configuration_exploration(root, actor_id=args.actor, decision=args.decision)
+            elif args.experiment_command == "discover-configuration":
+                result = discover_live_configuration(root)
+            elif args.experiment_command == "discover-scope-path":
+                result = discover_live_scope_path(root)
+            elif args.experiment_command == "record-configuration":
+                result = record_configuration_observation(
+                    root, actor_id=args.actor, booking_engine=args.booking_engine,
+                    effective_scope=args.effective_scope, schedule=args.schedule,
+                    rate_card=args.rate_card, readiness=args.readiness,
+                )
+            elif args.experiment_command == "diary":
+                result = add_configuration_diary_note(root, actor_id=args.actor, note=args.note)
+            elif args.experiment_command == "refresh-uncertainty":
+                result = refresh_configuration_uncertainty(root)
+            elif args.experiment_command == "propose-change":
+                result = propose_configuration_change(root, actor_id=args.actor)
+            elif args.experiment_command == "prepare-change-packet":
+                result = prepare_rate_cards_change_packet(root, actor_id=args.actor)
+            elif args.experiment_command == "prepare-configuration-proposal":
+                result = prepare_rate_cards_configuration_proposal(root, actor_id=args.actor)
+            elif args.experiment_command == "render-dry-run-manifest":
+                result = render_rate_cards_dry_run_manifest(root, actor_id=args.actor)
+            elif args.experiment_command == "enact-rate-cards-pod-pilot":
+                result = enact_rate_cards_pod_pilot(root)
+            elif args.experiment_command == "record-enactment-scope-readback":
+                result = record_rate_cards_enactment_scope_readback(root)
+            elif args.experiment_command == "prepare-price-prediction":
+                result = prepare_rate_cards_price_prediction(root, actor_id=args.actor)
+            elif args.experiment_command == "adopt-checkout-tax-tolerance":
+                result = adopt_rate_cards_checkout_tax_tolerance(root, actor_id=args.actor)
+            else:
+                result = experiment_snapshot(root)
+        except ConfigurationExperimentError as exc:
+            print(f"ERROR experiment: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "portfolio":
+        try:
+            result = sync_rate_cards_experiment(root) if args.portfolio_command == "sync-rate-cards" else portfolio_snapshot(root)
+        except ResearchPortfolioError as exc:
+            print(f"ERROR portfolio: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "consultation":
+        try:
+            if args.consultation_command == "propose-rate-cards":
+                result = propose_rate_cards_plan(root, proposer=args.proposer, recipient=args.recipient)
+            elif args.consultation_command == "respond":
+                result = respond_staff_consultation(root, plan_id=args.plan, actor_id=args.actor, decision=args.decision, note=args.note)
+            elif args.consultation_command == "revise-rate-cards":
+                result = revise_rate_cards_plan(root, proposer=args.proposer, plan_id=args.plan, note=args.note)
+            elif args.consultation_command == "attach-rate-cards-scope":
+                result = attach_rate_cards_scope_readback(root, actor_id=args.actor)
+            else:
+                result = staff_consultation_snapshot(root)
+        except StaffConsultationError as exc:
+            print(f"ERROR consultation: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "continuity":
+        try:
+            if args.continuity_command == "export":
+                result = export_bundle(root, args.output)
+            elif args.continuity_command == "inspect":
+                result = inspect_bundle(args.input)
+            else:
+                result = import_bundle(
+                    root, args.input, replace_progression=args.replace_progression
+                )
+        except ContinuityError as exc:
+            print(f"ERROR continuity: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "season-recovery":
+        try:
+            if args.season_recovery_command == "status":
+                result = season_recovery_snapshot(root)
+            elif args.season_recovery_command == "plan":
+                result = plan_season_recovery(root)
+            elif args.season_recovery_command == "request":
+                result = request_season_recovery(root, args.actor)
+            elif args.season_recovery_command == "approve":
+                result = approve_season_recovery(root, args.actor)
+            else:
+                result = apply_season_recovery(root, args.confirm_origin)
+        except (SeasonRecoveryError, CredentialsError, FirebaseAuthError, IdentityRegistryError, PreviewReadError, PreviewWriteError, TargetPolicyError) as exc:
+            print(f"ERROR season recovery: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "control":
+        try:
+            if args.control_command == "season-notice":
+                result = create_season_notice(root, args.season)
+            elif args.control_command == "acknowledge":
+                result = acknowledge_control_notice(root, args.notice, args.actor)
+            elif args.control_command == "announce-season":
+                result = announce_control_notice(root, args.notice, args.actor)
+            elif args.control_command == "acknowledge-awareness":
+                result = acknowledge_control_awareness(root, args.notice, args.actor)
+            elif args.control_command == "research-handoff":
+                result = create_research_handoff(root, args.probe)
+            elif args.control_command == "release-notice":
+                result = create_release_notice(root, args.feature, args.release)
+            elif args.control_command == "acknowledge-release":
+                result = acknowledge_release(root, args.notice, args.actor)
+            elif args.control_command == "authorize-rate-cards-planning":
+                result = authorize_rate_cards_planning(root)
+            elif args.control_command == "request-rate-cards-pricing-basis":
+                result = request_rate_cards_pricing_basis(root)
+            elif args.control_command == "propose-rate-cards-pricing-basis":
+                result = create_rate_cards_pricing_basis_proposal(root)
+            elif args.control_command == "respond-rate-cards-pricing-basis":
+                result = respond_to_rate_cards_pricing_basis(root, actor_id=args.actor, decision=args.decision, note=args.note)
+            elif args.control_command == "preauthorize-rate-cards-run":
+                result = preauthorize_rate_cards_configuration_run(
+                    root, pricing_basis_confirmation=args.pricing_basis,
+                    configuration_proposal_confirmation=args.configuration_proposal,
+                    preview_write_confirmation=args.preview_write_after_dry_run,
+                )
+            elif args.control_command == "offer-rate-cards-pilot-interest":
+                result = offer_rate_cards_future_pilot_interest(root, actor_id=args.actor)
+            elif args.control_command == "respond-rate-cards-pilot-interest":
+                result = respond_to_rate_cards_future_pilot_interest(root, offer_id=args.offer, actor_id=args.actor, decision=args.decision)
+            elif args.control_command == "request-rate-cards-price-verification":
+                result = request_rate_cards_price_verification(root, actor_id=args.actor)
+            elif args.control_command == "respond-rate-cards-price-verification":
+                result = respond_to_rate_cards_price_verification(root, request_id=args.request, actor_id=args.actor, decision=args.decision)
+            elif args.control_command == "record-rate-cards-price-observation":
+                result = record_rate_cards_price_verification_observation(root, request_id=args.request)
+            elif args.control_command == "acknowledge-handoff":
+                result = acknowledge_research_handoff(root, args.handoff, args.actor)
+            else:
+                result = tick_control_plane(root)
+        except ControlPlaneError as exc:
+            print(f"ERROR control: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
+
     if args.command == "challenge":
         try:
-            intent = plan_challenge(root, args.scenario, datetime.now(timezone.utc))
+            now = datetime.now(timezone.utc)
+            if args.propose:
+                if not isinstance(args.challenger, str) or not isinstance(args.opponent, str):
+                    raise TeamChallengeError("--propose requires --challenger and --opponent")
+                intent = propose_captain_challenge(root, args.challenger, args.opponent, now)
+                action = "PROPOSED"
+            elif args.accept:
+                if not isinstance(args.intent, str) or not isinstance(args.actor, str):
+                    raise TeamChallengeError("--accept requires --intent and --actor")
+                intent = accept_challenge(root, args.intent, args.actor, now)
+                action = "AGREED"
+            else:
+                intent = plan_challenge(root, args.scenario, now)
+                action = "AGREED"
         except (TeamChallengeError, ValueError) as exc:
             print(f"ERROR team challenge: {exc}", file=sys.stderr)
             return 2
-        print("PREVIEW CLUB TEAM CHALLENGE // AGREED // LOCAL ONLY")
+        print(f"CLUB LAB TEAM CHALLENGE // {action} // LOCAL ONLY")
         print(f"intent: {intent['id']}")
         print(f"match: {intent['challenger']['teamName']} vs {intent['opponent']['teamName']}")
-        print(f"players: {', '.join(intent['participantCharacters'])}")
+        players = intent.get("participantCharacters") or intent.get("participants", [])
+        print(f"players: {', '.join(players)}")
         print(f"duration: {intent['constraints']['durationMinutes']} minutes")
         print(f"next: {intent['nextAction']}")
         print("writes: 0")
         return 0
 
+    if args.command == "staff-team-event":
+        try:
+            if args.staff_team_event_command == "offer":
+                intent = offer_staff_team_event(root, args.challenge, datetime.now(timezone.utc))
+            else:
+                intent = acknowledge_staff_team_event(root, args.intent, args.actor, args.decision, datetime.now(timezone.utc))
+        except StaffTeamEventError as exc:
+            print(f"ERROR staff team event: {exc}", file=sys.stderr)
+            return 2
+        print(f"CLUB LAB STAFF TEAM EVENT // {intent['status'].upper()} // LOCAL ONLY")
+        print(f"intent: {intent['id']}; acknowledgements: {len(intent.get('acknowledgements', {}))}/{len(intent['participants'])}")
+        print(f"next: {intent['nextAction']}; writes: 0")
+        return 0
+
     if args.command == "training":
         try:
             now = datetime.now(timezone.utc)
-            intent = propose_training(root, args.scenario, now)
-            action = "captain_invited"
-            if args.accept:
-                intent = accept_training(root, args.scenario, now)
-                action = "agreed"
+            if args.withdraw_third:
+                if not args.intent:
+                    raise TrainingSessionError("--withdraw-third requires --intent")
+                ledger = load_intent_ledger(Storage(root))
+                original = ledger["intents"].get(args.intent)
+                if not isinstance(original, dict) or not isinstance(original.get("bookerActorId"), str):
+                    raise TrainingSessionError("training agreement is unavailable")
+                intent = withdraw_third_player_invitation(root, args.intent, original["bookerActorId"], now)
+                action = "third_player_withdrawn"
+            elif args.third_player:
+                if not args.intent:
+                    raise TrainingSessionError("--invite-third requires --intent")
+                ledger = load_intent_ledger(Storage(root))
+                original = ledger["intents"].get(args.intent)
+                if not isinstance(original, dict) or not isinstance(original.get("bookerActorId"), str):
+                    raise TrainingSessionError("training agreement is unavailable")
+                intent = invite_third_player(
+                    root, args.intent, original["bookerActorId"], args.third_player, now
+                )
+                action = "third_player_invited"
+            else:
+                intent = propose_training(root, args.scenario, now)
+                action = "captain_invited"
+                if args.accept:
+                    intent = accept_training(root, args.scenario, now)
+                    action = "agreed"
         except TrainingSessionError as exc:
             print(f"ERROR training: {exc}", file=sys.stderr)
             return 2
-        print(f"PREVIEW CLUB TRAINING // {action.upper()} // LOCAL ONLY")
+        print(f"CLUB LAB TRAINING // {action.upper()} // LOCAL ONLY")
         print(f"intent: {intent['id']}")
         print(f"players: {', '.join(intent['participants'])}")
         print(f"duration: {intent['constraints']['durationMinutes']} minutes")
@@ -655,7 +1370,7 @@ def main(argv: Optional[list] = None) -> int:
         except ArcadeError as exc:
             print(f"ERROR arcade: {exc}", file=sys.stderr)
             return 2
-        print("PREVIEW CLUB ARCADE // SIMULATED // LOCAL ONLY")
+        print("CLUB LAB ARCADE // SIMULATED // LOCAL ONLY")
         print(f"occurrence: {match['occurrenceKey']}; game: {match['game']}")
         print(f"score: {match['score']['left']}–{match['score']['right']}; winner: {', '.join(match['winner'])}")
         print(f"rallies: {len(match['rallies'])}; writes: 0")
@@ -667,7 +1382,7 @@ def main(argv: Optional[list] = None) -> int:
         except ArcadeError as exc:
             print(f"ERROR arcade replay: {exc}", file=sys.stderr)
             return 2
-        print("PREVIEW CLUB ARCADE REPLAY // ATTACHED // LOCAL FICTION ONLY")
+        print("CLUB LAB ARCADE REPLAY // ATTACHED // LOCAL FICTION ONLY")
         print(f"intent: {args.intent}; occurrence: {match['occurrenceKey']}")
         print(f"score: {match['score']['left']}–{match['score']['right']}; winner: {', '.join(match['winner'])}")
         print("next: after the booked end, the named captain can confirm this replay result")
@@ -688,7 +1403,7 @@ def main(argv: Optional[list] = None) -> int:
         if args.preview_command == "browser-credential-handoff":
             try:
                 serve_browser_credential_handoff(
-                    root, args.actor, port=args.port, lifetime_seconds=args.lifetime
+                    root, args.actor, use_admin=args.admin, port=args.port, lifetime_seconds=args.lifetime
                 )
             except (BrowserHandoffError, IdentityRegistryError, TargetPolicyError) as exc:
                 print(f"ERROR browser credential handoff: {exc}", file=sys.stderr)
@@ -730,6 +1445,8 @@ def main(argv: Optional[list] = None) -> int:
             return check_in_training_player(
                 root, args.apply, args.confirm_origin, args.intent, args.actor
             )
+        if args.preview_command == "observe-finished":
+            return observe_finished_preview(root)
         if args.preview_command == "match-status":
             return preview_match_status(root, args.occurrence)
         if args.preview_command == "matches":
@@ -838,7 +1555,7 @@ def main(argv: Optional[list] = None) -> int:
                 root, max_turns=args.max_turns, now=parse_instant(args.now)
             )
             print(
-                f"PREVIEW CLUB ACTOR RUNTIME // tick {result['tick']} // "
+                f"CLUB LAB ACTOR RUNTIME // tick {result['tick']} // "
                 f"{len(result['turns'])} turns // remote writes 0"
             )
             for turn in result["turns"]:
@@ -846,19 +1563,19 @@ def main(argv: Optional[list] = None) -> int:
             return 0
         if args.runtime_command == "tournament-tick":
             result = run_tournament_tick(root, now=parse_instant(args.now) if args.now else None)
-            print(f"PREVIEW CLUB TOURNAMENT // tick {result['tick']} // remote writes 0")
+            print(f"CLUB LAB TOURNAMENT // tick {result['tick']} // remote writes 0")
             print(f"- {result['action']['actorId']}: {result['action']['action']} — {result['action']['detail']}")
             return 0
         if args.runtime_command == "report-winner":
             state = report_winner(root, args.winner, args.reporter, now=parse_instant(args.now) if args.now else None)
-            print(f"PREVIEW CLUB TOURNAMENT RESULT // {state['rounds']['semi-final']['winner']} // no score")
+            print(f"CLUB LAB TOURNAMENT RESULT // {state['rounds']['semi-final']['winner']} // no score")
             return 0
         if args.runtime_command == "report-event-result":
             result = report_finished_event_result(
                 root, args.intent, args.reporter, args.winner,
                 now=parse_instant(args.now) if args.now else None,
             )
-            print(f"PREVIEW CLUB EVENT RESULT // {result['winner']} // captain attestation; no score")
+            print(f"CLUB LAB EVENT RESULT // {result['winner']} // captain attestation; no score")
             return 0
         if args.runtime_command == "rally-tick":
             if args.apply_preview and not args.confirm_origin:
@@ -1035,6 +1752,28 @@ def discover_preview_assets(root: Path, actor_ids: List[str]) -> int:
             print(f"  {subject}: {row['status']}{suffix}")
     print("remote writes: 0")
     return 0
+
+
+def discover_feature_context(root: Path, probe_id: str) -> Dict[str, Any]:
+    """Use the existing administrator only for the contract's GET-only read-back.
+
+    This function never seeds, reconciles, or provisions identities.  The
+    authenticated response is reduced by ``product_research`` before state is
+    written.
+    """
+    credentials = PreviewCredentials.load(root)
+    policy = TargetPolicy.from_config(credentials.config)
+    session = FirebaseAuthenticator(root / "secrets" / "preview-admin-auth-cache.json").authenticate(
+        credentials.admin_email, credentials.admin_password, credentials.firebase_api_key
+    )
+    client = PreviewReadonlyClient(policy, session.id_token)
+    return discover_team_signup_context_with_client(
+        root,
+        probe_id=probe_id,
+        client=client,
+        target_fingerprint=f"pr-{policy.pull_request_number}:team-signup-contract-v1",
+        observed_at=datetime.now(timezone.utc),
+    )
 
 
 def check_preview_sessions(root: Path, actor_ids: Optional[List[str]]) -> int:
@@ -1250,7 +1989,7 @@ def seed_preview(root: Path, apply: bool, confirmation: Optional[str], team: Opt
         return 2
 
     print(
-        f"PREVIEW CLUB SEED // {'APPLIED' if apply else 'DRY RUN'} // "
+        f"CLUB LAB SEED // {'APPLIED' if apply else 'DRY RUN'} // "
         f"PR #{read_policy.pull_request_number}"
     )
     print(f"tenant: {plan['tenantName']} ({plan['tenantId']})")
@@ -1302,7 +2041,7 @@ def inspect_readiness(root: Path) -> int:
         print(f"ERROR preview readiness: {exc}", file=sys.stderr)
         return 2
 
-    print(f"PREVIEW CLUB READINESS // READ-ONLY // PR #{report['pullRequest']}")
+    print(f"CLUB LAB READINESS // READ-ONLY // Preview PR #{report['pullRequest']}")
     location = report["location"]
     print(
         f"location: {location['areaName']} / {location['podName']} "
@@ -1417,7 +2156,7 @@ def plan_preview_intent(
     try:
         ledger = load_intent_ledger(storage)
         selected_id, intent = select_intent(ledger, intent_id)
-        if intent.get("status") not in {"requested", "agreed", "preview_ready", "preview_blocked"}:
+        if intent.get("status") not in {"requested", "agreed", "preview_ready", "preview_blocked", "ready_to_publish"}:
             raise BookingIntentError(
                 f"booking intent cannot be planned from status {intent.get('status')!r}"
             )
@@ -1426,7 +2165,7 @@ def plan_preview_intent(
         if not isinstance(duration, int) or duration < 30 or duration % 30:
             raise BookingIntentError("preview planning requires a positive 30-minute increment")
         journey = intent.get("journey", "customer_booking")
-        if journey not in {"customer_booking", "customer_training", "customer_team_signup", "owner_open_play"}:
+        if journey not in {"customer_booking", "customer_training", "customer_team_signup", "owner_open_play", "owner_team_signup"}:
             raise BookingIntentError("preview planning does not recognize the journey type")
 
         credentials = PreviewCredentials.load(root)
@@ -1540,18 +2279,40 @@ def plan_preview_intent(
             _record_intent_blocker(storage, intent, policy.pull_request_number)
             raise BookingIntentError(f"no legal preview slot begins within {max_delay} minutes")
         requested_credits = min(float(report["actors"][booker_actor_id]["virtualCredits"]), 25.0)
-        evaluation = (
-            summarize_booking_preview(PreviewBookingEvaluator(policy, booker_auth.id_token).evaluate(
-                candidate["sessionId"], candidate["tableId"], requested_credits
-            ))
-            if journey in {"customer_booking", "customer_training"}
-            else {"status": "OWNER_EVENT_PLANNED", "total": 0.0, "currency": None,
-                  "errorCodes": [], "readyForOrder": True}
-        )
-        if journey == "customer_team_signup":
+        booking_engine = report["location"].get("bookingEngine")
+        if journey in {"customer_booking", "customer_training"}:
+            def unified_quote() -> Dict[str, Any]:
+                return summarize_unified_booking_quote(
+                    UnifiedBookingQuoteEvaluator(policy, booker_auth.id_token).evaluate(
+                        report["location"]["podId"], candidate["startTime"],
+                        candidate["endTime"], len(intent.get("participants", [])),
+                    )
+                )
+
+            if booking_engine == "UNIFIED":
+                evaluation = unified_quote()
+            else:
+                try:
+                    evaluation = summarize_booking_preview(
+                        PreviewBookingEvaluator(policy, booker_auth.id_token).evaluate(
+                            candidate["sessionId"], candidate["tableId"], requested_credits
+                        )
+                    )
+                except PreviewEvaluationError as exc:
+                    # Older Preview read models may not disclose the effective
+                    # pod override. The legacy endpoint's stable code is a
+                    # bounded capability signal, not a product failure.
+                    if "UNIFIED_BOOKING_VENUE" not in str(exc):
+                        raise
+                    booking_engine = "UNIFIED"
+                    evaluation = unified_quote()
+        elif journey == "customer_team_signup":
             evaluation = summarize_booking_preview(PreviewBookingEvaluator(policy, booker_auth.id_token).evaluate_team(
                 candidate["items"], requested_credits
             ))
+        else:
+            evaluation = {"status": "OWNER_EVENT_PLANNED", "total": 0.0, "currency": None,
+                          "errorCodes": [], "readyForOrder": True}
         intent["status"] = (
             "preview_ready" if evaluation["readyForOrder"] else "preview_blocked"
         )
@@ -1577,6 +2338,7 @@ def plan_preview_intent(
             "pulledForward": candidate.get("pulledForward") is True,
             "earlyWindowMinutes": candidate.get("earlyWindowMinutes"),
             "virtualCredits": requested_credits,
+            "bookingEngine": booking_engine or "LEGACY",
             "evaluation": evaluation,
         }
         # Every player-owned booking gets the canonical, product-neutral
@@ -1682,8 +2444,8 @@ def create_preview_open_play(
             raise PreviewWriteError("owner Open Play intent is not ready")
         ledger = load_intent_ledger(storage)
         selected_id, intent = select_intent(ledger, intent_id)
-        if intent.get("journey") != "owner_open_play" or intent.get("status") != "preview_ready":
-            raise PreviewWriteError("selected intent is not a ready owner Open Play")
+        if intent.get("journey") not in {"owner_open_play", "owner_team_signup"} or intent.get("status") not in {"preview_ready", "ready_to_publish"}:
+            raise PreviewWriteError("selected intent is not ready for staff event publication")
         plan = intent.get("previewPlan")
         if not isinstance(plan, dict) or not isinstance(plan.get("items"), list) or not plan["items"]:
             raise PreviewWriteError("owner Open Play plan is incomplete")
@@ -1691,7 +2453,11 @@ def create_preview_open_play(
         read_policy = TargetPolicy.from_config(credentials.config)
         if plan.get("targetOrigin") != read_policy.target_origin:
             raise PreviewWriteError("owner Open Play was planned for another origin")
-        name = f"Preview Club Open Play {selected_id.rsplit(':', 1)[-1]}"
+        team_size = int(intent.get("teamSize", 1)) if intent.get("journey") == "owner_team_signup" else 1
+        total_teams = int(intent.get("totalTeams", len(intent.get("participants", [])))) if team_size > 1 else len(intent.get("participants", []))
+        if team_size > 1 and (team_size != 2 or total_teams != 2):
+            raise PreviewWriteError("staff team research events are bounded to two teams of two")
+        name = f"Club Lab {'Team Signup' if team_size > 1 else 'Open Play'} {selected_id.rsplit(':', 1)[-1]}"
         event = intent.get("event")
         writes = 0
         if apply and not isinstance(event, dict):
@@ -1703,7 +2469,7 @@ def create_preview_open_play(
                 preview_write_confirmation=confirmation,
             ))
             result = PreviewOwnerEventWriter(write_policy, admin_auth.id_token).create_open_play(
-                plan["items"], name, total_teams=len(intent.get("participants", []))
+                plan["items"], name, total_teams=total_teams, team_size=team_size
             )
             event_id = result["id"]
             client = PreviewReadonlyClient(read_policy, admin_auth.id_token)
@@ -1711,13 +2477,16 @@ def create_preview_open_play(
             if not isinstance(event, dict) or event.get("id") != event_id or event.get("subtype") != "OPEN_PLAY":
                 raise PreviewWriteError("owner Open Play read-back did not match the planned event")
             writes = 1
+            if event.get("teamSize") != team_size or event.get("totalTeams") != total_teams:
+                raise PreviewWriteError("owner event capacity read-back did not match the bounded plan")
             intent["event"] = {"eventId": event_id, "name": name, "status": event.get("status"),
-                               "startTime": event.get("startTime"), "endTime": event.get("endTime")}
+                               "startTime": event.get("startTime"), "endTime": event.get("endTime"),
+                               "teamSize": team_size, "totalTeams": total_teams}
             intent["status"] = "event_created"
             intent["remoteWrites"] = 1
             save_intent(storage, ledger, intent)
             _sync_world_intent_status(storage, intent)
-        print(f"PREVIEW CLUB OPEN PLAY // {'APPLIED' if apply else 'DRY RUN'} // PR #{read_policy.pull_request_number}")
+        print(f"CLUB LAB OPEN PLAY // {'APPLIED' if apply else 'DRY RUN'} // Preview PR #{read_policy.pull_request_number}")
         print(f"intent: {selected_id}; duration: {plan['durationMinutes']} minutes; grid slots: {len(plan['items'])}")
         print(f"location: {plan['areaName']} / {plan['podName']}")
         print(f"slot: {plan['startTime']} to {plan['endTime']}")
@@ -1738,21 +2507,25 @@ def signup_preview_open_play(
         ledger = load_intent_ledger(storage)
         selected_id, intent = select_intent(ledger, intent_id)
         event = intent.get("event")
-        if intent.get("journey") != "owner_open_play" or intent.get("status") not in {"event_created", "players_registered"}:
-            raise PreviewWriteError("Open Play must be created before player signup")
+        if intent.get("journey") not in {"owner_open_play", "owner_team_signup"} or intent.get("status") not in {"event_created", "players_registered"}:
+            raise PreviewWriteError("staff event must be created before player signup")
         if not isinstance(event, dict) or not isinstance(event.get("eventId"), str):
             raise PreviewWriteError("Open Play event record is missing")
-        promotion_key = intent.get("promotionOccurrenceKey") or f"actor-runtime:season-001:{selected_id.rsplit(':', 1)[-1]}"
-        promotion_kind = intent.get("promotionKind") or "runtime_announcement"
-        messages = storage.read_jsonl(storage.channel_path("club"))
-        if not any(row.get("occurrenceKey") == promotion_key and row.get("kind") == promotion_kind for row in messages):
-            raise PreviewWriteError("Open Play must be promoted before player signup")
+        if intent.get("journey") == "owner_open_play":
+            promotion_key = intent.get("promotionOccurrenceKey") or f"actor-runtime:season-001:{selected_id.rsplit(':', 1)[-1]}"
+            promotion_kind = intent.get("promotionKind") or "runtime_announcement"
+            messages = storage.read_jsonl(storage.channel_path("club"))
+            if not any(row.get("occurrenceKey") == promotion_key and row.get("kind") == promotion_kind for row in messages):
+                raise PreviewWriteError("Open Play must be promoted before player signup")
         credentials = PreviewCredentials.load(root)
         read_policy = TargetPolicy.from_config(credentials.config)
         identities = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure(intent.get("participants", []))
         player_rows = []
+        teams = intent.get("teams") if isinstance(intent.get("teams"), list) else []
+        captain_ids = [row.get("captainActorId") for row in teams if isinstance(row, dict)]
+        actor_ids = captain_ids if intent.get("journey") == "owner_team_signup" else intent.get("participants", [])
         writes = 0
-        for actor_id in intent.get("participants", []):
+        for actor_id in actor_ids:
             identity = identities.get(actor_id)
             if identity is None or not identity.podplay_user_id:
                 raise PreviewWriteError(f"player identity is incomplete: {actor_id}")
@@ -1773,13 +2546,36 @@ def signup_preview_open_play(
                     raise PreviewWriteError(f"signup read-back failed for {actor_id}")
                 action, writes = "registered", writes + 1
             player_rows.append({"actorId": actor_id, "action": action, "signupId": signup.get("id") if isinstance(signup, dict) else None})
+        member_rows = []
+        if intent.get("journey") == "owner_team_signup" and apply:
+            admin_auth = FirebaseAuthenticator(root / "secrets" / "preview-auth-cache.json").authenticate(
+                credentials.admin_email, credentials.admin_password, credentials.firebase_api_key
+            )
+            write_policy = TargetPolicy.from_config(replace(credentials.config, mode=RunMode.PREVIEW_WRITE, preview_write_confirmation=confirmation))
+            for team in teams:
+                captain, member = team.get("captainActorId"), team.get("memberActorId")
+                if not isinstance(captain, str) or not isinstance(member, str):
+                    raise PreviewWriteError("team event has incomplete named teams")
+                leader, teammate = identities[captain], identities[member]
+                teammate_auth = FirebaseAuthenticator(actor_auth_cache(root, member)).authenticate(teammate.email, teammate.password, credentials.firebase_api_key)
+                teammate_client = PreviewReadonlyClient(read_policy, teammate_auth.id_token)
+                existing = find_actor_invitation(teammate_client, event["eventId"], teammate.podplay_user_id)
+                if not isinstance(existing, dict):
+                    PreviewTeamMemberWriter(write_policy, admin_auth.id_token).add_paid_by_leader(event["eventId"], leader.podplay_user_id, {"fullName": f"{teammate.first_name} {teammate.last_name}", "email": teammate.email, "userId": teammate.podplay_user_id})
+                    existing = find_actor_invitation(teammate_client, event["eventId"], teammate.podplay_user_id)
+                    writes += 1
+                if not isinstance(existing, dict):
+                    raise PreviewWriteError(f"team-member read-back failed for {member}")
+                member_rows.append({"actorId": member, "action": "registered", "invitationId": existing.get("id")})
         if apply and all(row["action"] in {"registered", "already_registered"} for row in player_rows):
             intent["status"] = "players_registered"
             intent["signups"] = player_rows
+            if member_rows:
+                intent["teamSignups"] = member_rows
             intent["remoteWrites"] = int(intent.get("remoteWrites", 0)) + writes
             save_intent(storage, ledger, intent)
             _sync_world_intent_status(storage, intent)
-        print(f"PREVIEW CLUB OPEN PLAY SIGNUP // {'APPLIED' if apply else 'DRY RUN'} // PR #{read_policy.pull_request_number}")
+        print(f"CLUB LAB OPEN PLAY SIGNUP // {'APPLIED' if apply else 'DRY RUN'} // Preview PR #{read_policy.pull_request_number}")
         print(f"intent: {selected_id}; event: {event['eventId']}; writes: {writes}")
         for row in player_rows:
             print(f"- {row['actorId']}: {row['action']}")
@@ -1895,7 +2691,7 @@ def fund_preview(root: Path, apply: bool, confirmation: Optional[str]) -> int:
         return 2
 
     print(
-        f"PREVIEW CLUB CREDITS // {'APPLIED' if apply else 'DRY RUN'} // "
+        f"CLUB LAB CREDITS // {'APPLIED' if apply else 'DRY RUN'} // "
         f"PR #{read_policy.pull_request_number}"
     )
     for actor_id, row in plan["actors"].items():
@@ -1996,7 +2792,7 @@ def seed_payment_methods(
         return 2
 
     print(
-        f"PREVIEW CLUB PAYMENT METHODS // {'APPLIED' if apply else 'DRY RUN'} // "
+        f"CLUB LAB PAYMENT METHODS // {'APPLIED' if apply else 'DRY RUN'} // "
         f"PR #{read_policy.pull_request_number}"
     )
     for actor_id, row in actor_rows.items():
@@ -2112,7 +2908,7 @@ def reschedule_preview(root: Path, apply: bool, confirmation: Optional[str], req
     except (ValueError, BookingIntentError, CredentialsError, FirebaseAuthError, PreviewReadError, PreviewWriteError, TargetPolicyError) as exc:
         print(f"ERROR preview reschedule: {exc}", file=sys.stderr)
         return 2
-    print(f"PREVIEW CLUB RESCHEDULE // {'APPLIED' if apply else 'DRY RUN'} // PR #{read_policy.pull_request_number}")
+    print(f"CLUB LAB RESCHEDULE // {'APPLIED' if apply else 'DRY RUN'} // Preview PR #{read_policy.pull_request_number}")
     print(f"event: {plan['eventId']}; same-event move: {plan['startTime']} to {plan['endTime']}")
     print(f"writes: {1 if apply else 0}")
     return 0
@@ -2276,10 +3072,20 @@ def book_preview_match(
                 items = plan.get("items")
                 additional_items = items[1:] if isinstance(items, list) else None
                 session_guests_id = plan.get("items", [{}])[0].get("sessionGuestsId") if isinstance(plan.get("items"), list) and plan["items"] else None
-                order = PreviewBookingWriter(write_policy, booker_auth.id_token).order(
-                    plan["sessionId"], plan["tableId"], plan["virtualCredits"], additional_items, session_guests_id
-                )
-                order_summary = summarize_order(order)
+                if preview_plan.get("bookingEngine") == "UNIFIED":
+                    method = payment_method_id(
+                        booker_client.get("/apis/v2/users/current/payment-method")
+                    )
+                    order = UnifiedBookingWriter(write_policy, booker_auth.id_token).order(
+                        plan["podId"], plan["startTime"], plan["endTime"],
+                        len(selected_intent.get("participants", [])), method,
+                    )
+                    order_summary = summarize_unified_order(order)
+                else:
+                    order = PreviewBookingWriter(write_policy, booker_auth.id_token).order(
+                        plan["sessionId"], plan["tableId"], plan["virtualCredits"], additional_items, session_guests_id
+                    )
+                    order_summary = summarize_order(order)
                 event_id = order_summary["eventId"]
                 writes = 1
             except PreviewWriteError:
@@ -2360,7 +3166,7 @@ def book_preview_match(
         return 2
 
     print(
-        f"PREVIEW CLUB BOOKING // {'APPLIED' if apply else 'DRY RUN'} // "
+        f"CLUB LAB BOOKING // {'APPLIED' if apply else 'DRY RUN'} // "
         f"PR #{read_policy.pull_request_number}"
     )
     print(f"occurrence: {plan['occurrenceKey']}")
@@ -2435,7 +3241,7 @@ def signup_preview_team_challenge(root: Path, apply: bool, confirmation: Optiona
             plan = intent.get("previewPlan") if isinstance(intent.get("previewPlan"), dict) else {}
             if not isinstance(plan.get("items"), list) or any(not isinstance(item.get("sessionGuestsId"), str) for item in plan["items"] if isinstance(item, dict)):
                 raise PreviewWriteError("team challenge needs a W37 guest-capacity plan")
-            print(f"PREVIEW CLUB TEAM SIGNUP // DRY RUN // PR #{read_policy.pull_request_number}")
+            print(f"CLUB LAB TEAM SIGNUP // DRY RUN // Preview PR #{read_policy.pull_request_number}")
             print(f"intent: {selected_id}; members: {len(participants)}; booking write: 1; team-member writes: {len(participants) - 1}")
             print(f"slot: {plan.get('startTime')} to {plan.get('endTime')}")
             return 0
@@ -2459,7 +3265,7 @@ def signup_preview_team_challenge(root: Path, apply: bool, confirmation: Optiona
             intent["status"] = "booked"
             intent["nextAction"] = "capture_shared_invitation_then_each_named_player_redeems"
             save_intent(storage, ledger, intent)
-            print(f"PREVIEW CLUB TEAM SIGNUP // BOOKED SHARE ROUTE // PR #{read_policy.pull_request_number}")
+            print(f"CLUB LAB TEAM SIGNUP // BOOKED SHARE ROUTE // Preview PR #{read_policy.pull_request_number}")
             print(f"intent: {selected_id}; named recipients: {len(participants) - 1}; next: capture one player share invitation")
             return 0
         rows = {row.get("actorId"): row for row in intent.get("teamSignups", []) if isinstance(row, dict)}
@@ -2544,7 +3350,7 @@ def signup_preview_team_challenge(root: Path, apply: bool, confirmation: Optiona
                             ),
                         )
         _sync_world_intent_status(storage, intent)
-        print(f"PREVIEW CLUB TEAM SIGNUP // {'APPLIED' if apply else 'DRY RUN'} // PR #{read_policy.pull_request_number}")
+        print(f"CLUB LAB TEAM SIGNUP // {'APPLIED' if apply else 'DRY RUN'} // Preview PR #{read_policy.pull_request_number}")
         print(f"intent: {selected_id}; members: {len(participants)}; added: {writes}")
         for row in intent["teamSignups"]:
             print(f"- {row['actorId']}: {row['status']}")
@@ -2606,7 +3412,7 @@ def open_preview_share_invitation(root: Path, intent_id: str, confirmation: str)
                     "text": f"{TEAM_ACTOR_NAMES.get(recipient, (recipient,))[0]}, our W37 booking is confirmed. I opened the player invitation; accept it through the player handoff when you are ready.",
                     "observedAt": datetime.now(timezone.utc).isoformat(), "remoteWrites": 1,
                 })
-        print(f"PREVIEW CLUB SHARE INVITATION // CAPTURED // intent: {intent_id}; invitation: {record['invitationId']}; writes: 1")
+        print(f"CLUB LAB SHARE INVITATION // CAPTURED // intent: {intent_id}; invitation: {record['invitationId']}; writes: 1")
         return 0
     except (BookingIntentError, CredentialsError, FirebaseAuthError, IdentityRegistryError, PreviewWriteError, ShareInvitationError, TargetPolicyError) as exc:
         print(f"ERROR preview share invitation: {exc}", file=sys.stderr)
@@ -2768,7 +3574,7 @@ def redeem_preview_training_invitation(root: Path, intent_id: str, confirmation:
         print(f"ERROR preview training invitation redemption: {exc}", file=sys.stderr)
         return 2
 
-    print(f"PREVIEW CLUB SHARE INVITATION // REDEEMED + ACCEPTED // intent: {intent_id}; writes: {writes}")
+    print(f"CLUB LAB SHARE INVITATION // REDEEMED + ACCEPTED // intent: {intent_id}; writes: {writes}")
     if acceptance_preview:
         print(f"acceptance preview: {acceptance_preview['total']:.2f}; no errors")
     return 0
@@ -2912,7 +3718,7 @@ def join_preview_match(
         return 2
 
     print(
-        f"PREVIEW CLUB PARTICIPATION // {'APPLIED' if apply else 'DRY RUN'} // "
+        f"CLUB LAB PARTICIPATION // {'APPLIED' if apply else 'DRY RUN'} // "
         f"PR #{read_policy.pull_request_number}"
     )
     print(f"event: {event_id}")
@@ -3042,7 +3848,7 @@ def check_in_preview_match(
         return 2
 
     print(
-        f"PREVIEW CLUB CHECK-IN // {'APPLIED' if apply else 'DRY RUN'} // "
+        f"CLUB LAB CHECK-IN // {'APPLIED' if apply else 'DRY RUN'} // "
         f"PR #{read_policy.pull_request_number}"
     )
     print(f"event: {event_id}; window: one hour before {plan['startTime']} through {end_value}; eligible: {str(eligible).lower()}")
@@ -3054,6 +3860,27 @@ def check_in_preview_match(
     else:
         planned = sum(row["status"] != "CHECKED_IN" for row in statuses.values())
         print(f"writes planned when eligible: {planned}")
+    return 0
+
+
+def observe_finished_preview(root: Path) -> int:
+    """Run only the read-back reducers for finished events.
+
+    This command intentionally does not advance actors, publish an offer, or
+    write to Preview. It gives operators one auditable way to close elapsed
+    research sessions without confusing elapsed time with attendance.
+    """
+    try:
+        owner_event = observe_finished_events(root)
+        team_or_training = observe_finished_training_sessions(root)
+    except (CredentialsError, FirebaseAuthError, IdentityRegistryError,
+            PreviewReadError, TargetPolicyError, ValueError) as exc:
+        print(f"ERROR preview finished-event observation: {exc}", file=sys.stderr)
+        return 2
+    print("CLUB LAB FINISHED-EVENT OBSERVATION // READ-BACK ONLY")
+    print(f"owner event: {owner_event['action']}")
+    print(f"player/team attendance: {team_or_training['action']}")
+    print("remote writes: 0")
     return 0
 
 
@@ -3078,41 +3905,58 @@ def check_in_training_player(
         actor_id = canonical_actor_id(actor_id)
         participants = intent.get("participants")
         booking = intent.get("booking")
+        owner_event = intent.get("event")
         plan = intent.get("previewPlan")
+        event_record = booking if isinstance(booking, dict) else owner_event
+        staff_team_event = intent.get("journey") == "owner_team_signup"
         if (
-            intent.get("journey") not in {"customer_training", "customer_team_signup"}
-            or intent.get("status") not in {"booked", "team_members_registered"}
+            intent.get("journey") not in {"customer_training", "customer_team_signup", "owner_team_signup"}
+            or intent.get("status") not in ({"players_registered"} if staff_team_event else {"booked", "team_members_registered"})
             or not isinstance(participants, list)
             or actor_id not in participants
-            or not isinstance(booking, dict)
+            or not isinstance(event_record, dict)
             or not isinstance(plan, dict)
-            or not isinstance(booking.get("eventId"), str)
+            or not isinstance(event_record.get("eventId"), str)
             or not isinstance(plan.get("startTime"), str)
             or not isinstance(plan.get("endTime"), str)
         ):
-            raise PreviewWriteError("check-in requires one booked player-owned participant")
+            raise PreviewWriteError("check-in requires one registered named participant")
         start_time = datetime.fromisoformat(plan["startTime"].replace("Z", "+00:00"))
         end_time = datetime.fromisoformat(plan["endTime"].replace("Z", "+00:00"))
         eligible, window_detail = check_in_window(start_time, end_time, datetime.now(timezone.utc))
         owner_id = intent.get("bookerActorId")
-        if not isinstance(owner_id, str) or owner_id not in participants:
+        if staff_team_event:
+            teams = intent.get("teams") if isinstance(intent.get("teams"), list) else []
+            captain_ids = {row.get("captainActorId") for row in teams if isinstance(row, dict)}
+            owner_id = None
+        else:
+            captain_ids = set()
+        if not staff_team_event and (not isinstance(owner_id, str) or owner_id not in participants):
             raise PreviewWriteError("booked training intent is missing its player owner")
-        identities = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure((owner_id, actor_id))
-        owner = identities[owner_id]
+        identity_ids = (actor_id,) if staff_team_event else (owner_id, actor_id)
+        identities = IdentityRegistry(root / "secrets" / "preview-actors.json").ensure(identity_ids)
+        owner = identities.get(owner_id) if isinstance(owner_id, str) else None
         actor = identities[actor_id]
         owner_auth = FirebaseAuthenticator(actor_auth_cache(root, owner_id)).authenticate(
             owner.email, owner.password, credentials.firebase_api_key
-        )
+        ) if owner is not None else None
         actor_auth = FirebaseAuthenticator(actor_auth_cache(root, actor_id)).authenticate(
             actor.email, actor.password, credentials.firebase_api_key
         )
-        event_id = booking["eventId"]
-        owner_client = PreviewReadonlyClient(read_policy, owner_auth.id_token)
-        invitation = (
-            find_owner_invitation(owner_client, event_id)
-            if actor_id == owner_id
-            else find_actor_invitation(owner_client, event_id, actor.podplay_user_id)
-        )
+        event_id = event_record["eventId"]
+        owner_client = PreviewReadonlyClient(read_policy, owner_auth.id_token) if owner_auth is not None else None
+        actor_client = PreviewReadonlyClient(read_policy, actor_auth.id_token)
+        if staff_team_event and actor_id in captain_ids:
+            signup_rows = intent.get("signups") if isinstance(intent.get("signups"), list) else []
+            signup_id = next((row.get("signupId") for row in signup_rows
+                              if isinstance(row, dict) and row.get("actorId") == actor_id), None)
+            invitation = read_captain_attendance_invitation(actor_client, event_id, signup_id)
+        else:
+            invitation = (
+                find_owner_invitation(owner_client, event_id)
+                if actor_id == owner_id
+                else find_actor_invitation(actor_client if staff_team_event else owner_client, event_id, actor.podplay_user_id)
+            )
         if invitation is None:
             raise PreviewWriteError("player invitation has not been read back")
         if actor_id != owner_id and invitation.get("status") not in ACCEPTED_STATUSES:
@@ -3133,23 +3977,35 @@ def check_in_training_player(
             if status != "CHECKED_IN":
                 PreviewParticipationWriter(write_policy, actor_auth.id_token).check_in(event_id, invitation["id"])
                 writes = 1
-                refreshed = (
-                    find_owner_invitation(owner_client, event_id)
-                    if actor_id == owner_id
-                    else find_actor_invitation(owner_client, event_id, actor.podplay_user_id)
-                )
+                if staff_team_event and actor_id in captain_ids:
+                    refreshed = read_captain_attendance_invitation(actor_client, event_id, signup_id)
+                else:
+                    refreshed = (
+                        find_owner_invitation(owner_client, event_id)
+                        if actor_id == owner_id
+                        else find_actor_invitation(actor_client if staff_team_event else owner_client, event_id, actor.podplay_user_id)
+                    )
                 if refreshed is None or check_in_status(refreshed) != "CHECKED_IN":
                     raise PreviewWriteError("player check-in read-back is incomplete")
                 status = "CHECKED_IN"
-            match_ledger = load_match_ledger(storage, read_policy.target_origin)
-            occurrence = booking.get("occurrenceKey")
-            if isinstance(occurrence, str) and isinstance(match_ledger["matches"].get(occurrence), dict):
+            # Staff-published team research has its own intent-level attendance
+            # evidence. It must not be blocked by an unrelated legacy match
+            # ledger from a previous Preview origin.
+            match_ledger = None if staff_team_event else load_match_ledger(storage, read_policy.target_origin)
+            occurrence = booking.get("occurrenceKey") if isinstance(booking, dict) else intent.get("occurrenceKey")
+            if staff_team_event:
+                check_ins = dict(intent.get("checkIns") or {})
+                check_ins[actor_id] = {"status": status, "observedAt": datetime.now(timezone.utc).isoformat()}
+                intent["checkIns"] = check_ins
+                save_intent(storage, ledger, intent, make_active=False)
+            if (match_ledger is not None and isinstance(occurrence, str)
+                    and isinstance(match_ledger["matches"].get(occurrence), dict)):
                 match = dict(match_ledger["matches"][occurrence])
                 rows = match.get("participants") if isinstance(match.get("participants"), list) else []
                 rows = [row for row in rows if isinstance(row, dict) and row.get("actorId") != actor_id]
                 rows.append({
                     "actorId": actor_id,
-                    "role": "booking owner" if actor_id == owner_id else "accepted training player",
+                    "role": "team captain" if staff_team_event and actor_id in captain_ids else "booking owner" if actor_id == owner_id else "accepted training player",
                     "bookingStatus": "BOOKED",
                     "invitationStatus": "OWNER" if actor_id == owner_id else "ACCEPTED",
                     "attendance": status,
@@ -3179,7 +4035,7 @@ def check_in_training_player(
         print(f"ERROR training check-in: {exc}", file=sys.stderr)
         return 2
 
-    print(f"PREVIEW CLUB TRAINING CHECK-IN // {'APPLIED' if apply else 'DRY RUN'} // PR #{read_policy.pull_request_number}")
+    print(f"CLUB LAB TRAINING CHECK-IN // {'APPLIED' if apply else 'DRY RUN'} // Preview PR #{read_policy.pull_request_number}")
     print(f"intent: {intent_id}; player: {actor_id}; event: {event_id}")
     print(f"window: {start_time.isoformat()} minus 1 hour through {end_time.isoformat()}; {window_detail}")
     print(f"check-in: {status}; writes: {writes if apply else 0}")
@@ -3205,7 +4061,7 @@ def list_preview_matches(root: Path) -> int:
         print(f"ERROR preview matches: {exc}", file=sys.stderr)
         return 2
 
-    print(f"PREVIEW CLUB MATCHES // PR #{policy.pull_request_number}")
+    print(f"CLUB LAB MATCHES // Preview PR #{policy.pull_request_number}")
     if not index["matches"]:
         print("no matches")
         return 0
@@ -3369,7 +4225,7 @@ def preview_match_status(root: Path, occurrence: Optional[str] = None) -> int:
         print(f"ERROR preview match status: {exc}", file=sys.stderr)
         return 2
 
-    print(f"PREVIEW CLUB MATCH // {result} // PR #{read_policy.pull_request_number}")
+    print(f"CLUB LAB MATCH // {result} // Preview PR #{read_policy.pull_request_number}")
     print(f"event: {event['eventId']} ({event['status']})")
     print(f"occurrence: {occurrence}")
     venue = " / ".join(

@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 
 from .booking_intents import load_intent_ledger, save_intent
 from .orchestrator import Orchestrator
+from .staff_team_event import acknowledge_locked
 from .storage import Storage
 from .time import isoformat, parse_instant
 
@@ -37,8 +38,12 @@ def run_tick(root: Path, max_turns: int = 10, now: Optional[datetime] = None) ->
         state["tick"] = int(state.get("tick", 0)) + 1
         turns = []
         for _ in range(max_turns):
-            actor_id = actors[int(state.get("actorCursor", 0)) % len(actors)]
-            state["actorCursor"] = (int(state.get("actorCursor", 0)) + 1) % len(actors)
+            pending_responder = _next_staff_team_event_responder(storage)
+            if pending_responder is not None:
+                actor_id = pending_responder
+            else:
+                actor_id = actors[int(state.get("actorCursor", 0)) % len(actors)]
+                state["actorCursor"] = (int(state.get("actorCursor", 0)) + 1) % len(actors)
             turn = _take_turn(storage, world, campaign, str(actor_id), observed_at)
             turns.append(turn)
             state["turns"] = int(state.get("turns", 0)) + 1
@@ -56,6 +61,10 @@ def _take_turn(storage: Storage, world: Dict[str, Any], campaign: Dict[str, Any]
     kinds = {row.get("kind") for row in messages if row.get("occurrenceKey") == key}
     intent_id = f"intent:{key}"
     ledger = load_intent_ledger(storage)
+
+    team_response = _respond_to_staff_team_event(storage, ledger, actor_id, observed_at)
+    if team_response is not None:
+        return team_response
 
     if actor_id == campaign["owner"] and "runtime_event_request" not in kinds:
         return _message(storage, key, observed_at, actor_id, ["lead"], "Please create the free Open Play first; promotion waits for its published event record.", "runtime_event_request", "requested the owner Open Play")
@@ -86,6 +95,43 @@ def _take_turn(storage: Storage, world: Dict[str, Any], campaign: Dict[str, Any]
     if actor_id == "terry-bogard" and "runtime_announcement" in kinds and "runtime_terry_signup" not in kinds:
         return _message(storage, key, observed_at, actor_id, [campaign["owner"]], "Terry sees the published Open Play and is ready to self-sign up.", "runtime_terry_signup", "requested self-signup")
     return {"actorId": actor_id, "action": "pass", "detail": "no new relevant information", "observedAt": observed_at}
+
+
+def _next_staff_team_event_responder(storage: Storage) -> Optional[str]:
+    """Prioritize exactly one unaddressed local research offer participant."""
+    ledger = load_intent_ledger(storage)
+    offers = [intent for intent in ledger["intents"].values()
+              if isinstance(intent, dict) and intent.get("journey") == "owner_team_signup"
+              and intent.get("status") == "awaiting_player_acceptance"]
+    for offer in sorted(offers, key=lambda row: str(row.get("createdAt", ""))):
+        acknowledgements = offer.get("acknowledgements") if isinstance(offer.get("acknowledgements"), dict) else {}
+        for actor_id in offer.get("participants", []):
+            if isinstance(actor_id, str) and actor_id not in acknowledgements:
+                return actor_id
+    return None
+
+
+def _respond_to_staff_team_event(storage: Storage, ledger: Dict[str, Any], actor_id: str, observed_at: str) -> Optional[Dict[str, Any]]:
+    """Let a named simulated player explicitly answer one current research offer."""
+    for intent_id, offer in ledger["intents"].items():
+        if not isinstance(offer, dict) or offer.get("journey") != "owner_team_signup":
+            continue
+        if offer.get("status") != "awaiting_player_acceptance" or actor_id not in offer.get("participants", []):
+            continue
+        acknowledgements = offer.get("acknowledgements") if isinstance(offer.get("acknowledgements"), dict) else {}
+        if actor_id in acknowledgements:
+            continue
+        # The engine may only choose for a named fictional actor in response to
+        # a fresh local offer. This is a social acknowledgement, not a Preview
+        # signup, entitlement, or attendance assertion.
+        acknowledge_locked(storage, ledger, intent_id, actor_id, "accept", parse_instant(observed_at))
+        return {
+            "actorId": actor_id,
+            "action": "acknowledge",
+            "detail": "explicitly accepted the staff team-research offer for themself",
+            "observedAt": observed_at,
+        }
+    return None
 
 
 def _message(storage: Storage, key: str, observed_at: str, actor_id: str, recipients: list, text: str, kind: str, detail: str) -> Dict[str, Any]:

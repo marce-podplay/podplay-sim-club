@@ -130,6 +130,88 @@ class PreviewBookingWriter:
         return value
 
 
+class UnifiedBookingWriter:
+    """One guarded Unified quote → confirm transaction for an approved player.
+
+    The quote is intentionally refreshed immediately before confirmation.  Its
+    opaque identifier stays in-process; durable community evidence records
+    only the sanitized outcome.
+    """
+
+    def __init__(self, policy: TargetPolicy, actor_token: str, transport: Optional[Transport] = None):
+        if not policy.writes_allowed:
+            raise PreviewWriteError("preview-write policy confirmation is required")
+        self.policy = policy
+        self._actor_token = actor_token
+        self._used = False
+        if transport is None:
+            opener = build_opener(_RejectRedirects())
+            self._transport = lambda request, timeout: opener.open(request, timeout=timeout)
+        else:
+            self._transport = transport
+
+    def order(self, pod_id: str, starts_at: str, ends_at: str, group_size: int, payment_method_id: Optional[str]) -> Dict[str, Any]:
+        if self._used:
+            raise PreviewWriteError("booking write budget exhausted")
+        if not all(isinstance(value, str) and value for value in (pod_id, starts_at, ends_at)):
+            raise PreviewWriteError("unified booking order slot is invalid")
+        if not isinstance(group_size, int) or group_size < 1:
+            raise PreviewWriteError("unified booking order group size is invalid")
+        quote = self._request(
+            "/apis/v2/bookings/quotes",
+            {"slot": {"pod": {"id": pod_id}, "startsAt": starts_at, "endsAt": ends_at}, "groupSize": group_size},
+            expected_status=201,
+            label="unified booking quote",
+        )
+        quote_id = quote.get("id")
+        links = quote.get("_links")
+        confirm = links.get("confirm") if isinstance(links, dict) else None
+        href = confirm.get("href") if isinstance(confirm, dict) else None
+        if not isinstance(quote_id, str) or not isinstance(href, str) or href != f"/bookings/quotes/{quote_id}/confirm":
+            raise PreviewWriteError("unified booking quote confirm link is invalid")
+        requirements = quote.get("requirements")
+        if isinstance(requirements, list):
+            blocking = [row for row in requirements if isinstance(row, dict) and row.get("code") != "agree_terms"]
+            if blocking:
+                raise PreviewWriteError("unified booking quote has unresolved account requirements")
+        due = ((quote.get("pricing") or {}).get("due") or {}).get("total")
+        due_amount = due.get("amount") if isinstance(due, dict) else None
+        if not isinstance(due_amount, int) or due_amount < 0:
+            raise PreviewWriteError("unified booking quote total is invalid")
+        if due_amount > 0 and not isinstance(payment_method_id, str):
+            raise PreviewWriteError("unified booking confirmation requires the player's existing payment method")
+        self._used = True
+        body: Dict[str, Any] = {"termsAgreed": True}
+        if due_amount > 0:
+            body["paymentMethod"] = {"id": payment_method_id}
+        return self._request("/apis/v2" + href, body, expected_status=201, label="unified booking confirmation")
+
+    def _request(self, path: str, body: Dict[str, Any], *, expected_status: int, label: str) -> Dict[str, Any]:
+        url = self.policy.target_origin + path
+        self.policy.assert_url(url)
+        request = Request(
+            url,
+            data=json.dumps(body, separators=(",", ":")).encode("utf-8"),
+            headers={"Accept": "application/json", "Content-Type": "application/json", "Authorization": f"Bearer {self._actor_token}", "User-Agent": "podplay-sim-club/0.1 unified-booking"},
+            method="POST",
+        )
+        try:
+            response = self._transport(request, 30)
+            with response:
+                self.policy.assert_url(response.geturl())
+                value = _decode_booking_object(response.read(MAX_RESPONSE_BYTES + 1), label)
+                status = response.status
+        except PreviewWriteError:
+            raise
+        except HTTPError as exc:
+            raise PreviewWriteError(f"{label} failed with HTTP {exc.code}") from exc
+        except URLError as exc:
+            raise PreviewWriteError(f"{label} network request failed") from exc
+        if status != expected_status:
+            raise PreviewWriteError(f"{label} returned HTTP {status}")
+        return value
+
+
 def occurrence_key(pod_id: str, start_time: str, actor_id: str) -> str:
     digest = hashlib.sha256(
         f"PP-7444|{pod_id}|{start_time}|{actor_id}".encode("utf-8")
@@ -236,6 +318,38 @@ def summarize_order(value: Dict[str, Any]) -> Dict[str, Any]:
         "virtualCredits": float(summary.get("virtualCredits") or 0),
         "currency": summary.get("currency"),
     }
+
+
+def summarize_unified_order(value: Dict[str, Any]) -> Dict[str, Any]:
+    """Reduce a confirmed Unified Booking to safe lifecycle evidence."""
+    event = value.get("event")
+    event_id = event.get("id") if isinstance(event, dict) else None
+    if value.get("status") != "CONFIRMED" or not isinstance(event_id, str):
+        raise PreviewWriteError("unified booking was not confirmed")
+    return {"eventId": event_id, "orderId": None, "status": "CONFIRMED", "total": None, "virtualCredits": 0.0, "currency": None}
+
+
+def payment_method_id(value: Any) -> Optional[str]:
+    """Extract the current player's method only for an in-process confirmation."""
+    if not isinstance(value, dict):
+        return None
+    for key in ("paymentElement", "preferredCard", "preferredBankAccount"):
+        candidate = value.get(key)
+        if isinstance(candidate, dict) and isinstance(candidate.get("id"), str) and candidate["id"]:
+            return candidate["id"]
+    return None
+
+
+def _decode_booking_object(body: bytes, label: str) -> Dict[str, Any]:
+    if len(body) > MAX_RESPONSE_BYTES:
+        raise PreviewWriteError(f"{label} response exceeded the size limit")
+    try:
+        value = json.loads(body.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise PreviewWriteError(f"{label} returned invalid JSON") from exc
+    if not isinstance(value, dict):
+        raise PreviewWriteError(f"{label} returned an unexpected shape")
+    return value
 
 
 def _reference_ids(value: Any) -> set:

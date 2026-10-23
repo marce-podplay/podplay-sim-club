@@ -16,6 +16,51 @@ class PreviewWriteError(RuntimeError):
     pass
 
 
+class PreviewRateCardsWriter:
+    """Narrow admin writer for the approved Rate Cards pilot only.
+
+    Callers retain no response IDs; identifiers exist only long enough to
+    create the associated schedule and apply the guarded pod override.
+    """
+    def __init__(self, policy: TargetPolicy, admin_token: str):
+        if not policy.writes_allowed or not admin_token:
+            raise PreviewWriteError("approved preview-write policy and admin token are required")
+        self.policy, self._token = policy, admin_token
+        self._opener = build_opener(_RejectRedirects())
+
+    def post(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._request("POST", path, payload, {200, 201})
+
+    def patch(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._request("PATCH", path, payload, {200, 201})
+
+    def _request(self, method: str, path: str, payload: Dict[str, Any], expected: set[int]) -> Dict[str, Any]:
+        if not path.startswith("/apis/v2/"):
+            raise PreviewWriteError("Rate Cards write path is invalid")
+        url = self.policy.target_origin + path
+        self.policy.assert_url(url)
+        request = Request(url, data=json.dumps(payload, separators=(",", ":")).encode(), headers={
+            "Accept": "application/json", "Content-Type": "application/json",
+            "Authorization": f"Bearer {self._token}", "User-Agent": "podplay-sim-club/0.1 rate-cards-pilot",
+        }, method=method)
+        try:
+            with self._opener.open(request, timeout=20) as response:
+                self.policy.assert_url(response.geturl()); body = response.read(MAX_RESPONSE_BYTES + 1); status = response.status
+        except HTTPError as exc:
+            raise PreviewWriteError(f"Rate Cards write failed with HTTP {exc.code}") from exc
+        except URLError as exc:
+            raise PreviewWriteError("Rate Cards write network request failed") from exc
+        if status not in expected or len(body) > MAX_RESPONSE_BYTES:
+            raise PreviewWriteError("Rate Cards write returned an unexpected response")
+        try:
+            value = json.loads(body.decode())
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise PreviewWriteError("Rate Cards write returned invalid JSON") from exc
+        if not isinstance(value, dict):
+            raise PreviewWriteError("Rate Cards write response has an unexpected shape")
+        return value
+
+
 class _RejectRedirects(HTTPRedirectHandler):
     def redirect_request(self, request, fp, code, msg, headers, new_url):
         raise PreviewWriteError("preview write refused an HTTP redirect")
@@ -165,12 +210,14 @@ class PreviewCreditWriter:
         self._admin_token = admin_token
         self._opener = build_opener(_RejectRedirects())
 
-    def credit(self, user_id: str, amount: float) -> Dict[str, Any]:
+    def credit(self, user_id: str, amount: float, reason: Optional[str] = None) -> Dict[str, Any]:
         if not self.USER_ID.fullmatch(user_id):
             raise PreviewWriteError("virtual-credit target user ID is invalid")
         if not isinstance(amount, (int, float)) or amount <= 0 or amount > 50:
             raise PreviewWriteError("virtual-credit increment must be between 0 and 50")
         normalized_amount = round(float(amount), 2)
+        if reason is not None and (not isinstance(reason, str) or not reason.strip() or len(reason) > 120):
+            raise PreviewWriteError("virtual-credit reason is invalid")
         url = (
             self.policy.target_origin
             + f"/apis/v2/users/{user_id}/virtual-credits-transactions"
@@ -179,7 +226,7 @@ class PreviewCreditWriter:
         payload = {
             "amount": normalized_amount,
             "amountType": "INCOME",
-            "reason": self.REASON,
+            "reason": reason.strip() if reason is not None else self.REASON,
         }
         request = Request(
             url,

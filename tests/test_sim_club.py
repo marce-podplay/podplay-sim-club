@@ -33,7 +33,10 @@ from podplay_sim_club.preview import PreviewAdapter
 from podplay_sim_club.preview_booking import PreviewBookingWriter, occurrence_key
 from podplay_sim_club.team_signup import PreviewTeamMemberWriter
 from podplay_sim_club.preview_owner_event import PreviewOwnerEventWriter
-from podplay_sim_club.preview_event_signup import PreviewEventSignupWriter
+from podplay_sim_club.preview_event_signup import (
+    PreviewEventSignupWriter,
+    read_captain_attendance_invitation,
+)
 from podplay_sim_club.preview_match_ledger import (
     load_match_ledger,
     sanitized_match_index,
@@ -50,8 +53,11 @@ from podplay_sim_club.preview_participation import (
 from podplay_sim_club.preview_evaluation import (
     PreviewBookingEvaluator,
     PreviewEvaluationError,
+    UnifiedBookingQuoteEvaluator,
     summarize_booking_preview,
+    summarize_unified_booking_quote,
 )
+from podplay_sim_club.preview_booking import UnifiedBookingWriter, summarize_unified_order
 from podplay_sim_club.preview_readonly import PreviewReadError, PreviewReadonlyClient
 from podplay_sim_club.preview_readiness import (
     early_agreed_start,
@@ -877,6 +883,64 @@ class SimClubTestCase(unittest.TestCase):
         self.assertEqual(stored, again)
         self.assertEqual("arcade_simulation", stored["kind"])
         self.assertTrue((Storage(self.root).state / "arcade" / "matches.json").is_file())
+
+    def test_live_play_receipt_is_local_idempotent_and_not_attendance_or_result(self):
+        from podplay_sim_club.local_evidence import capture_live_play_receipts, evidence_index
+
+        storage = Storage(self.root)
+        occurrence = "training:club-lab:001"
+        storage.write_json(storage.state / "preview-matches.json", {
+            "schemaVersion": 1,
+            "matches": {
+                occurrence: {
+                    "occurrenceKey": occurrence,
+                    "label": "Evening training",
+                    "venue": {"areaName": "West 37th", "podName": "Open Pod"},
+                    "participants": [
+                        {"actorId": "andy-bogard", "label": "Andy Bogard"},
+                        {"actorId": "terry-bogard", "label": "Terry Bogard"},
+                    ],
+                    "lifecycle": {"steps": {"play": "PLAYING"}},
+                }
+            },
+        })
+
+        captured = capture_live_play_receipts(self.root, observed_at=FIXED_NOW)
+        again = capture_live_play_receipts(self.root, observed_at=FIXED_NOW)
+        item = captured["items"][0]
+
+        self.assertEqual("captured", captured["action"])
+        self.assertEqual("pass", again["action"])
+        self.assertEqual(0, captured["remoteWrites"])
+        self.assertTrue((storage.state / "evidence" / "images" / item["image"]).is_file())
+        self.assertEqual([item], evidence_index(self.root)["items"])
+        self.assertNotIn("attendance", item["boundary"].split("not ")[0])
+        self.assertNotIn("result", item["boundary"].split("not ")[0])
+        andy_entries = storage.read_jsonl(storage.actor_journal_path("andy-bogard"))
+        self.assertEqual("local_live_play_scene_captured", andy_entries[-1]["step"])
+
+    def test_live_play_receipt_does_not_capture_check_in_or_expose_actor_ids_as_names(self):
+        from podplay_sim_club.local_evidence import capture_live_play_receipts
+
+        storage = Storage(self.root)
+        storage.write_json(storage.state / "observed-bookings.json", {
+            "bookings": [{
+                "occurrenceKey": "training:club-lab:check-in",
+                "participants": [{"actorId": "andy-bogard"}, {"actorId": "terry-bogard"}],
+                "lifecycle": {"steps": {"play": "NOT_RECORDED", "checkIn": "CONFIRMED"}},
+            }],
+        })
+
+        self.assertEqual("pass", capture_live_play_receipts(self.root, observed_at=FIXED_NOW)["action"])
+        storage.write_json(storage.state / "observed-bookings.json", {
+            "bookings": [{
+                "occurrenceKey": "training:club-lab:check-in",
+                "participants": [{"actorId": "andy-bogard"}, {"actorId": "terry-bogard"}],
+                "lifecycle": {"steps": {"play": "PLAYING"}},
+            }],
+        })
+        captured = capture_live_play_receipts(self.root, observed_at=FIXED_NOW)
+        self.assertEqual(["Andy Bogard", "Terry Bogard"], captured["items"][0]["participants"])
 
     def test_arcade_replay_is_confirmed_by_the_named_reporter_without_claiming_check_in(self):
         from podplay_sim_club.arcade import attach_training_replay
@@ -1924,7 +1988,7 @@ class SimClubTestCase(unittest.TestCase):
         orchestrator = self.orchestrator()
         orchestrator.run_beat(turns=10, now=FIXED_NOW)
         frame = render(orchestrator.world_view(FIXED_NOW))
-        self.assertIn("PREVIEW CLUB // WORLD SIGNAL", frame)
+        self.assertIn("CLUB LAB // WORLD SIGNAL", frame)
         self.assertIn("POD-1 [A] ⇄ [T] occupied", frame)
         self.assertIn("BOOKING TRACE", frame)
 
@@ -2011,8 +2075,37 @@ class SimClubTestCase(unittest.TestCase):
             },
         )
         orchestrator.storage.write_json(
+            orchestrator.storage.state / "preview-readiness.json",
+            {
+                "location": {
+                    "podId": "pod-test",
+                    "areaName": "East 95th",
+                    "podName": "Test",
+                    "timezone": "America/New_York",
+                }
+            },
+        )
+        orchestrator.storage.write_json(
             orchestrator.storage.state / "tournament.json",
             {"schemaVersion": 1, "rounds": {"semi-final": {"status": "awaiting_result"}}},
+        )
+        orchestrator.storage.write_json(
+            orchestrator.storage.root / "secrets" / "unified-research-campaigns.json",
+            {
+                "campaigns": {
+                    "peak": {
+                        "owner": "kyo-captain",
+                        "teammate": "benimaru",
+                        "band": "peak",
+                        "startsAt": "2026-09-26T12:00:00.000Z",
+                        "endsAt": "2026-09-26T12:30:00.000Z",
+                        "lastObservedStatus": "CONFIRMED",
+                        "checkIns": {"kyo-captain": "confirmed"},
+                        "bookingId": "private-booking-id",
+                        "inviteToken": "private-invite-token",
+                    }
+                }
+            },
         )
         server = ObservatoryServer(orchestrator, host="127.0.0.1", port=0)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -2050,11 +2143,8 @@ class SimClubTestCase(unittest.TestCase):
         self.assertEqual("pp7444-test", preview["previewMatches"]["activeOccurrenceKey"])
         self.assertEqual(1, len(preview["previewMatches"]["matches"]))
         self.assertEqual("EVT-EVENTLIV", preview["previewMatches"]["matches"][0]["eventCode"])
-        self.assertEqual(PREVIEW_ORIGIN, preview["previewOrigin"])
-        self.assertEqual(
-            PREVIEW_ORIGIN + "/admin/v2/events?eventId=event-live",
-            preview["previewMatches"]["matches"][0]["eventUrl"],
-        )
+        self.assertNotIn("previewOrigin", preview)
+        self.assertNotIn("eventUrl", preview["previewMatches"]["matches"][0])
         self.assertEqual("Andy Bogard", preview["previewMatches"]["matches"][0]["participants"][0]["label"])
         self.assertNotIn("captainAction", preview)
         self.assertEqual({"status": "acknowledged", "actorId": "kyo-captain"}, acknowledgement)
@@ -2066,17 +2156,46 @@ class SimClubTestCase(unittest.TestCase):
         self.assertIn("invite_sent", [message["kind"] for message in preview["messages"]])
         self.assertEqual("Andy Bogard", next(message for message in preview["messages"] if message["kind"] == "invite_sent")["fromLabel"])
         self.assertIn("community", preview)
+        self.assertEqual(
+            [{
+                "campaign": "rate-cards-unified-pricing",
+                "label": "Peak training",
+                "participants": ["kyo-captain", "benimaru"],
+                "checkedIn": ["kyo-captain"],
+                "startsAt": "2026-09-26T12:00:00.000Z",
+                "endsAt": "2026-09-26T12:30:00.000Z",
+                "bookingStatus": "CONFIRMED",
+            }],
+            preview["researchActivity"]["campaigns"],
+        )
+        self.assertNotIn("private-booking-id", json.dumps(preview))
+        self.assertNotIn("private-invite-token", json.dumps(preview))
+        self.assertEqual(
+            [{
+                "area": "East 95th",
+                "pod": "Test",
+                "occupants": [],
+                "scheduledCount": 1,
+                "historyCount": 0,
+                "state": "scheduled",
+            }],
+            preview["venueActivity"]["pods"],
+        )
+        self.assertNotIn("pod-test", json.dumps(preview["venueActivity"]))
         self.assertIn("initiatives", preview)
         self.assertIn("invitationConversations", preview)
         self.assertEqual("Andy Bogard", next(person for person in preview["community"]["people"] if person["actorId"] == "andy-bogard")["label"])
         self.assertIn("PODPLAY SIM CLUB // COMMUNITY OBSERVATORY", page)
         self.assertIn("COMMUNITY CONVERSATION", page)
-        self.assertIn("SIMS · STATUS &amp; MOTIVES", page)
+        self.assertIn('class="sim-inspect"', page)
+        self.assertNotIn("SIMS · STATUS &amp; MOTIVES", page)
         self.assertIn("STAFF / COMMUNITY INITIATIVES", page)
         self.assertIn("INVITATION CONVERSATIONS", page)
         self.assertIn("BOOKINGS &amp; EVENTS", page)
-        self.assertIn('id="preview-server"', page)
-        self.assertIn("Open this event in Preview", page)
+        self.assertNotIn('id="preview-server"', page)
+        self.assertIn('id="product-health"', page)
+        self.assertNotIn("Open this event in Preview", page)
+        self.assertIn("private Preview locations stay out", page)
         self.assertIn("if(node.innerHTML!==html)", page)
         self.assertNotIn("LOCAL FAKE", page)
         self.assertNotIn("CHARACTER NEEDS", page)
@@ -2298,7 +2417,10 @@ class PreviewConnectionTestCase(unittest.TestCase):
 
     def test_session_check_covers_seeded_owner_players_and_front_desk_without_secrets(self):
         self.assertEqual(
-            ("sofia", "andy-bogard", "terry-bogard", "riley"),
+            (
+                "sofia", "andy-bogard", "terry-bogard",
+                "kyo-captain", "benimaru", "blanka", "ryu", "ken-masters", "riley",
+            ),
             seed_actor_ids(load_preview_seed(REPO_ROOT)),
         )
         record = session_check_record([
@@ -2640,6 +2762,42 @@ class PreviewConnectionTestCase(unittest.TestCase):
                 }
             )
 
+    def test_unified_quote_evaluator_only_posts_the_quote_shape(self):
+        policy = TargetPolicy.from_config(ClubConfig(mode=RunMode.PREVIEW_READONLY, preview_origin=PREVIEW_ORIGIN, allowed_preview_origins=(PREVIEW_ORIGIN,)))
+
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): return None
+            def geturl(self): return PREVIEW_ORIGIN + "/apis/v2/bookings/quotes"
+            def read(self, _limit): return b'{"pricing":{"due":{"total":{"amount":2200,"currency":"USD"}}},"issues":[]}'
+
+        requests = []
+        result = UnifiedBookingQuoteEvaluator(policy, "token", lambda request, timeout: requests.append(request) or Response()).evaluate("pod-1", "2026-10-21T16:30:00Z", "2026-10-21T17:00:00Z", 2)
+        self.assertEqual({"slot": {"pod": {"id": "pod-1"}, "startsAt": "2026-10-21T16:30:00Z", "endsAt": "2026-10-21T17:00:00Z"}, "groupSize": 2}, json.loads(requests[0].data.decode("utf-8")))
+        self.assertEqual(22.0, summarize_unified_booking_quote(result)["total"])
+
+    def test_unified_writer_quotes_then_confirms_once(self):
+        policy = TargetPolicy.from_config(ClubConfig(mode=RunMode.PREVIEW_WRITE, preview_origin=PREVIEW_ORIGIN, allowed_preview_origins=(PREVIEW_ORIGIN,), preview_write_confirmation=PREVIEW_ORIGIN))
+
+        class Response:
+            def __init__(self, body): self.body = body; self.status = 201
+            def __enter__(self): return self
+            def __exit__(self, *args): return None
+            def geturl(self): return PREVIEW_ORIGIN + "/apis/v2/bookings/quotes/q-1/confirm"
+            def read(self, _limit): return self.body
+
+        requests = []
+        replies = [
+            b'{"id":"q-1","pricing":{"due":{"total":{"amount":2200}}},"_links":{"confirm":{"href":"/bookings/quotes/q-1/confirm"}},"requirements":[]}',
+            b'{"status":"CONFIRMED","event":{"id":"event-1"}}',
+        ]
+        writer = UnifiedBookingWriter(policy, "token", lambda request, timeout: requests.append(request) or Response(replies.pop(0)))
+        result = writer.order("pod-1", "2026-10-21T16:30:00Z", "2026-10-21T17:00:00Z", 2, "pm-1")
+        self.assertEqual(2, len(requests))
+        self.assertEqual("/apis/v2/bookings/quotes", requests[0].full_url.removeprefix(PREVIEW_ORIGIN))
+        self.assertEqual({"termsAgreed": True, "paymentMethod": {"id": "pm-1"}}, json.loads(requests[1].data.decode("utf-8")))
+        self.assertEqual("event-1", summarize_unified_order(result)["eventId"])
+
     def test_booking_preview_summary_is_sanitized(self):
         result = summarize_booking_preview(
             {
@@ -2769,7 +2927,7 @@ class PreviewConnectionTestCase(unittest.TestCase):
         writer = PreviewOwnerEventWriter(policy, "admin-token", lambda request, _timeout: requests.append(request) or Response())
         writer.create_open_play(
             [{"sessionId": "session-1", "tableId": "table-1"}, {"sessionId": "session-2", "tableId": "table-2"}],
-            "Preview Club Open Play free-hour-001",
+            "Club Lab Open Play free-hour-001",
         )
         body = json.loads(requests[0].data.decode("utf-8"))
 
@@ -2799,6 +2957,50 @@ class PreviewConnectionTestCase(unittest.TestCase):
         self.assertTrue(body["termsAgreed"])
         self.assertEqual("USE_ALL", body["passesStrategy"])
         self.assertNotIn("owner", body)
+
+    def test_captain_signup_detail_resolves_only_its_linked_attendance_invitation(self):
+        class Client:
+            def get(self, path):
+                if path == "/apis/v2/events/event-1/signups/signup-1":
+                    return {
+                        "id": "signup-1",
+                        "summary": {
+                            "openInvitation": {"id": "signup-1"},
+                            "invitation": {
+                                "id": "attendance-1", "status": "ACCEPTED",
+                                "openInvitation": {"id": "signup-1"},
+                                "inviteeProfile": {"id": "captain-1"},
+                            },
+                        },
+                    }
+                if path.startswith("/apis/v2/events/event-1/invitations?"):
+                    return {"items": [{
+                        "id": "attendance-1", "inviteeProfile": {"id": "captain-1"},
+                        "checkIn": {"status": "NOT_CHECKED_IN"},
+                    }]}
+                self.fail(f"unexpected Preview read: {path}")
+
+        invitation = read_captain_attendance_invitation(Client(), "event-1", "signup-1")
+        self.assertEqual("attendance-1", invitation["id"])
+        self.assertEqual("NOT_CHECKED_IN", invitation["checkIn"]["status"])
+
+    def test_captain_signup_detail_rejects_an_unlinked_invitation(self):
+        class Client:
+            def get(self, _path):
+                return {
+                    "id": "signup-1",
+                    "summary": {
+                        "openInvitation": {"id": "signup-1"},
+                        "invitation": {
+                            "id": "attendance-1", "status": "ACCEPTED",
+                            "openInvitation": {"id": "another-signup"},
+                            "inviteeProfile": {"id": "captain-1"},
+                        },
+                    },
+                }
+
+        with self.assertRaisesRegex(PreviewReadError, "did not resolve"):
+            read_captain_attendance_invitation(Client(), "event-1", "signup-1")
 
     def test_team_member_writer_previews_then_adds_one_named_member(self):
         policy = TargetPolicy.from_config(ClubConfig(mode=RunMode.PREVIEW_WRITE, preview_origin=PREVIEW_ORIGIN, allowed_preview_origins=(PREVIEW_ORIGIN,), preview_write_confirmation=PREVIEW_ORIGIN))

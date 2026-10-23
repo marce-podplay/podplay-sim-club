@@ -64,15 +64,27 @@ def booking_plan_inspector(root: Path, booking_plan_id: str) -> Dict[str, Any]:
     plan = row.get("plan")
     if not isinstance(plan, dict):
         raise InspectorNotFoundError("booking plan is malformed")
+    roster = storage.load_json(root / "characters" / "roster.json", default={})
+    characters = roster.get("characters", []) if isinstance(roster, dict) else []
+    names = {
+        character.get("actorId"): character.get("name")
+        for character in characters
+        if isinstance(character, dict) and isinstance(character.get("actorId"), str) and isinstance(character.get("name"), str)
+    }
+    participants = plan.get("participantActorIds") if isinstance(plan.get("participantActorIds"), list) else []
     # Copy only the contract fields; the projection remains the canonical source.
     return {
         "bookingPlanId": row.get("bookingPlanId"),
         "stage": row.get("stage", "unknown"),
+        "label": "Booking plan",
         "occurrenceKey": plan.get("occurrenceKey"),
-        "participants": list(plan.get("participantActorIds", [])),
+        "participants": [names.get(actor_id, "Named Sim") for actor_id in participants if isinstance(actor_id, str)],
         "ownerActorId": plan.get("ownerActorId"),
         "payerActorId": plan.get("payerActorId"),
+        "ownerLabel": names.get(plan.get("ownerActorId"), "Named player"),
+        "payerLabel": names.get(plan.get("payerActorId"), "Named player"),
         "venueRef": plan.get("venueRef"),
+        "venueLabel": "Configured venue",
         "window": deepcopy(plan.get("window")),
         "requestedFunding": deepcopy(plan.get("requestedFunding")),
         "quote": _quote_view(row.get("quote")),
@@ -124,13 +136,27 @@ def inspection_index(root: Path) -> Dict[str, Any]:
         if isinstance(row, dict) and isinstance(row.get("actorId"), str):
             people.append({"actorId": row["actorId"], "label": row.get("name", row["actorId"])})
     plans = projection.get("bookingPlans", {}) if isinstance(projection, dict) else {}
+    labels = {
+        row.get("actorId"): row.get("name")
+        for row in characters
+        if isinstance(row, dict) and isinstance(row.get("actorId"), str) and isinstance(row.get("name"), str)
+    }
     plan_rows = []
     for plan_id, row in plans.items() if isinstance(plans, dict) else []:
         if isinstance(row, dict):
+            plan = row.get("plan") if isinstance(row.get("plan"), dict) else {}
+            window = plan.get("window") if isinstance(plan.get("window"), dict) else {}
+            participants = plan.get("participantActorIds") if isinstance(plan.get("participantActorIds"), list) else []
             plan_rows.append({
                 "bookingPlanId": plan_id,
+                # Kept only in the local server projection so it can connect a
+                # plan to an observed event.  It is removed before browser use.
+                "occurrenceKey": plan.get("occurrenceKey"),
                 "stage": row.get("stage", "unknown"),
-                "occurrenceKey": row.get("plan", {}).get("occurrenceKey") if isinstance(row.get("plan"), dict) else None,
+                "startsAt": window.get("startsAt"),
+                "endsAt": window.get("endsAt"),
+                "participants": [labels[actor_id] for actor_id in participants if isinstance(actor_id, str) and actor_id in labels],
+                "quoteStatus": row.get("quote", {}).get("status") if isinstance(row.get("quote"), dict) else "not_observed",
             })
     return {"players": sorted(people, key=lambda row: row["label"]), "bookingPlans": sorted(plan_rows, key=lambda row: row["bookingPlanId"])}
 

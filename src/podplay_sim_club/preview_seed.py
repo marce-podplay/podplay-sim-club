@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 from .firebase_auth import FirebaseAuthenticator
 from .players import actor_auth_cache
 from .identity_registry import ActorIdentity, IdentityRegistry
+from .club_context import load_club_context
 from .preview_readonly import PreviewReadError, PreviewReadonlyClient, collection_items
 from .preview_write import PreviewIdentityWriter, PreviewRoleWriter, PreviewWriteError
 from .target_policy import TargetPolicy
@@ -175,6 +176,12 @@ def apply_identity_seed(
     role_writer = PreviewRoleWriter(write_policy, admin_token)
     registry = IdentityRegistry(root / "secrets" / "preview-actors.json")
     fixture = staff_fixture(load_preview_seed(root))
+    context = load_club_context(root)
+    seed_context_key = load_preview_seed(root).get("clubContextKey")
+    if seed_context_key != context.key:
+        raise PreviewWriteError("seed is assigned to a different Club Lab context")
+    if fixture["actorId"] not in context.staff_actor_ids:
+        raise PreviewWriteError("seed staff fixture is not assigned to this Club Lab")
     results = []
 
     for actor_id, identity in identities.items():
@@ -217,6 +224,7 @@ def apply_identity_seed(
             podplay_user_id,
             read_policy.target_origin,
             plan["tenantId"],
+            context.key,
         )
         assigned_roles = []
         if actor_id == fixture["actorId"]:
