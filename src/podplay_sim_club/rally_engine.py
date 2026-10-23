@@ -22,6 +22,7 @@ from .share_invitations import next_share_invitation_task
 from .share_invitation_bridge import advance as advance_share_invitation_bridge
 from .check_in_bridge import next_task as next_check_in_task, advance as advance_check_in_bridge
 from .local_evidence import capture_live_play_receipts
+from .active_sessions import tick as tick_active_sessions
 from .staff_follow_up import tick as run_staff_follow_up
 from .journey_policy import dispatch as dispatch_browser_journey
 
@@ -155,6 +156,7 @@ def tick(
         )
         if check_in_bridge.get("action") != "pass" and result_request.get("action") == "pass":
             result = check_in_bridge
+    active_sessions = tick_active_sessions(root, now=instant)
     evidence_capture = capture_live_play_receipts(root, observed_at=instant)
     with storage.writer_lock():
         state = storage.load_json(storage.state / STATE_FILE, default=state)
@@ -164,7 +166,7 @@ def tick(
         state["schedulerCursor"] = cursor
         storage.write_json(storage.state / STATE_FILE, state)
         _write_interpretation_audit(storage, rounds, isoformat(instant))
-    return {"status": state["status"], "state": state, "action": result["action"], "socialOffers": social["offers"], "rounds": rounds, "ownerEngagement": owner_engagement, "player": player, "frontDesk": front_desk, "staffFollowUp": staff_follow_up, "observation": observation, "trainingObservation": training_observation, "arcadeReplay": arcade_replay, "trainingRecovery": training_recovery, "resultRequest": result_request, "training": training, "teamSignup": team_signup, "bookingBridge": booking_bridge, "shareInvitationTask": share_task, "shareInvitationBridge": share_bridge, "checkInTask": check_in_task, "checkInBridge": check_in_bridge, "browserJourney": browser_bridge if apply_preview else None, "evidenceCapture": evidence_capture, "remoteWrites": int(booking_bridge.get("remoteWrites", 0)) + int(share_bridge.get("remoteWrites", 0)) + int(check_in_bridge.get("remoteWrites", 0))}
+    return {"status": state["status"], "state": state, "action": result["action"], "socialOffers": social["offers"], "rounds": rounds, "ownerEngagement": owner_engagement, "player": player, "frontDesk": front_desk, "staffFollowUp": staff_follow_up, "observation": observation, "trainingObservation": training_observation, "arcadeReplay": arcade_replay, "trainingRecovery": training_recovery, "resultRequest": result_request, "training": training, "teamSignup": team_signup, "bookingBridge": booking_bridge, "shareInvitationTask": share_task, "shareInvitationBridge": share_bridge, "checkInTask": check_in_task, "checkInBridge": check_in_bridge, "browserJourney": browser_bridge if apply_preview else None, "activeSessions": active_sessions, "evidenceCapture": evidence_capture, "remoteWrites": int(booking_bridge.get("remoteWrites", 0)) + int(share_bridge.get("remoteWrites", 0)) + int(check_in_bridge.get("remoteWrites", 0))}
 
 
 def _write_interpretation_audit(storage: Storage, rounds: list[Dict[str, Any]], observed_at: str) -> None:

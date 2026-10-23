@@ -14,6 +14,7 @@ from typing import Any
 
 from .storage import Storage
 from .identity_registry import ACTOR_NAMES, TEAM_ACTOR_NAMES
+from .active_sessions import sessions as active_sessions
 
 
 INDEX_FILE = "evidence/index.json"
@@ -96,6 +97,7 @@ def _matches(storage: Storage) -> list[dict[str, Any]]:
         bookings = value.get("bookings") if isinstance(value, dict) else None
         if isinstance(bookings, list):
             rows.extend(row for row in bookings if isinstance(row, dict))
+    rows.extend(active_sessions(storage.root))
     return rows
 
 

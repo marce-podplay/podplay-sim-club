@@ -20,6 +20,7 @@ from .season_recovery import snapshot as season_recovery_snapshot
 from .control_plane import snapshot as control_plane_snapshot
 from .research_rewards import snapshot as research_rewards_snapshot
 from .local_evidence import evidence_index
+from .active_sessions import sessions as active_sessions
 
 
 class ObservatoryServer:
@@ -667,7 +668,9 @@ def _venue_activity(orchestrator: Orchestrator, match_index):
                 baseline["courtCount"] = court_count
             pods[(area, pod)] = baseline
     matches = match_index.get("matches") if isinstance(match_index, dict) else []
-    for match in matches if isinstance(matches, list) else []:
+    matches = list(matches) if isinstance(matches, list) else []
+    matches.extend(session for session in active_sessions(orchestrator.storage.root) if session.get("status") == "PLAYING")
+    for match in matches:
         if not isinstance(match, dict):
             continue
         venue = match.get("venue") if isinstance(match.get("venue"), dict) else {}
@@ -708,7 +711,7 @@ def _venue_activity(orchestrator: Orchestrator, match_index):
     rows.sort(key=lambda row: (row["area"], row["pod"]))
     return {
         "pods": rows,
-        "boundary": "Only explicit live-play evidence places a Sim inside a pod; check-in is not play.",
+        "boundary": "Occupancy means either explicit product play evidence or a local active-session inference: the booked window is open and every named player visibly checked in. Neither is attendance, score, or result proof.",
     }
 
 
