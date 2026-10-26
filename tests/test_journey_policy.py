@@ -9,7 +9,7 @@ import sys
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from podplay_sim_club.journey_policy import (  # noqa: E402
-    browser_journey_required, claim, dispatch, record_observation,
+    browser_journey_required, claim, dispatch, pending_or_new, record_observation,
 )
 
 
@@ -86,3 +86,15 @@ class JourneyPolicyTests(unittest.TestCase):
         self.assertEqual("mai", invitation["actorId"])
         self.assertEqual("playbooks/sim-player-invitation.md", invitation["playbook"])
         self.assertEqual("playbooks/sim-player-check-in.md", arrival["playbook"])
+
+    def test_observed_browser_work_does_not_block_a_fresh_task(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old_task = {"action": "check_in_training", "intentId": "intent:old", "actorId": "andy-bogard"}
+            old = dispatch(root, task=old_task, role="player", observed_at="2026-10-22T12:00:00Z")
+            claim(root, job_key=old["jobKey"], actor_id="andy-bogard", observed_at="2026-10-22T12:01:00Z")
+            record_observation(root, job_key=old["jobKey"], actor_id="andy-bogard", kind="browser_pass", observed_at="2026-10-22T12:02:00Z")
+
+            fresh_task = {"action": "plan_training_booking", "intentId": "intent:fresh", "bookerActorId": "andy-bogard"}
+            self.assertFalse(pending_or_new(root, task=old_task, role="player"))
+            self.assertTrue(pending_or_new(root, task=fresh_task, role="player"))

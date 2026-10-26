@@ -131,6 +131,25 @@ def dispatch(root: Path, *, task: Dict[str, Any], role: str, observed_at: Option
     return {**job, "jobKey": key, "status": "queued"}
 
 
+def pending_or_new(root: Path, *, task: Dict[str, Any], role: str) -> bool:
+    """Whether a browser task should occupy the sequential runner.
+
+    An observed task is historical evidence, not an outstanding instruction.
+    This lets a fresh booking agreement proceed past an old, already-observed
+    check-in or invitation job while preserving queued and active work as the
+    runner's current priority.
+    """
+    job = browser_journey_required(task=task, role=role)
+    actor = job.get("actorId")
+    if job.get("journeyAction") == "pass" or not isinstance(actor, str):
+        return False
+    key = ":".join(str(job.get(field) or "-") for field in ("role", "journeyAction", "intentId", "actorId"))
+    state = Storage(root).load_json(Storage(root).state / STATE_FILE, default={})
+    jobs = state.get("jobs", {}) if isinstance(state, dict) else {}
+    existing = jobs.get(key) if isinstance(jobs, dict) else None
+    return not isinstance(existing, dict) or existing.get("status") in {"queued", "active"}
+
+
 def claim(root: Path, *, job_key: str, actor_id: str, observed_at: Optional[str] = None) -> Dict[str, Any]:
     """Let the named Sim exclusively take the next browser step.
 

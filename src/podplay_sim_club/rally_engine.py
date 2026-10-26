@@ -22,7 +22,7 @@ from .check_in_bridge import next_task as next_check_in_task
 from .local_evidence import capture_live_play_receipts
 from .active_sessions import tick as tick_active_sessions
 from .staff_follow_up import tick as run_staff_follow_up
-from .journey_policy import dispatch as dispatch_browser_journey
+from .journey_policy import dispatch as dispatch_browser_journey, pending_or_new as browser_work_pending_or_new
 
 
 STATE_FILE = "rally-engine.json"
@@ -140,10 +140,12 @@ def tick(
     booking_bridge = {"action": "pass", "detail": "booking integrations are disabled; named Sim browser work is queued instead", "remoteWrites": 0}
     share_bridge = {"action": "pass", "detail": "invitation integrations are disabled; named Sim browser work is queued instead", "remoteWrites": 0}
     check_in_bridge = {"action": "pass", "detail": "check-in integrations are disabled; named Sim browser work is queued instead", "remoteWrites": 0}
-    next_task = (
-        check_in_task if check_in_task.get("action") != "pass"
-        else share_task if share_task.get("action") != "pass"
-        else booking_task
+    next_task = next(
+        (
+            task for task in (check_in_task, share_task, booking_task)
+            if browser_work_pending_or_new(root, task=task, role="player")
+        ),
+        {"action": "pass", "detail": "no new or pending named-Sim browser work"},
     )
     browser_bridge = dispatch_browser_journey(root, task=next_task, role="player")
     if next_task.get("action") != "pass" and result_request.get("action") == "pass":
