@@ -5,6 +5,7 @@ worker.  Keeping the contract durable makes that model/provider interchangeable
 and prevents the Python engine from silently opening a browser or a model.
 """
 
+import hashlib
 from pathlib import Path
 from typing import Any, Dict
 
@@ -37,6 +38,34 @@ def _launch_packet(contract: Dict[str, Any]) -> Dict[str, Any]:
         "mode": contract.get("mode"),
         "allowedEvidence": contract.get("allowedEvidence"),
     }
+
+
+def _contract_ref(contract_key: str) -> str:
+    return hashlib.sha256(contract_key.encode("utf-8")).hexdigest()[:16]
+
+
+def _receipt_ref(storage: Storage, *, contract: Dict[str, Any], receipt_ref: str | None) -> str | None:
+    """Validate a local bootstrap receipt without accepting arbitrary paths."""
+    if receipt_ref is None:
+        return None
+    if not isinstance(receipt_ref, str) or not receipt_ref:
+        raise ValueError("worker receipt reference must be a local relative path")
+    candidate = (storage.root / receipt_ref).resolve()
+    evidence_root = (storage.state / "worker-evidence").resolve()
+    expected = evidence_root / _contract_ref(str(contract["contractKey"])) / "worker-receipt.json"
+    if candidate != expected or not candidate.is_file():
+        raise ValueError("worker receipt is not the expected local bootstrap receipt")
+    receipt = storage.load_json(candidate, default={})
+    if (
+        not isinstance(receipt, dict)
+        or receipt.get("schemaVersion") != 1
+        or receipt.get("actorId") != contract.get("actorId")
+        or receipt.get("contractRef") != _contract_ref(str(contract["contractKey"]))
+        or receipt.get("status") != "browser_ready"
+        or receipt.get("remoteWrites") != 0
+    ):
+        raise ValueError("worker receipt is incomplete or does not match the active contract")
+    return receipt_ref
 
 
 def queue(root: Path, *, browser_job: Dict[str, Any]) -> Dict[str, Any]:
@@ -192,6 +221,32 @@ def active_packet(root: Path, *, worker_id: str) -> Dict[str, Any]:
     }
 
 
+def runbook(root: Path, *, worker_id: str) -> Dict[str, Any]:
+    """Give an external economical worker a finite, evidence-first routine."""
+    packet_result = active_packet(root, worker_id=worker_id)
+    if packet_result.get("action") == "pass":
+        return packet_result
+    packet = packet_result["launchPacket"]
+    return {
+        "action": "worker_runbook_ready",
+        "workerId": worker_id,
+        "launchPacket": packet,
+        "steps": [
+            "Run tools/sim-browser/worker-bootstrap.py with this worker identity.",
+            "Read the named playbook before any rendered UI action.",
+            "Use only the isolated browser and allowed visible controls.",
+            "Record a browser observation before reporting visible progress or unexpected UI.",
+            "Report exactly one bounded outcome with the bootstrap receipt reference when visible evidence exists.",
+        ],
+        "prohibitions": [
+            "No product APIs or integrations on behalf of the Sim.",
+            "No credentials, private URLs, raw network payloads, or inferred product outcomes in the receipt.",
+            "Do not retry an uncertain browser journey; report blocked for coordinator review.",
+        ],
+        "remoteWrites": 0,
+    }
+
+
 def recover_unobserved_release(root: Path, *, contract_key: str) -> Dict[str, Any]:
     """Repair an older reported bootstrap failure without inventing UI work.
 
@@ -251,7 +306,10 @@ def quarantine_legacy_release(root: Path, *, contract_key: str) -> Dict[str, Any
     return {"action": "worker_contract_quarantined", "contractKey": contract_key, "status": "blocked", "remoteWrites": 0}
 
 
-def report(root: Path, *, contract_key: str, worker_id: str, outcome: str, diary_line: str) -> Dict[str, Any]:
+def report(
+    root: Path, *, contract_key: str, worker_id: str, outcome: str, diary_line: str,
+    receipt_ref: str | None = None,
+) -> Dict[str, Any]:
     """Close one worker turn with a bounded, secret-free diary outcome."""
     if outcome not in WORKER_OUTCOMES:
         raise ValueError("worker outcome is not allowed")
@@ -265,6 +323,9 @@ def report(root: Path, *, contract_key: str, worker_id: str, outcome: str, diary
         contract = contracts.get(contract_key) if isinstance(contracts, dict) else None
         if not isinstance(contract, dict) or contract.get("status") != "active" or contract.get("workerId") != worker_id:
             raise ValueError("only the claiming worker may report")
+        validated_receipt = _receipt_ref(storage, contract=contract, receipt_ref=receipt_ref)
+        if outcome in {"visible_progress", "unexpected_ui"} and validated_receipt is None:
+            raise ValueError("visible worker outcome needs a local bootstrap receipt")
         journeys = storage.load_json(storage.state / JOURNEY_STATE_FILE, default={})
         jobs = journeys.get("jobs", {}) if isinstance(journeys, dict) else {}
         job_key = contract.get("browserJobKey")
@@ -285,9 +346,11 @@ def report(root: Path, *, contract_key: str, worker_id: str, outcome: str, diary
             job.update({"status": "blocked", "lastWorkerOutcome": outcome, "lastWorkerReviewAt": observed_at})
             storage.write_json(storage.state / JOURNEY_STATE_FILE, {"schemaVersion": 1, "jobs": jobs})
         contract.update({"status": "reported", "reportedAt": observed_at, "outcome": outcome, "diaryLine": diary_line.strip()})
+        if validated_receipt is not None:
+            contract["receiptRef"] = validated_receipt
         storage.write_json(storage.state / STATE_FILE, {"schemaVersion": 1, "contracts": contracts})
         storage.append_jsonl(storage.actor_journal_path(str(contract["actorId"])), {
             "observedAt": observed_at, "kind": "worker_journey", "contractKey": contract_key,
-            "outcome": outcome, "text": diary_line.strip(), "remoteWrites": 0,
+            "outcome": outcome, "text": diary_line.strip(), "receiptRef": validated_receipt, "remoteWrites": 0,
         })
     return {"contractKey": contract_key, "status": "reported", "remoteWrites": 0}

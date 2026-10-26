@@ -40,6 +40,17 @@ If the dispatcher launches the worker separately, that worker reads its already-
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m podplay_sim_club.cli worker-dispatch active --worker economical:runner-1
 ```
 
+It may then retrieve its exact runbook, including the prohibitions and receipt
+requirements, before it opens the isolated browser:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m podplay_sim_club.cli worker-dispatch runbook --worker economical:runner-1
+```
+
+Visible-progress and unexpected-UI reports must name the matching local
+`worker-bootstrap.py` receipt. This ties the worker diary to sanitized
+rendered-browser evidence without treating either as product proof.
+
 Only an explicit `not_started` receipt releases the local browser job for a later retry. A `blocked` or `pass` receipt quarantines it for coordinator review, because the absence of a receipt cannot prove that no UI action occurred. A visible-progress or unexpected-UI receipt is accepted only after the worker has recorded a visible browser observation.
 
 ## Four operating modes

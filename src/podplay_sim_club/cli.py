@@ -379,6 +379,10 @@ def build_parser() -> argparse.ArgumentParser:
         "active", help="read the one already-claimed secret-free launch packet for a worker"
     )
     worker_dispatch_active.add_argument("--worker", required=True, dest="worker_id")
+    worker_dispatch_runbook = worker_dispatch_subcommands.add_parser(
+        "runbook", help="read the bounded evidence-first routine for an already-active worker"
+    )
+    worker_dispatch_runbook.add_argument("--worker", required=True, dest="worker_id")
     worker_dispatch_recover = worker_dispatch_subcommands.add_parser(
         "recover-unobserved", help="release an older dispatcher-side failure that has no browser observation"
     )
@@ -397,6 +401,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["visible_progress", "unexpected_ui", "blocked", "not_started", "pass"],
     )
     worker_dispatch_report.add_argument("--diary", required=True, dest="diary_line")
+    worker_dispatch_report.add_argument("--receipt", dest="receipt_ref", help="local worker-bootstrap receipt path for visible outcomes")
 
     secure_channel = subparsers.add_parser("secure-channel", help="retain and deliver browser-created invitations privately")
     secure_channel_subcommands = secure_channel.add_subparsers(dest="secure_channel_command", required=True)
@@ -1088,12 +1093,15 @@ def main(argv: Optional[list] = None) -> int:
             quarantine_legacy_release,
             recover_unobserved_release,
             report as report_worker_contract,
+            runbook as worker_runbook,
         )
         try:
             if args.worker_dispatch_command == "next":
                 result = claim_next_worker_contract(root, worker_id=args.worker_id)
             elif args.worker_dispatch_command == "active":
                 result = active_worker_packet(root, worker_id=args.worker_id)
+            elif args.worker_dispatch_command == "runbook":
+                result = worker_runbook(root, worker_id=args.worker_id)
             elif args.worker_dispatch_command == "recover-unobserved":
                 result = recover_unobserved_release(root, contract_key=args.contract_key)
             elif args.worker_dispatch_command == "quarantine-legacy-release":
@@ -1101,7 +1109,7 @@ def main(argv: Optional[list] = None) -> int:
             else:
                 result = report_worker_contract(
                     root, contract_key=args.contract_key, worker_id=args.worker_id,
-                    outcome=args.outcome, diary_line=args.diary_line,
+                    outcome=args.outcome, diary_line=args.diary_line, receipt_ref=args.receipt_ref,
                 )
         except ValueError as exc:
             print(f"ERROR worker dispatch: {exc}", file=sys.stderr)

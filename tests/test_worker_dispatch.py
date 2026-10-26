@@ -1,4 +1,5 @@
 from pathlib import Path
+import hashlib
 import json
 import tempfile
 import unittest
@@ -7,8 +8,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 import sys
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from podplay_sim_club.journey_policy import dispatch as dispatch_browser_journey
-from podplay_sim_club.worker_dispatch import active_packet, claim, claim_next, queue, report
+from podplay_sim_club.journey_policy import dispatch as dispatch_browser_journey, record_observation
+from podplay_sim_club.worker_dispatch import active_packet, claim, claim_next, queue, report, runbook
 
 
 class WorkerDispatchTests(unittest.TestCase):
@@ -34,6 +35,35 @@ class WorkerDispatchTests(unittest.TestCase):
             self.assertEqual("active", journeys["jobs"][first_job["jobKey"]]["status"])
             packet = active_packet(root, worker_id="economical:runner-1")
             self.assertEqual(launched["launchPacket"], packet["launchPacket"])
+            self.assertEqual("worker_runbook_ready", runbook(root, worker_id="economical:runner-1")["action"])
+
+    def test_visible_worker_receipt_must_match_the_active_contract(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            job = dispatch_browser_journey(root, task={
+                "action": "plan_training_booking", "intentId": "intent:receipt", "bookerActorId": "andy-bogard",
+            }, role="rally")
+            queued = queue(root, browser_job=job)
+            claim_next(root, worker_id="economical:runner-1")
+            record_observation(root, job_key=job["jobKey"], actor_id="andy-bogard", kind="visible_observation")
+            contract_key = queued["contractKey"]
+            reference = hashlib.sha256(contract_key.encode("utf-8")).hexdigest()[:16]
+            receipt_path = root / "state" / "worker-evidence" / reference / "worker-receipt.json"
+            receipt_path.parent.mkdir(parents=True)
+            receipt_path.write_text(json.dumps({
+                "schemaVersion": 1, "actorId": "andy-bogard", "contractRef": reference,
+                "status": "browser_ready", "remoteWrites": 0,
+            }))
+
+            reported = report(
+                root, contract_key=contract_key, worker_id="economical:runner-1",
+                outcome="visible_progress", diary_line="Rendered booking entry was observed; no booking outcome inferred.",
+                receipt_ref=str(receipt_path.relative_to(root)),
+            )
+
+            self.assertEqual("reported", reported["status"])
+            contract = json.loads((root / "state" / "worker-contracts.json").read_text())["contracts"][contract_key]
+            self.assertEqual(str(receipt_path.relative_to(root)), contract["receiptRef"])
 
     def test_operations_worker_skips_a_stale_contract_for_a_runnable_one(self):
         with tempfile.TemporaryDirectory() as directory:
