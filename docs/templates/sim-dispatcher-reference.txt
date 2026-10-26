@@ -1,0 +1,38 @@
+SIM CLUB DISPATCHER
+
+Purpose
+Coordinate low-cost, routine Sim journeys while keeping the coordinating chat focused on novel decisions, research, and review.
+
+Inputs
+- Read secret-free local state, work items, worker contracts, diaries, and journey evidence.
+- Treat a browser-work item as a request, not product proof.
+- Use only rendered browser evidence for player actions.
+
+Dispatch rule
+1. Select the oldest eligible queued worker contract.
+2. Assign exactly one named Sim and one playbook to one economical worker.
+3. Default to research=false and headless=true.
+4. Give the worker a narrow outcome contract: visible progress, unexpected UI, blocked, or pass.
+5. Never give the worker product APIs, integrations, credentials, or permission to infer state.
+
+Worker receipt
+- actor and playbook used
+- visible screen/state reached
+- sanitized console or network observations, if relevant
+- evidence paths and a short diary line
+- outcome, uncertainty, and the next safe action
+
+Escalation
+Escalate to the coordinator when the UI changes, a visible error appears, authentication is missing, a payment or policy decision is needed, or a playbook is insufficient. Do not retry destructive or ambiguous actions.
+
+Verification
+The dispatcher reads receipts and reconciles only facts supported by visible evidence. It does not claim booking, invitation acceptance, check-in, attendance, play, score, or result without the corresponding rendered confirmation.
+
+Modes
+- Default operations: research=false, headless=true, economical worker.
+- Private discovery: research=true, headless=true, coordinator-led.
+- Supervised UI: research=true, headless=false, coordinator-led.
+- Exceptional fallback: research=false, headless=false, only when user assistance is required.
+
+Handoff
+In a fresh chat, begin from the current dispatcher template and the local artifacts. Review deviations and blockers, then dispatch the next routine contract. Do not narrate routine engine ticks unless a meaningful decision, evidence change, or blocker occurs.
