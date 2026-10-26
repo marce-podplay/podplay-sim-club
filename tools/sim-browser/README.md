@@ -35,11 +35,13 @@ screenshots, evidence, or durable storage.
 
 ## Rally Engine bridge
 
-When an explicitly applied Rally tick discovers a named player-owned product
-step, it writes a secret-free work item in `state/browser-journeys.json`. The
-work item contains only the named Sim, the local intent reference, and the
-next journey category. It does not start Chrome, hold a session, or assert a
-product outcome by itself.
+When Rally discovers a fresh, named player-owned product step, it writes a
+secret-free work item in `state/browser-journeys.json`. The work item contains
+only the named Sim, the local intent reference, and the next journey category.
+It does not start Chrome, hold a session, or assert a product outcome by
+itself. A queued task may later be executed by a routine isolated character
+worker or by the coordinator in research mode; both follow the same playbook
+and evidence contract.
 
 The sequential browser runner claims that work item and records only a visible
 observation or an allowlisted action. This separation prevents an unattended
