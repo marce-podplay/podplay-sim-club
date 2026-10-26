@@ -53,13 +53,21 @@ engine tick from substituting an integration call for a Sim's browser journey.
 contract is already active. It reads its own secret-free packet, starts the
 declared headless actor browser, captures a short sanitized observation, and
 writes `state/worker-evidence/<opaque local reference>/worker-receipt.json`.
-It times out each local helper within 5–60 seconds. It does not log in, choose
-a booking control, or report a product outcome.
+By default it starts the existing one-time loopback credential handoff and
+completes the rendered password-login routine without exposing the port, email,
+password, or origin to the worker. It bounds each local helper to 30–180
+seconds, allowing the known delayed login redirect. It does not choose a
+booking control or report a product outcome.
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src \
   python tools/sim-browser/worker-bootstrap.py --worker economical:runner-1
 ```
+
+Use `--skip-login` only for public-shell diagnosis. A successful bootstrap
+records `visible_login_settled`, which is visible session evidence; it is not
+evidence of a booking, invitation, payment, check-in, attendance, play, or
+result.
 
 The economical worker then follows the packet's playbook, records a visible
 browser observation when warranted, and closes its exact worker contract.

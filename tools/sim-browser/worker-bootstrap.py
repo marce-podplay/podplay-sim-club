@@ -13,8 +13,11 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
+import select
 import subprocess
 import sys
+import time
 from typing import Any
 
 
@@ -30,7 +33,7 @@ def _safe_ref(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
-def _run(command: list[str], *, timeout_seconds: int) -> None:
+def _run(command: list[str], *, timeout_seconds: int) -> subprocess.CompletedProcess[str]:
     """Run a local helper without relaying potentially sensitive stdout."""
     try:
         completed = subprocess.run(
@@ -42,11 +45,58 @@ def _run(command: list[str], *, timeout_seconds: int) -> None:
         raise RuntimeError("local browser helper timed out") from exc
     if completed.returncode != 0:
         raise RuntimeError("local browser helper failed")
+    return completed
 
 
-def bootstrap(*, worker_id: str, timeout_seconds: int, observe_seconds: int) -> dict[str, Any]:
-    if timeout_seconds < 5 or timeout_seconds > 60:
-        raise ValueError("timeout seconds must be between 5 and 60")
+def _start_handoff(*, actor_id: str, lifetime_seconds: int) -> tuple[subprocess.Popen[str], int]:
+    """Start the existing one-time credential server without relaying its data."""
+    process = subprocess.Popen(
+        [
+            sys.executable, "-m", "podplay_sim_club.cli", "preview", "browser-credential-handoff",
+            "--actor", actor_id, "--lifetime", str(lifetime_seconds),
+        ],
+        cwd=ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True,
+    )
+    deadline = time.monotonic() + 10
+    port = None
+    try:
+        while time.monotonic() < deadline:
+            if process.stdout is None:
+                break
+            ready, _, _ = select.select([process.stdout], [], [], 0.25)
+            if ready:
+                line = process.stdout.readline()
+                matched = re.fullmatch(r"port: ([0-9]{1,5})\n?", line)
+                if matched:
+                    port = int(matched.group(1))
+                    break
+            if process.poll() is not None:
+                break
+    except Exception:
+        process.terminate()
+        process.wait(timeout=5)
+        raise
+    if port is None:
+        process.terminate()
+        process.wait(timeout=5)
+        raise RuntimeError("local credential handoff did not become ready")
+    return process, port
+
+
+def _stop_handoff(process: subprocess.Popen[str]) -> None:
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+
+
+def bootstrap(*, worker_id: str, timeout_seconds: int, observe_seconds: int, login: bool) -> dict[str, Any]:
+    if timeout_seconds < 30 or timeout_seconds > 180:
+        raise ValueError("timeout seconds must be between 30 and 180")
     if observe_seconds < 1 or observe_seconds > min(15, timeout_seconds):
         raise ValueError("observe seconds must be between 1 and 15 and no greater than timeout")
     packet_result = active_packet(ROOT, worker_id=worker_id)
@@ -69,6 +119,17 @@ def bootstrap(*, worker_id: str, timeout_seconds: int, observe_seconds: int) -> 
         sys.executable, str(ROOT / "tools" / "sim-browser" / "actor-session.py"),
         "--actor", actor_id, "--session", str(session_path),
     ], timeout_seconds=timeout_seconds)
+    login_status = "not_requested"
+    if login:
+        handoff, handoff_port = _start_handoff(actor_id=actor_id, lifetime_seconds=timeout_seconds)
+        try:
+            _run([
+                "node", str(ROOT / "tools" / "sim-browser" / "login.mjs"),
+                "--session", str(session_path), "--handoff-port", str(handoff_port),
+            ], timeout_seconds=timeout_seconds)
+            login_status = "visible_login_settled"
+        finally:
+            _stop_handoff(handoff)
     _run([
         "node", str(ROOT / "tools" / "sim-browser" / "controller.mjs"), "observe",
         "--session", str(session_path), "--seconds", str(observe_seconds),
@@ -83,8 +144,9 @@ def bootstrap(*, worker_id: str, timeout_seconds: int, observe_seconds: int) -> 
         "playbook": packet.get("playbook"),
         "mode": mode,
         "status": "browser_ready",
+        "login": login_status,
         "evidence": {"directory": str(evidence_directory.relative_to(ROOT)), "screenshot": "page.png", "summary": "evidence.json"},
-        "doesNotMean": ["authenticated", "booking", "invitation", "payment", "check-in", "attendance", "play", "result"],
+        "doesNotMean": ["booking", "invitation", "payment", "check-in", "attendance", "play", "result"],
         "remoteWrites": 0,
     }
     storage.write_json(evidence_directory / "worker-receipt.json", receipt)
@@ -94,11 +156,15 @@ def bootstrap(*, worker_id: str, timeout_seconds: int, observe_seconds: int) -> 
 def main() -> int:
     parser = argparse.ArgumentParser(description="prepare a bounded headless browser for one active economical Sim worker")
     parser.add_argument("--worker", required=True)
-    parser.add_argument("--timeout-seconds", type=int, default=30)
+    parser.add_argument("--timeout-seconds", type=int, default=150)
     parser.add_argument("--observe-seconds", type=int, default=3)
+    parser.add_argument("--skip-login", action="store_true", help="capture only the public login shell; do not start a credential handoff")
     args = parser.parse_args()
     try:
-        result = bootstrap(worker_id=args.worker, timeout_seconds=args.timeout_seconds, observe_seconds=args.observe_seconds)
+        result = bootstrap(
+            worker_id=args.worker, timeout_seconds=args.timeout_seconds,
+            observe_seconds=args.observe_seconds, login=not args.skip_login,
+        )
     except (RuntimeError, ValueError) as exc:
         print(f"ERROR worker bootstrap: {exc}", file=sys.stderr)
         return 2
