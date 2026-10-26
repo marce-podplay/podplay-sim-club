@@ -14,6 +14,7 @@ from .time import isoformat, parse_instant
 
 
 STATE_FILE = "worker-contracts.json"
+WORKER_OUTCOMES = {"visible_progress", "unexpected_ui", "blocked", "not_started", "pass"}
 
 
 def _is_economical_worker(worker_id: str) -> bool:
@@ -66,6 +67,23 @@ def queue(root: Path, *, browser_job: Dict[str, Any]) -> Dict[str, Any]:
                 "allowedEvidence": ["visible_ui", "sanitized_console_network", "journey_packet", "diary_line"],
                 "remoteWrites": 0,
             }
+        elif existing.get("status") == "reported":
+            journeys = storage.load_json(storage.state / JOURNEY_STATE_FILE, default={})
+            jobs = journeys.get("jobs", {}) if isinstance(journeys, dict) else {}
+            matching_job = jobs.get(job_key) if isinstance(jobs, dict) else None
+            # A worker that could not begin has explicitly released its local
+            # browser job.  Only that state may create a later retry; an
+            # observed browser journey is historical evidence, never a cue to
+            # repeat a potentially stateful product action.
+            if isinstance(matching_job, dict) and matching_job.get("status") == "queued":
+                contracts[contract_key] = {
+                    **existing,
+                    "status": "queued",
+                    "queuedAt": observed_at,
+                    "retryOfOutcome": existing.get("outcome"),
+                }
+                for field in ("workerId", "claimedAt", "reportedAt", "outcome", "diaryLine"):
+                    contracts[contract_key].pop(field, None)
         storage.write_json(storage.state / STATE_FILE, {"schemaVersion": 1, "contracts": contracts})
     contract = contracts[contract_key]
     return {"action": "worker_contract_queued", "contractKey": contract_key, "status": contract["status"], "actorId": actor_id, "remoteWrites": 0}
@@ -151,9 +169,91 @@ def claim_next(root: Path, *, worker_id: str) -> Dict[str, Any]:
     }
 
 
+def active_packet(root: Path, *, worker_id: str) -> Dict[str, Any]:
+    """Read the one active packet already assigned to an economical worker."""
+    if not _is_economical_worker(worker_id):
+        raise ValueError("worker must use the economical worker identity")
+    state = Storage(root).load_json(Storage(root).state / STATE_FILE, default={})
+    contracts = state.get("contracts", {}) if isinstance(state, dict) else {}
+    active = [
+        contract for contract in contracts.values()
+        if isinstance(contract, dict) and contract.get("status") == "active" and contract.get("workerId") == worker_id
+    ]
+    if not active:
+        return {"action": "pass", "detail": "worker has no active contract", "remoteWrites": 0}
+    if len(active) != 1:
+        raise ValueError("worker has more than one active contract")
+    return {
+        "action": "worker_contract_active",
+        "status": "active",
+        "workerId": worker_id,
+        "launchPacket": _launch_packet(active[0]),
+        "remoteWrites": 0,
+    }
+
+
+def recover_unobserved_release(root: Path, *, contract_key: str) -> Dict[str, Any]:
+    """Repair an older reported bootstrap failure without inventing UI work.
+
+    This migration-style action is intentionally narrow: it can only release a
+    reported ``not_started`` contract whose active browser job has no
+    observations at all.  It is for contracts created before ``report`` knew
+    to release that job itself.
+    """
+    storage = Storage(root)
+    observed_at = isoformat(parse_instant(None))
+    with storage.writer_lock():
+        state = storage.load_json(storage.state / STATE_FILE, default={})
+        contracts = state.get("contracts", {}) if isinstance(state, dict) else {}
+        contract = contracts.get(contract_key) if isinstance(contracts, dict) else None
+        if not isinstance(contract, dict) or contract.get("status") != "reported":
+            raise ValueError("only a reported worker contract may be recovered")
+        if contract.get("outcome") != "not_started":
+            raise ValueError("only an unobserved not-started receipt may be recovered")
+        journeys = storage.load_json(storage.state / JOURNEY_STATE_FILE, default={})
+        jobs = journeys.get("jobs", {}) if isinstance(journeys, dict) else {}
+        job_key = contract.get("browserJobKey")
+        job = jobs.get(job_key) if isinstance(jobs, dict) and isinstance(job_key, str) else None
+        if (
+            not isinstance(job, dict)
+            or job.get("status") != "active"
+            or job.get("observations")
+            or job.get("lastObservedAt") != job.get("claimedAt")
+        ):
+            raise ValueError("browser job is not an unobserved release candidate")
+        job.update({"status": "queued", "lastWorkerReleaseAt": observed_at})
+        job.pop("claimedBy", None)
+        job.pop("claimedAt", None)
+        storage.write_json(storage.state / JOURNEY_STATE_FILE, {"schemaVersion": 1, "jobs": jobs})
+    return {"action": "worker_contract_recovered", "contractKey": contract_key, "status": "queued", "remoteWrites": 0}
+
+
+def quarantine_legacy_release(root: Path, *, contract_key: str) -> Dict[str, Any]:
+    """Quarantine a pre-safety-fix blocked receipt that was wrongly requeued."""
+    storage = Storage(root)
+    observed_at = isoformat(parse_instant(None))
+    with storage.writer_lock():
+        state = storage.load_json(storage.state / STATE_FILE, default={})
+        contracts = state.get("contracts", {}) if isinstance(state, dict) else {}
+        contract = contracts.get(contract_key) if isinstance(contracts, dict) else None
+        if not isinstance(contract, dict) or contract.get("status") != "reported":
+            raise ValueError("only a reported worker contract may be quarantined")
+        if contract.get("outcome") not in {"blocked", "pass"}:
+            raise ValueError("only a blocked or pass receipt may be quarantined")
+        journeys = storage.load_json(storage.state / JOURNEY_STATE_FILE, default={})
+        jobs = journeys.get("jobs", {}) if isinstance(journeys, dict) else {}
+        job_key = contract.get("browserJobKey")
+        job = jobs.get(job_key) if isinstance(jobs, dict) and isinstance(job_key, str) else None
+        if not isinstance(job, dict) or job.get("status") != "queued":
+            raise ValueError("browser job is not a legacy requeue candidate")
+        job.update({"status": "blocked", "lastWorkerOutcome": contract["outcome"], "lastWorkerReviewAt": observed_at})
+        storage.write_json(storage.state / JOURNEY_STATE_FILE, {"schemaVersion": 1, "jobs": jobs})
+    return {"action": "worker_contract_quarantined", "contractKey": contract_key, "status": "blocked", "remoteWrites": 0}
+
+
 def report(root: Path, *, contract_key: str, worker_id: str, outcome: str, diary_line: str) -> Dict[str, Any]:
     """Close one worker turn with a bounded, secret-free diary outcome."""
-    if outcome not in {"visible_progress", "unexpected_ui", "blocked", "pass"}:
+    if outcome not in WORKER_OUTCOMES:
         raise ValueError("worker outcome is not allowed")
     if not isinstance(diary_line, str) or not diary_line.strip() or len(diary_line) > 280:
         raise ValueError("worker diary line must be concise")
@@ -165,6 +265,25 @@ def report(root: Path, *, contract_key: str, worker_id: str, outcome: str, diary
         contract = contracts.get(contract_key) if isinstance(contracts, dict) else None
         if not isinstance(contract, dict) or contract.get("status") != "active" or contract.get("workerId") != worker_id:
             raise ValueError("only the claiming worker may report")
+        journeys = storage.load_json(storage.state / JOURNEY_STATE_FILE, default={})
+        jobs = journeys.get("jobs", {}) if isinstance(journeys, dict) else {}
+        job_key = contract.get("browserJobKey")
+        job = jobs.get(job_key) if isinstance(jobs, dict) and isinstance(job_key, str) else None
+        if outcome in {"visible_progress", "unexpected_ui"} and (
+            not isinstance(job, dict) or job.get("status") != "observed"
+        ):
+            raise ValueError("visible worker outcome needs a recorded browser observation")
+        if outcome == "not_started" and isinstance(job, dict) and job.get("status") == "active":
+            # This is the only retryable case: the worker explicitly says it
+            # never began a rendered journey.  Any browser uncertainty is
+            # quarantined below instead of replaying a possibly stateful UI.
+            job.update({"status": "queued", "lastWorkerReleaseAt": observed_at})
+            job.pop("claimedBy", None)
+            job.pop("claimedAt", None)
+            storage.write_json(storage.state / JOURNEY_STATE_FILE, {"schemaVersion": 1, "jobs": jobs})
+        elif outcome in {"blocked", "pass"} and isinstance(job, dict) and job.get("status") == "active":
+            job.update({"status": "blocked", "lastWorkerOutcome": outcome, "lastWorkerReviewAt": observed_at})
+            storage.write_json(storage.state / JOURNEY_STATE_FILE, {"schemaVersion": 1, "jobs": jobs})
         contract.update({"status": "reported", "reportedAt": observed_at, "outcome": outcome, "diaryLine": diary_line.strip()})
         storage.write_json(storage.state / STATE_FILE, {"schemaVersion": 1, "contracts": contracts})
         storage.append_jsonl(storage.actor_journal_path(str(contract["actorId"])), {

@@ -34,6 +34,14 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m podplay_sim_club.cli worker-d
 
 The command does not launch a model, open a browser, or call a product API. The outer dispatcher owns those integrations and may choose its economical model/provider later.
 
+If the dispatcher launches the worker separately, that worker reads its already-assigned packet rather than calling `next` a second time:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m podplay_sim_club.cli worker-dispatch active --worker economical:runner-1
+```
+
+Only an explicit `not_started` receipt releases the local browser job for a later retry. A `blocked` or `pass` receipt quarantines it for coordinator review, because the absence of a receipt cannot prove that no UI action occurred. A visible-progress or unexpected-UI receipt is accepted only after the worker has recorded a visible browser observation.
+
 ## Four operating modes
 
 | Research | Headless | Owner | Intended use |

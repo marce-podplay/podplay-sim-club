@@ -375,6 +375,18 @@ def build_parser() -> argparse.ArgumentParser:
         "next", help="claim the oldest runnable contract and print its secret-free launch packet"
     )
     worker_dispatch_next.add_argument("--worker", required=True, dest="worker_id")
+    worker_dispatch_active = worker_dispatch_subcommands.add_parser(
+        "active", help="read the one already-claimed secret-free launch packet for a worker"
+    )
+    worker_dispatch_active.add_argument("--worker", required=True, dest="worker_id")
+    worker_dispatch_recover = worker_dispatch_subcommands.add_parser(
+        "recover-unobserved", help="release an older dispatcher-side failure that has no browser observation"
+    )
+    worker_dispatch_recover.add_argument("--contract", required=True, dest="contract_key")
+    worker_dispatch_quarantine = worker_dispatch_subcommands.add_parser(
+        "quarantine-legacy-release", help="quarantine a pre-safety-fix blocked receipt that was requeued"
+    )
+    worker_dispatch_quarantine.add_argument("--contract", required=True, dest="contract_key")
     worker_dispatch_report = worker_dispatch_subcommands.add_parser(
         "report", help="record one bounded economical worker receipt"
     )
@@ -382,7 +394,7 @@ def build_parser() -> argparse.ArgumentParser:
     worker_dispatch_report.add_argument("--worker", required=True, dest="worker_id")
     worker_dispatch_report.add_argument(
         "--outcome", required=True,
-        choices=["visible_progress", "unexpected_ui", "blocked", "pass"],
+        choices=["visible_progress", "unexpected_ui", "blocked", "not_started", "pass"],
     )
     worker_dispatch_report.add_argument("--diary", required=True, dest="diary_line")
 
@@ -1070,10 +1082,22 @@ def main(argv: Optional[list] = None) -> int:
         return 0
 
     if args.command == "worker-dispatch":
-        from .worker_dispatch import claim_next as claim_next_worker_contract, report as report_worker_contract
+        from .worker_dispatch import (
+            active_packet as active_worker_packet,
+            claim_next as claim_next_worker_contract,
+            quarantine_legacy_release,
+            recover_unobserved_release,
+            report as report_worker_contract,
+        )
         try:
             if args.worker_dispatch_command == "next":
                 result = claim_next_worker_contract(root, worker_id=args.worker_id)
+            elif args.worker_dispatch_command == "active":
+                result = active_worker_packet(root, worker_id=args.worker_id)
+            elif args.worker_dispatch_command == "recover-unobserved":
+                result = recover_unobserved_release(root, contract_key=args.contract_key)
+            elif args.worker_dispatch_command == "quarantine-legacy-release":
+                result = quarantine_legacy_release(root, contract_key=args.contract_key)
             else:
                 result = report_worker_contract(
                     root, contract_key=args.contract_key, worker_id=args.worker_id,
