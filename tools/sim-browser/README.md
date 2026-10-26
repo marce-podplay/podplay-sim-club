@@ -47,6 +47,23 @@ The sequential browser runner claims that work item and records only a visible
 observation or an allowlisted action. This separation prevents an unattended
 engine tick from substituting an integration call for a Sim's browser journey.
 
+### Economical worker bootstrap
+
+`worker-bootstrap.py` is the bounded operations entrypoint for a worker whose
+contract is already active. It reads its own secret-free packet, starts the
+declared headless actor browser, captures a short sanitized observation, and
+writes `state/worker-evidence/<opaque local reference>/worker-receipt.json`.
+It times out each local helper within 5–60 seconds. It does not log in, choose
+a booking control, or report a product outcome.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src \
+  python tools/sim-browser/worker-bootstrap.py --worker economical:runner-1
+```
+
+The economical worker then follows the packet's playbook, records a visible
+browser observation when warranted, and closes its exact worker contract.
+
 Claim and record the local work item around the browser session:
 
 ```sh
