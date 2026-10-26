@@ -346,6 +346,13 @@ class SimClubTestCase(unittest.TestCase):
         self.assertEqual(0, result["remoteWrites"])
         self.assertEqual("pass", result["bookingBridge"]["action"])
 
+        contract = result["workerContract"]
+        self.assertEqual("worker_contract_queued", contract["action"])
+        saved_contract = storage.load_json(storage.state / "worker-contracts.json")["contracts"][contract["contractKey"]]
+        self.assertEqual({"research": False, "headless": True, "modelTier": "economical"}, saved_contract["mode"])
+        self.assertNotIn("origin", saved_contract)
+        self.assertNotIn("password", saved_contract)
+
         jobs = storage.load_json(storage.state / "browser-journeys.json")["jobs"]
         self.assertIn(job["jobKey"], jobs)
 
