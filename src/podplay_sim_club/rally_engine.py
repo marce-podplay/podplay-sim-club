@@ -17,10 +17,8 @@ from .owner_engagement import tick as run_owner_engagement_tick
 from .club_rounds import tick as run_club_round
 from .training_sessions import next_booking_task
 from .team_challenges import next_team_signup_task
-from .lead_booking_bridge import advance as advance_booking_bridge
 from .share_invitations import next_share_invitation_task
-from .share_invitation_bridge import advance as advance_share_invitation_bridge
-from .check_in_bridge import next_task as next_check_in_task, advance as advance_check_in_bridge
+from .check_in_bridge import next_task as next_check_in_task
 from .local_evidence import capture_live_play_receipts
 from .active_sessions import tick as tick_active_sessions
 from .staff_follow_up import tick as run_staff_follow_up
@@ -130,34 +128,26 @@ def tick(
     booking_task = training if training.get("action") != "pass" else team_signup
     share_task = next_share_invitation_task(root, now=instant)
     check_in_task = next_check_in_task(root, now=instant)
-    if apply_preview:
-        # Player and club-staff actions are no longer driven through product
-        # integrations.  A Rally tick can advance social decisions, but the
-        # next product step belongs to the named Sim's browser journey.
-        booking_bridge = {"action": "pass", "detail": "no booking integration is permitted", "remoteWrites": 0}
-        share_bridge = {"action": "pass", "detail": "no invitation integration is permitted", "remoteWrites": 0}
-        check_in_bridge = {"action": "pass", "detail": "no check-in integration is permitted", "remoteWrites": 0}
-        next_task = check_in_task if check_in_task.get("action") != "pass" else share_task if share_task.get("action") != "pass" else booking_task
-        browser_bridge = dispatch_browser_journey(root, task=next_task, role="player")
-        if next_task.get("action") != "pass" and result_request.get("action") == "pass":
-            result = browser_bridge
-    else:
-        booking_bridge = advance_booking_bridge(
-            root, booking_task, now=instant, plan_preview=plan_preview, apply_preview=False,
-            confirmation=confirmation,
-        )
-        if booking_bridge.get("action") != "pass" and result_request.get("action") == "pass":
-            result = booking_bridge
-        share_bridge = advance_share_invitation_bridge(
-            root, share_task, now=instant, apply_preview=False, confirmation=confirmation,
-        )
-        if share_bridge.get("action") != "pass" and result_request.get("action") == "pass":
-            result = share_bridge
-        check_in_bridge = advance_check_in_bridge(
-            root, check_in_task, now=instant, apply_preview=False, confirmation=confirmation,
-        )
-        if check_in_bridge.get("action") != "pass" and result_request.get("action") == "pass":
-            result = check_in_bridge
+    # Product actions are always owned by the named Sim's rendered browser
+    # journey.  A social agreement is sufficient to queue that work item, not
+    # to run a Preview adapter or make a booking.  Check-in and invitation
+    # work take priority over a new booking so one sequential browser actor
+    # receives the next concrete, personally-owned step.
+    #
+    # ``plan_preview`` / ``apply_preview`` remain accepted CLI arguments for
+    # compatibility with saved invocations, but this engine no longer turns
+    # either flag into an integration acting for a Sim.
+    booking_bridge = {"action": "pass", "detail": "booking integrations are disabled; named Sim browser work is queued instead", "remoteWrites": 0}
+    share_bridge = {"action": "pass", "detail": "invitation integrations are disabled; named Sim browser work is queued instead", "remoteWrites": 0}
+    check_in_bridge = {"action": "pass", "detail": "check-in integrations are disabled; named Sim browser work is queued instead", "remoteWrites": 0}
+    next_task = (
+        check_in_task if check_in_task.get("action") != "pass"
+        else share_task if share_task.get("action") != "pass"
+        else booking_task
+    )
+    browser_bridge = dispatch_browser_journey(root, task=next_task, role="player")
+    if next_task.get("action") != "pass" and result_request.get("action") == "pass":
+        result = browser_bridge
     evidence_capture = capture_live_play_receipts(root, observed_at=instant)
     with storage.writer_lock():
         state = storage.load_json(storage.state / STATE_FILE, default=state)
@@ -167,7 +157,7 @@ def tick(
         state["schedulerCursor"] = cursor
         storage.write_json(storage.state / STATE_FILE, state)
         _write_interpretation_audit(storage, rounds, isoformat(instant))
-    return {"status": state["status"], "state": state, "action": result["action"], "socialOffers": social["offers"], "rounds": rounds, "ownerEngagement": owner_engagement, "player": player, "frontDesk": front_desk, "staffFollowUp": staff_follow_up, "observation": observation, "trainingObservation": training_observation, "arcadeReplay": arcade_replay, "localArcadeReplay": local_arcade_replay, "trainingRecovery": training_recovery, "resultRequest": result_request, "training": training, "teamSignup": team_signup, "bookingBridge": booking_bridge, "shareInvitationTask": share_task, "shareInvitationBridge": share_bridge, "checkInTask": check_in_task, "checkInBridge": check_in_bridge, "browserJourney": browser_bridge if apply_preview else None, "activeSessions": active_sessions, "evidenceCapture": evidence_capture, "remoteWrites": int(booking_bridge.get("remoteWrites", 0)) + int(share_bridge.get("remoteWrites", 0)) + int(check_in_bridge.get("remoteWrites", 0))}
+    return {"status": state["status"], "state": state, "action": result["action"], "socialOffers": social["offers"], "rounds": rounds, "ownerEngagement": owner_engagement, "player": player, "frontDesk": front_desk, "staffFollowUp": staff_follow_up, "observation": observation, "trainingObservation": training_observation, "arcadeReplay": arcade_replay, "localArcadeReplay": local_arcade_replay, "trainingRecovery": training_recovery, "resultRequest": result_request, "training": training, "teamSignup": team_signup, "bookingBridge": booking_bridge, "shareInvitationTask": share_task, "shareInvitationBridge": share_bridge, "checkInTask": check_in_task, "checkInBridge": check_in_bridge, "browserJourney": browser_bridge, "activeSessions": active_sessions, "evidenceCapture": evidence_capture, "remoteWrites": int(booking_bridge.get("remoteWrites", 0)) + int(share_bridge.get("remoteWrites", 0)) + int(check_in_bridge.get("remoteWrites", 0))}
 
 
 def _write_interpretation_audit(storage: Storage, rounds: list[Dict[str, Any]], observed_at: str) -> None:

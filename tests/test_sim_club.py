@@ -316,6 +316,39 @@ class SimClubTestCase(unittest.TestCase):
         self.assertIn("captain_challenge_acceptance", [row.get("kind") for row in messages])
         self.assertEqual(0, result["remoteWrites"])
 
+    def test_rally_tick_queues_an_agreed_training_for_the_named_bookers_browser(self):
+        """A social agreement queues UI work; it never invokes a booking adapter."""
+        from podplay_sim_club.rally_engine import tick
+
+        storage = Storage(self.root)
+        intent_id = "intent:training:browser-dispatch"
+        ledger = load_intent_ledger(storage)
+        save_intent(storage, ledger, {
+            "schemaVersion": 1,
+            "id": intent_id,
+            "journey": "customer_training",
+            "status": "agreed",
+            "createdAt": "2026-09-23T15:00:00Z",
+            "agreedAt": "2026-09-23T15:01:00Z",
+            "bookerActorId": "andy-bogard",
+            "participants": ["andy-bogard", "terry-bogard"],
+            "constraints": {"durationMinutes": 30},
+        })
+
+        result = tick(self.root, now=FIXED_NOW)
+
+        job = result["browserJourney"]
+        self.assertEqual("queued", job["status"])
+        self.assertEqual("andy-bogard", job["actorId"])
+        self.assertEqual("plan_training_booking", job["journeyAction"])
+        self.assertEqual(intent_id, job["intentId"])
+        self.assertEqual("playbooks/sim-player-booking.md", job["playbook"])
+        self.assertEqual(0, result["remoteWrites"])
+        self.assertEqual("pass", result["bookingBridge"]["action"])
+
+        jobs = storage.load_json(storage.state / "browser-journeys.json")["jobs"]
+        self.assertIn(job["jobKey"], jobs)
+
     def test_rally_queue_resumes_after_each_ten_people_and_wraps_only_next_tick(self):
         from podplay_sim_club.rally_engine import tick
 
