@@ -7,10 +7,51 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 import sys
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from podplay_sim_club.worker_dispatch import claim, queue, report
+from podplay_sim_club.journey_policy import dispatch as dispatch_browser_journey
+from podplay_sim_club.worker_dispatch import claim, claim_next, queue, report
 
 
 class WorkerDispatchTests(unittest.TestCase):
+    def test_operations_worker_claims_oldest_runnable_contract_with_its_browser_job(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first_job = dispatch_browser_journey(root, task={
+                "action": "plan_training_booking", "intentId": "intent:first", "bookerActorId": "andy-bogard",
+            }, role="rally")
+            second_job = dispatch_browser_journey(root, task={
+                "action": "plan_training_booking", "intentId": "intent:second", "bookerActorId": "terry-bogard",
+            }, role="rally")
+            queue(root, browser_job=second_job)
+            queue(root, browser_job=first_job)
+
+            launched = claim_next(root, worker_id="economical:runner-1")
+
+            self.assertEqual("worker_contract_claimed", launched["action"])
+            self.assertEqual("andy-bogard", launched["launchPacket"]["actorId"])
+            self.assertEqual("playbooks/sim-player-booking.md", launched["launchPacket"]["playbook"])
+            self.assertEqual({"research": False, "headless": True, "modelTier": "economical"}, launched["launchPacket"]["mode"])
+            journeys = json.loads((root / "state" / "browser-journeys.json").read_text())
+            self.assertEqual("active", journeys["jobs"][first_job["jobKey"]]["status"])
+
+    def test_operations_worker_skips_a_stale_contract_for_a_runnable_one(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stale = queue(root, browser_job={
+                "jobKey": "missing-job", "actorId": "andy-bogard", "intentId": "intent:stale",
+                "journeyAction": "plan_training_booking", "playbook": "playbooks/sim-player-booking.md",
+            })
+            fresh_job = dispatch_browser_journey(root, task={
+                "action": "plan_training_booking", "intentId": "intent:fresh", "bookerActorId": "terry-bogard",
+            }, role="rally")
+            queue(root, browser_job=fresh_job)
+
+            launched = claim_next(root, worker_id="economical:runner-1")
+
+            self.assertEqual("worker_contract_claimed", launched["action"])
+            self.assertEqual("terry-bogard", launched["launchPacket"]["actorId"])
+            contracts = json.loads((root / "state" / "worker-contracts.json").read_text())["contracts"]
+            self.assertEqual("queued", contracts[stale["contractKey"]]["status"])
+
     def test_contract_is_sequential_and_writes_a_bounded_diary(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

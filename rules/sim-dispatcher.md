@@ -14,6 +14,26 @@ Its source contract is the reusable personal template, **Sim Club Dispatcher**. 
 
 The Python engine creates contracts; it does not start a model or browser. A future dispatcher may use this document and the personal template to launch an eligible worker, or the coordinator may use the same contract in research mode.
 
+## Operations handoff
+
+The routine dispatcher is now executable but intentionally provider-neutral:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m podplay_sim_club.cli worker-dispatch next --worker economical:runner-1
+```
+
+It atomically claims the oldest runnable contract and its matching browser job, then prints the secret-free launch packet for exactly one actor and one playbook. An external economical worker performs the browser journey and returns one bounded receipt:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m podplay_sim_club.cli worker-dispatch report \
+  --contract '<contract key from the launch packet>' \
+  --worker economical:runner-1 \
+  --outcome visible_progress \
+  --diary 'Visible UI observation recorded; no product outcome inferred.'
+```
+
+The command does not launch a model, open a browser, or call a product API. The outer dispatcher owns those integrations and may choose its economical model/provider later.
+
 ## Four operating modes
 
 | Research | Headless | Owner | Intended use |

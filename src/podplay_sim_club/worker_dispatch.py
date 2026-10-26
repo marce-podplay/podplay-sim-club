@@ -8,11 +8,34 @@ and prevents the Python engine from silently opening a browser or a model.
 from pathlib import Path
 from typing import Any, Dict
 
+from .journey_policy import STATE_FILE as JOURNEY_STATE_FILE
 from .storage import Storage
 from .time import isoformat, parse_instant
 
 
 STATE_FILE = "worker-contracts.json"
+
+
+def _is_economical_worker(worker_id: str) -> bool:
+    return isinstance(worker_id, str) and worker_id.startswith("economical:") and len(worker_id) > len("economical:")
+
+
+def _launch_packet(contract: Dict[str, Any]) -> Dict[str, Any]:
+    """Return only the bounded context that a routine worker needs.
+
+    Credentials, origins, invitation URLs, selectors, and inferred product
+    state deliberately remain outside this packet.  The worker must obtain
+    any evidence from its isolated rendered-browser journey.
+    """
+    return {
+        "contractKey": contract["contractKey"],
+        "actorId": contract["actorId"],
+        "browserJobKey": contract["browserJobKey"],
+        "journeyAction": contract.get("journeyAction"),
+        "playbook": contract.get("playbook"),
+        "mode": contract.get("mode"),
+        "allowedEvidence": contract.get("allowedEvidence"),
+    }
 
 
 def queue(root: Path, *, browser_job: Dict[str, Any]) -> Dict[str, Any]:
@@ -58,11 +81,74 @@ def claim(root: Path, *, contract_key: str, worker_id: str) -> Dict[str, Any]:
         contract = contracts.get(contract_key) if isinstance(contracts, dict) else None
         if not isinstance(contract, dict) or contract.get("status") != "queued":
             raise ValueError("worker contract is unavailable")
-        if not isinstance(worker_id, str) or not worker_id.startswith("economical:"):
+        if not _is_economical_worker(worker_id):
             raise ValueError("worker must use the economical worker identity")
         contract.update({"status": "active", "workerId": worker_id, "claimedAt": observed_at})
         storage.write_json(storage.state / STATE_FILE, {"schemaVersion": 1, "contracts": contracts})
     return {"contractKey": contract_key, "actorId": contract["actorId"], "status": "active", "remoteWrites": 0}
+
+
+def claim_next(root: Path, *, worker_id: str) -> Dict[str, Any]:
+    """Atomically launch the oldest runnable contract for one cheap worker.
+
+    This is the operational handoff.  It claims local queue state only: the
+    caller still has to run the playbook in an isolated browser and later send
+    a bounded receipt.  No model, browser, or product integration is launched
+    by this module.
+    """
+    if not _is_economical_worker(worker_id):
+        raise ValueError("worker must use the economical worker identity")
+    storage = Storage(root)
+    observed_at = isoformat(parse_instant(None))
+    with storage.writer_lock():
+        state = storage.load_json(storage.state / STATE_FILE, default={})
+        contracts = state.get("contracts", {}) if isinstance(state, dict) else {}
+        contracts = contracts if isinstance(contracts, dict) else {}
+        queued = [
+            contract for contract in contracts.values()
+            if isinstance(contract, dict) and contract.get("status") == "queued"
+        ]
+        if not queued:
+            return {"action": "pass", "detail": "no queued worker contract", "remoteWrites": 0}
+        ordered = sorted(
+            queued,
+            key=lambda item: (str(item.get("queuedAt") or ""), str(item.get("contractKey") or "")),
+        )
+        journeys = storage.load_json(storage.state / JOURNEY_STATE_FILE, default={})
+        jobs = journeys.get("jobs", {}) if isinstance(journeys, dict) else {}
+        contract = next(
+            (
+                candidate for candidate in ordered
+                if isinstance(candidate.get("browserJobKey"), str)
+                and isinstance(jobs.get(candidate["browserJobKey"]), dict)
+                and jobs[candidate["browserJobKey"]].get("actorId") == candidate.get("actorId")
+                and jobs[candidate["browserJobKey"]].get("status") == "queued"
+            ),
+            None,
+        )
+        if contract is None:
+            return {
+                "action": "pass",
+                "detail": "no queued worker contract has a runnable browser job",
+                "remoteWrites": 0,
+            }
+        job_key = contract["browserJobKey"]
+        actor_id = contract["actorId"]
+        job = jobs[job_key]
+        job.update({
+            "status": "active", "claimedBy": actor_id, "claimedAt": observed_at,
+            "lastObservedAt": observed_at,
+        })
+        contract.update({"status": "active", "workerId": worker_id, "claimedAt": observed_at})
+        storage.write_json(storage.state / JOURNEY_STATE_FILE, {"schemaVersion": 1, "jobs": jobs})
+        storage.write_json(storage.state / STATE_FILE, {"schemaVersion": 1, "contracts": contracts})
+    return {
+        "action": "worker_contract_claimed",
+        "status": "active",
+        "workerId": worker_id,
+        "launchPacket": _launch_packet(contract),
+        "remoteWrites": 0,
+    }
 
 
 def report(root: Path, *, contract_key: str, worker_id: str, outcome: str, diary_line: str) -> Dict[str, Any]:

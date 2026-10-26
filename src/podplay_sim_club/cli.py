@@ -366,6 +366,26 @@ def build_parser() -> argparse.ArgumentParser:
     browser_journey_check_in.add_argument("--participant", required=True, dest="participant_actor_id")
     browser_journey_check_in.add_argument("--at", help="observation time; defaults to now")
 
+    worker_dispatch = subparsers.add_parser(
+        "worker-dispatch",
+        help="claim and report one bounded economical Sim worker contract",
+    )
+    worker_dispatch_subcommands = worker_dispatch.add_subparsers(dest="worker_dispatch_command", required=True)
+    worker_dispatch_next = worker_dispatch_subcommands.add_parser(
+        "next", help="claim the oldest runnable contract and print its secret-free launch packet"
+    )
+    worker_dispatch_next.add_argument("--worker", required=True, dest="worker_id")
+    worker_dispatch_report = worker_dispatch_subcommands.add_parser(
+        "report", help="record one bounded economical worker receipt"
+    )
+    worker_dispatch_report.add_argument("--contract", required=True, dest="contract_key")
+    worker_dispatch_report.add_argument("--worker", required=True, dest="worker_id")
+    worker_dispatch_report.add_argument(
+        "--outcome", required=True,
+        choices=["visible_progress", "unexpected_ui", "blocked", "pass"],
+    )
+    worker_dispatch_report.add_argument("--diary", required=True, dest="diary_line")
+
     secure_channel = subparsers.add_parser("secure-channel", help="retain and deliver browser-created invitations privately")
     secure_channel_subcommands = secure_channel.add_subparsers(dest="secure_channel_command", required=True)
     secure_retain = secure_channel_subcommands.add_parser("retain-browser-invite", help="read one visible invite URL from stdin into the owner's private mailbox")
@@ -1045,6 +1065,22 @@ def main(argv: Optional[list] = None) -> int:
                 rebuild_projections(root)
         except (BrowserBookingObservationError, ValueError) as exc:
             print(f"ERROR browser journey: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "worker-dispatch":
+        from .worker_dispatch import claim_next as claim_next_worker_contract, report as report_worker_contract
+        try:
+            if args.worker_dispatch_command == "next":
+                result = claim_next_worker_contract(root, worker_id=args.worker_id)
+            else:
+                result = report_worker_contract(
+                    root, contract_key=args.contract_key, worker_id=args.worker_id,
+                    outcome=args.outcome, diary_line=args.diary_line,
+                )
+        except ValueError as exc:
+            print(f"ERROR worker dispatch: {exc}", file=sys.stderr)
             return 2
         print(json.dumps(result, indent=2, sort_keys=True))
         return 0
