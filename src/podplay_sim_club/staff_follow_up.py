@@ -38,6 +38,7 @@ def tick(root: Path, now: Optional[datetime] = None) -> Dict[str, Any]:
         watched = state.get("watched", {}) if isinstance(state, dict) else {}
         if not isinstance(watched, dict):
             watched = {}
+        review_required = _review_required_intents(storage)
         candidates = []
         for intent_id, intent in ledger.get("intents", {}).items():
             if not isinstance(intent_id, str) or not isinstance(intent, dict):
@@ -45,19 +46,27 @@ def tick(root: Path, now: Optional[datetime] = None) -> Dict[str, Any]:
             status = str(intent.get("status") or "unknown")
             if status not in WATCHED_STATUSES:
                 continue
-            next_action = str(intent.get("nextAction") or "await a named decision")
+            next_action = (
+                "coordinator_review_observed_browser_journey"
+                if intent_id in review_required
+                else str(intent.get("nextAction") or "await a named decision")
+            )
             # Bump the message contract when routing semantics improve so an
             # existing watch can receive one updated, more useful follow-up.
-            signature = f"v3:{status}:{next_action}"
+            signature = f"v4:{status}:{next_action}" if intent_id in review_required else f"v3:{status}:{next_action}"
             if watched.get(intent_id, {}).get("signature") != signature:
-                urgency = 1 if status == "preview_ready" else 0
+                urgency = 2 if intent_id in review_required else (1 if status == "preview_ready" else 0)
                 candidates.append((urgency, str(intent.get("createdAt") or ""), intent_id, intent, signature))
         if not candidates:
             storage.write_json(storage.state / STATE_FILE, {"schemaVersion": 1, "lastTickAt": observed_at, "watched": watched})
             return {"actorId": "riley", "action": "pass", "detail": "all actionable initiatives already have a current staff watch", "remoteWrites": 0}
         _, _, intent_id, intent, signature = sorted(candidates, reverse=True)[0]
         participants = [actor for actor in intent.get("participants", []) if isinstance(actor, str)]
-        next_action = str(intent.get("nextAction") or "await a named decision")
+        next_action = (
+            "coordinator_review_observed_browser_journey"
+            if intent_id in review_required
+            else str(intent.get("nextAction") or "await a named decision")
+        )
         route = _blocker_route(intent, next_action)
         watched[intent_id] = {
             "signature": signature,
@@ -116,6 +125,29 @@ def tick(root: Path, now: Optional[datetime] = None) -> Dict[str, Any]:
     }
 
 
+def _review_required_intents(storage: Storage) -> set[str]:
+    """Return intents whose reported browser worker must not be replayed.
+
+    A worker-side ``blocked``/``pass`` receipt means the coordinator has an
+    uncertainty to inspect.  It does not mean that the product rejected the
+    action, nor does it give staff authority to rerun it.  This local routing
+    overlay keeps the initiative card honest without changing the social
+    agreement itself.
+    """
+    state = storage.load_json(storage.state / "worker-contracts.json", default={})
+    contracts = state.get("contracts", {}) if isinstance(state, dict) else {}
+    if not isinstance(contracts, dict):
+        return set()
+    return {
+        contract["intentId"]
+        for contract in contracts.values()
+        if isinstance(contract, dict)
+        and contract.get("status") == "reported"
+        and contract.get("outcome") in {"blocked", "pass"}
+        and isinstance(contract.get("intentId"), str)
+    }
+
+
 def _blocker_route(intent: Dict[str, Any], next_action: str) -> Dict[str, Any]:
     """Describe the least-authoritative human follow-up for an initiative.
 
@@ -126,6 +158,13 @@ def _blocker_route(intent: Dict[str, Any], next_action: str) -> Dict[str, Any]:
     """
     booker = intent.get("bookerActorId")
     participants = [actor for actor in intent.get("participants", []) if isinstance(actor, str)]
+    if next_action == "coordinator_review_observed_browser_journey":
+        return {
+            "blocker": "observed_browser_journey_requires_review",
+            "requestedFrom": ["lead"],
+            "staffAction": "request_coordinator_evidence_review",
+            "text": "Riley asks the coordinator to review the bounded browser evidence before any retry. Staff will not infer a product failure or repeat the journey.",
+        }
     if "plan_live" in next_action or next_action.startswith("plan_"):
         return {
             "blocker": "live_availability_not_read",
