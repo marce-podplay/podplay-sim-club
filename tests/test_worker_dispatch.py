@@ -3,6 +3,7 @@ import hashlib
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 import sys
@@ -10,9 +11,58 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from podplay_sim_club.journey_policy import dispatch as dispatch_browser_journey, record_observation
 from podplay_sim_club.worker_dispatch import active_packet, claim, claim_next, queue, report, runbook
+from podplay_sim_club.codex_worker_launcher import launch, worker_prompt
 
 
 class WorkerDispatchTests(unittest.TestCase):
+    def test_launcher_preview_is_non_mutating_and_counts_queued_contracts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            job = dispatch_browser_journey(root, task={
+                "action": "plan_training_booking", "intentId": "intent:launch-preview", "bookerActorId": "andy-bogard",
+            }, role="rally")
+            queue(root, browser_job=job)
+
+            preview = launch(root, worker_id="economical:runner-1", execute=False)
+
+            self.assertEqual("worker_launch_preview", preview["action"])
+            self.assertEqual(1, preview["queuedContracts"])
+            self.assertEqual("queued", json.loads((root / "state" / "worker-contracts.json").read_text())["contracts"]["worker:" + job["jobKey"]]["status"])
+
+    def test_launcher_starts_one_worker_and_persists_only_safe_launch_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            job = dispatch_browser_journey(root, task={
+                "action": "plan_training_booking", "intentId": "intent:launch", "bookerActorId": "andy-bogard",
+            }, role="rally")
+            queued = queue(root, browser_job=job)
+            with patch("podplay_sim_club.codex_worker_launcher.shutil.which", return_value="/opt/codex"), patch(
+                "podplay_sim_club.codex_worker_launcher.subprocess.Popen"
+            ) as popen:
+                popen.return_value.pid = 4567
+                started = launch(root, worker_id="economical:runner-1", execute=True)
+
+            self.assertEqual("economical_worker_started", started["action"])
+            self.assertEqual("andy-bogard", started["actorId"])
+            command = popen.call_args.args[0]
+            self.assertIn("gpt-6-luna", command)
+            self.assertIn("--ephemeral", command)
+            self.assertNotIn("@podplay", " ".join(command))
+            contract = json.loads((root / "state" / "worker-contracts.json").read_text())["contracts"][queued["contractKey"]]
+            self.assertEqual("active", contract["status"])
+            self.assertEqual(4567, contract["launcher"]["processId"])
+            self.assertEqual("codex-cli-economical-worker", contract["launcher"]["kind"])
+
+    def test_worker_prompt_is_bounded_and_never_contains_product_secrets(self):
+        prompt = worker_prompt(root=REPO_ROOT, worker_id="economical:runner-1", runbook_payload={
+            "launchPacket": {
+                "contractKey": "worker:opaque", "actorId": "andy-bogard", "browserJobKey": "job:opaque",
+                "journeyAction": "plan_training_booking", "playbook": "playbooks/sim-player-booking.md",
+            }
+        })
+        self.assertIn("Do not use product APIs", prompt)
+        self.assertIn("worker-dispatch active", prompt)
+        self.assertNotIn("password", prompt.lower())
     def test_operations_worker_claims_oldest_runnable_contract_with_its_browser_job(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

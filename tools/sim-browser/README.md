@@ -69,6 +69,12 @@ records `visible_login_settled`, which is visible session evidence; it is not
 evidence of a booking, invitation, payment, check-in, attendance, play, or
 result.
 
+In operations mode, the outer dispatcher can launch one economical Codex
+worker with `worker-dispatch launch --worker economical:NAME --execute`.
+That worker still uses this bootstrap and the named playbook; the launcher is
+only an isolated, durable handoff and does not itself observe or act in the
+product.
+
 The economical worker then follows the packet's playbook, records a visible
 browser observation when warranted, and closes its exact worker contract.
 

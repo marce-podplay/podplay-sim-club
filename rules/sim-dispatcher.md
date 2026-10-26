@@ -34,6 +34,24 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m podplay_sim_club.cli worker-d
 
 The command does not launch a model, open a browser, or call a product API. The outer dispatcher owns those integrations and may choose its economical model/provider later.
 
+### Codex CLI launcher
+
+For normal operation, the repository now supplies that outer bridge. It starts
+one detached `gpt-6-luna` worker only when `--execute` is explicitly present:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m podplay_sim_club.cli worker-dispatch launch \
+  --worker economical:club-ops-1 --execute
+```
+
+Without `--execute`, `launch` is a non-mutating queue preview. With it, the
+launcher atomically claims one runnable contract, starts a short-lived,
+ephemeral Codex worker, and records only an opaque launch reference, process
+identifier, and timestamp in the contract. The worker receives the same
+secret-free packet/runbook, must bootstrap an isolated browser itself, and
+must close the contract with a receipt. The launcher never captures model
+output or browser data, and a process that has started is never auto-retried.
+
 If the dispatcher launches the worker separately, that worker reads its already-assigned packet rather than calling `next` a second time:
 
 ```sh
