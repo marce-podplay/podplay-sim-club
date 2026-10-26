@@ -46,3 +46,43 @@ def queue(root: Path, *, browser_job: Dict[str, Any]) -> Dict[str, Any]:
         storage.write_json(storage.state / STATE_FILE, {"schemaVersion": 1, "contracts": contracts})
     contract = contracts[contract_key]
     return {"action": "worker_contract_queued", "contractKey": contract_key, "status": contract["status"], "actorId": actor_id, "remoteWrites": 0}
+
+
+def claim(root: Path, *, contract_key: str, worker_id: str) -> Dict[str, Any]:
+    """Let one economical worker take only its named Sim's contract."""
+    storage = Storage(root)
+    observed_at = isoformat(parse_instant(None))
+    with storage.writer_lock():
+        state = storage.load_json(storage.state / STATE_FILE, default={})
+        contracts = state.get("contracts", {}) if isinstance(state, dict) else {}
+        contract = contracts.get(contract_key) if isinstance(contracts, dict) else None
+        if not isinstance(contract, dict) or contract.get("status") != "queued":
+            raise ValueError("worker contract is unavailable")
+        if not isinstance(worker_id, str) or not worker_id.startswith("economical:"):
+            raise ValueError("worker must use the economical worker identity")
+        contract.update({"status": "active", "workerId": worker_id, "claimedAt": observed_at})
+        storage.write_json(storage.state / STATE_FILE, {"schemaVersion": 1, "contracts": contracts})
+    return {"contractKey": contract_key, "actorId": contract["actorId"], "status": "active", "remoteWrites": 0}
+
+
+def report(root: Path, *, contract_key: str, worker_id: str, outcome: str, diary_line: str) -> Dict[str, Any]:
+    """Close one worker turn with a bounded, secret-free diary outcome."""
+    if outcome not in {"visible_progress", "unexpected_ui", "blocked", "pass"}:
+        raise ValueError("worker outcome is not allowed")
+    if not isinstance(diary_line, str) or not diary_line.strip() or len(diary_line) > 280:
+        raise ValueError("worker diary line must be concise")
+    storage = Storage(root)
+    observed_at = isoformat(parse_instant(None))
+    with storage.writer_lock():
+        state = storage.load_json(storage.state / STATE_FILE, default={})
+        contracts = state.get("contracts", {}) if isinstance(state, dict) else {}
+        contract = contracts.get(contract_key) if isinstance(contracts, dict) else None
+        if not isinstance(contract, dict) or contract.get("status") != "active" or contract.get("workerId") != worker_id:
+            raise ValueError("only the claiming worker may report")
+        contract.update({"status": "reported", "reportedAt": observed_at, "outcome": outcome, "diaryLine": diary_line.strip()})
+        storage.write_json(storage.state / STATE_FILE, {"schemaVersion": 1, "contracts": contracts})
+        storage.append_jsonl(storage.actor_journal_path(str(contract["actorId"])), {
+            "observedAt": observed_at, "kind": "worker_journey", "contractKey": contract_key,
+            "outcome": outcome, "text": diary_line.strip(), "remoteWrites": 0,
+        })
+    return {"contractKey": contract_key, "status": "reported", "remoteWrites": 0}
