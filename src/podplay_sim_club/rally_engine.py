@@ -21,7 +21,8 @@ from .share_invitations import next_share_invitation_task
 from .check_in_bridge import next_task as next_check_in_task
 from .local_evidence import capture_live_play_receipts
 from .active_sessions import tick as tick_active_sessions
-from .staff_follow_up import tick as run_staff_follow_up
+from .staff_follow_up import next_task as next_staff_follow_up_task
+from .staff_worker_dispatch import queue as queue_staff_worker_contract
 from .journey_policy import dispatch as dispatch_browser_journey, pending_or_new as browser_work_pending_or_new
 from .worker_dispatch import queue as queue_worker_contract
 
@@ -58,7 +59,8 @@ def tick(
             _write_run_summary(storage, state)
         storage.write_json(storage.state / STATE_FILE, state)
     social = run_social_tick(root, now=instant)
-    staff_follow_up = run_staff_follow_up(root, now=instant)
+    staff_task = next_staff_follow_up_task(root, now=instant)
+    staff_follow_up = queue_staff_worker_contract(root, task=staff_task)
     actors = scenario.get("actors", [])
     if not isinstance(actors, list) or not all(isinstance(actor_id, str) for actor_id in actors):
         raise ValueError("Rally Engine actors are invalid")
@@ -161,7 +163,7 @@ def tick(
         state["schedulerCursor"] = cursor
         storage.write_json(storage.state / STATE_FILE, state)
         _write_interpretation_audit(storage, rounds, isoformat(instant))
-    return {"status": state["status"], "state": state, "action": result["action"], "socialOffers": social["offers"], "rounds": rounds, "ownerEngagement": owner_engagement, "player": player, "frontDesk": front_desk, "staffFollowUp": staff_follow_up, "observation": observation, "trainingObservation": training_observation, "arcadeReplay": arcade_replay, "localArcadeReplay": local_arcade_replay, "trainingRecovery": training_recovery, "resultRequest": result_request, "training": training, "teamSignup": team_signup, "bookingBridge": booking_bridge, "shareInvitationTask": share_task, "shareInvitationBridge": share_bridge, "checkInTask": check_in_task, "checkInBridge": check_in_bridge, "browserJourney": browser_bridge, "workerContract": worker_contract, "activeSessions": active_sessions, "evidenceCapture": evidence_capture, "remoteWrites": int(booking_bridge.get("remoteWrites", 0)) + int(share_bridge.get("remoteWrites", 0)) + int(check_in_bridge.get("remoteWrites", 0))}
+    return {"status": state["status"], "state": state, "action": result["action"], "socialOffers": social["offers"], "rounds": rounds, "ownerEngagement": owner_engagement, "player": player, "frontDesk": front_desk, "staffTask": staff_task, "staffFollowUp": staff_follow_up, "observation": observation, "trainingObservation": training_observation, "arcadeReplay": arcade_replay, "localArcadeReplay": local_arcade_replay, "trainingRecovery": training_recovery, "resultRequest": result_request, "training": training, "teamSignup": team_signup, "bookingBridge": booking_bridge, "shareInvitationTask": share_task, "shareInvitationBridge": share_bridge, "checkInTask": check_in_task, "checkInBridge": check_in_bridge, "browserJourney": browser_bridge, "workerContract": worker_contract, "activeSessions": active_sessions, "evidenceCapture": evidence_capture, "remoteWrites": int(booking_bridge.get("remoteWrites", 0)) + int(share_bridge.get("remoteWrites", 0)) + int(check_in_bridge.get("remoteWrites", 0))}
 
 
 def _write_interpretation_audit(storage: Storage, rounds: list[Dict[str, Any]], observed_at: str) -> None:

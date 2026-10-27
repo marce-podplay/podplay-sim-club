@@ -422,6 +422,22 @@ def build_parser() -> argparse.ArgumentParser:
     worker_dispatch_report.add_argument("--diary", required=True, dest="diary_line")
     worker_dispatch_report.add_argument("--receipt", dest="receipt_ref", help="local worker-bootstrap receipt path for visible outcomes")
 
+    staff_follow_up = subparsers.add_parser("staff-follow-up", help="route one Riley initiative follow-up after a staff-worker decision")
+    staff_follow_up_subcommands = staff_follow_up.add_subparsers(dest="staff_follow_up_command", required=True)
+    staff_follow_up_route = staff_follow_up_subcommands.add_parser("route", help="write the normal non-coercive follow-up for one named initiative")
+    staff_follow_up_route.add_argument("--intent", required=True, dest="intent_id")
+    staff_follow_up_route.add_argument("--at", help="observation time; defaults to now")
+
+    staff_dispatch = subparsers.add_parser("staff-dispatch", help="claim and report one economical staff-worker contract")
+    staff_dispatch_subcommands = staff_dispatch.add_subparsers(dest="staff_dispatch_command", required=True)
+    staff_dispatch_next = staff_dispatch_subcommands.add_parser("next", help="claim one queued staff contract")
+    staff_dispatch_next.add_argument("--worker", required=True, dest="worker_id")
+    staff_dispatch_report = staff_dispatch_subcommands.add_parser("report", help="record a bounded staff-worker outcome")
+    staff_dispatch_report.add_argument("--contract", required=True, dest="contract_key")
+    staff_dispatch_report.add_argument("--worker", required=True, dest="worker_id")
+    staff_dispatch_report.add_argument("--outcome", required=True, choices=["routed", "pass", "blocked"])
+    staff_dispatch_report.add_argument("--diary", required=True, dest="diary_line")
+
     secure_channel = subparsers.add_parser("secure-channel", help="retain and deliver browser-created invitations privately")
     secure_channel_subcommands = secure_channel.add_subparsers(dest="secure_channel_command", required=True)
     secure_retain = secure_channel_subcommands.add_parser("retain-browser-invite", help="read one visible invite URL from stdin into the owner's private mailbox")
@@ -1139,6 +1155,32 @@ def main(argv: Optional[list] = None) -> int:
                 )
         except ValueError as exc:
             print(f"ERROR worker dispatch: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "staff-follow-up":
+        from .staff_follow_up import tick as route_staff_follow_up
+        try:
+            result = route_staff_follow_up(root, now=parse_instant(args.at), intent_id=args.intent_id)
+        except ValueError as exc:
+            print(f"ERROR staff follow-up: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "staff-dispatch":
+        from .staff_worker_dispatch import claim_next as claim_next_staff_contract, report as report_staff_contract
+        try:
+            if args.staff_dispatch_command == "next":
+                result = claim_next_staff_contract(root, worker_id=args.worker_id)
+            else:
+                result = report_staff_contract(
+                    root, contract_key=args.contract_key, worker_id=args.worker_id,
+                    outcome=args.outcome, diary_line=args.diary_line,
+                )
+        except ValueError as exc:
+            print(f"ERROR staff dispatch: {exc}", file=sys.stderr)
             return 2
         print(json.dumps(result, indent=2, sort_keys=True))
         return 0

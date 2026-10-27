@@ -27,7 +27,43 @@ STATE_FILE = "staff-follow-up.json"
 WATCHED_STATUSES = {"agreed", "preview_ready", "planned", "awaiting_payer_approval", "booked_browser_observed"}
 
 
-def tick(root: Path, now: Optional[datetime] = None) -> Dict[str, Any]:
+def next_task(root: Path, now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Return one durable, secret-free Riley follow-up task without writing.
+
+    The engine uses this to hand work to the staff-worker lane.  It is only a
+    recommendation: routing the message remains a later Riley worker action.
+    """
+    storage = Storage(root)
+    ledger = load_intent_ledger(storage)
+    state = storage.load_json(storage.state / STATE_FILE, default={})
+    watched = state.get("watched", {}) if isinstance(state, dict) else {}
+    watched = watched if isinstance(watched, dict) else {}
+    review_required = _review_required_intents(storage)
+    candidates = []
+    for intent_id, intent in ledger.get("intents", {}).items():
+        if not isinstance(intent_id, str) or not isinstance(intent, dict):
+            continue
+        status = str(intent.get("status") or "unknown")
+        if status not in WATCHED_STATUSES:
+            continue
+        next_action = "coordinator_review_observed_browser_journey" if intent_id in review_required else str(intent.get("nextAction") or "await a named decision")
+        signature = f"v4:{status}:{next_action}" if intent_id in review_required else f"v3:{status}:{next_action}"
+        if watched.get(intent_id, {}).get("signature") != signature:
+            urgency = 2 if intent_id in review_required else (1 if status == "preview_ready" else 0)
+            candidates.append((urgency, str(intent.get("createdAt") or ""), intent_id, intent, signature, next_action))
+    if not candidates:
+        return {"action": "pass", "detail": "all actionable initiatives already have a current staff watch", "remoteWrites": 0}
+    _, _, intent_id, intent, signature, next_action = sorted(candidates, reverse=True)[0]
+    route = _blocker_route(intent, next_action)
+    return {
+        "action": "route_staff_initiative", "actorId": "riley", "intentId": intent_id,
+        "signature": signature, "nextAction": next_action, "staffAction": route["staffAction"],
+        "requestedFrom": route["requestedFrom"], "blocker": route["blocker"],
+        "detail": route["text"], "remoteWrites": 0,
+    }
+
+
+def tick(root: Path, now: Optional[datetime] = None, *, intent_id: Optional[str] = None) -> Dict[str, Any]:
     """Acknowledge one newly actionable initiative for Riley's follow-up queue."""
     storage = Storage(root)
     observed_at = isoformat(now or parse_instant(None))
@@ -57,6 +93,8 @@ def tick(root: Path, now: Optional[datetime] = None) -> Dict[str, Any]:
             if watched.get(intent_id, {}).get("signature") != signature:
                 urgency = 2 if intent_id in review_required else (1 if status == "preview_ready" else 0)
                 candidates.append((urgency, str(intent.get("createdAt") or ""), intent_id, intent, signature))
+        if intent_id is not None:
+            candidates = [candidate for candidate in candidates if candidate[2] == intent_id]
         if not candidates:
             storage.write_json(storage.state / STATE_FILE, {"schemaVersion": 1, "lastTickAt": observed_at, "watched": watched})
             return {"actorId": "riley", "action": "pass", "detail": "all actionable initiatives already have a current staff watch", "remoteWrites": 0}
