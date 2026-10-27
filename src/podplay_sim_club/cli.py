@@ -432,6 +432,12 @@ def build_parser() -> argparse.ArgumentParser:
     staff_dispatch_subcommands = staff_dispatch.add_subparsers(dest="staff_dispatch_command", required=True)
     staff_dispatch_next = staff_dispatch_subcommands.add_parser("next", help="claim one queued staff contract")
     staff_dispatch_next.add_argument("--worker", required=True, dest="worker_id")
+    staff_dispatch_active = staff_dispatch_subcommands.add_parser("active", help="read one active secret-free staff contract")
+    staff_dispatch_active.add_argument("--worker", required=True, dest="worker_id")
+    staff_dispatch_launch = staff_dispatch_subcommands.add_parser("launch", help="optionally start one economical Riley worker")
+    staff_dispatch_launch.add_argument("--worker", required=True, dest="worker_id")
+    staff_dispatch_launch.add_argument("--execute", action="store_true", help="claim and start one staff worker; without it this is a non-mutating preview")
+    staff_dispatch_reap = staff_dispatch_subcommands.add_parser("reap", help="report exited staff workers that did not return a receipt")
     staff_dispatch_report = staff_dispatch_subcommands.add_parser("report", help="record a bounded staff-worker outcome")
     staff_dispatch_report.add_argument("--contract", required=True, dest="contract_key")
     staff_dispatch_report.add_argument("--worker", required=True, dest="worker_id")
@@ -1170,10 +1176,17 @@ def main(argv: Optional[list] = None) -> int:
         return 0
 
     if args.command == "staff-dispatch":
-        from .staff_worker_dispatch import claim_next as claim_next_staff_contract, report as report_staff_contract
+        from .staff_worker_dispatch import active_packet as active_staff_packet, claim_next as claim_next_staff_contract, report as report_staff_contract
+        from .codex_staff_worker_launcher import launch as launch_staff_worker, reap as reap_staff_workers
         try:
             if args.staff_dispatch_command == "next":
                 result = claim_next_staff_contract(root, worker_id=args.worker_id)
+            elif args.staff_dispatch_command == "active":
+                result = active_staff_packet(root, worker_id=args.worker_id)
+            elif args.staff_dispatch_command == "launch":
+                result = launch_staff_worker(root, worker_id=args.worker_id, execute=args.execute)
+            elif args.staff_dispatch_command == "reap":
+                result = reap_staff_workers(root)
             else:
                 result = report_staff_contract(
                     root, contract_key=args.contract_key, worker_id=args.worker_id,

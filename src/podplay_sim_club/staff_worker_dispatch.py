@@ -59,6 +59,25 @@ def claim_next(root: Path, *, worker_id: str) -> Dict[str, Any]:
     return {"action": "staff_worker_contract_claimed", "contractKey": contract["contractKey"], "actorId": contract["actorId"], "intentId": contract["intentId"], "remoteWrites": 0}
 
 
+def active_packet(root: Path, *, worker_id: str) -> Dict[str, Any]:
+    """Read one active staff contract without exposing unrelated state."""
+    storage = Storage(root)
+    state = storage.load_json(storage.state / STATE_FILE, default={})
+    contracts = state.get("contracts", {}) if isinstance(state, dict) else {}
+    active = [item for item in contracts.values() if isinstance(item, dict) and item.get("status") == "active" and item.get("workerId") == worker_id] if isinstance(contracts, dict) else []
+    if not active:
+        return {"action": "pass", "detail": "staff worker has no active contract", "remoteWrites": 0}
+    if len(active) != 1:
+        raise ValueError("staff worker has more than one active contract")
+    contract = active[0]
+    return {
+        "action": "staff_worker_active", "contractKey": contract["contractKey"],
+        "actorId": contract["actorId"], "intentId": contract["intentId"],
+        "staffAction": contract.get("staffAction"), "blocker": contract.get("blocker"),
+        "requestedFrom": contract.get("requestedFrom"), "remoteWrites": 0,
+    }
+
+
 def report(root: Path, *, contract_key: str, worker_id: str, outcome: str, diary_line: str) -> Dict[str, Any]:
     if outcome not in {"routed", "pass", "blocked"}:
         raise ValueError("staff worker outcome is invalid")
