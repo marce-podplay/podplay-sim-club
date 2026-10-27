@@ -30,9 +30,23 @@ The dispatcher reads receipts and reconciles only facts supported by visible evi
 
 Modes
 - Default operations: research=false, headless=true, economical worker.
-- Private discovery: research=true, headless=true, coordinator-led.
-- Supervised UI: research=true, headless=false, coordinator-led.
+- Private discovery: research=true, headless=true. The coordinator may play the
+  character or explicitly launch one economical worker outside the engine to
+  exercise one narrow playbook and return a receipt for tuning.
+- Supervised UI: research=true, headless=false. The coordinator may play the
+  character or explicitly launch one economical worker when a human needs to
+  observe the rendered journey.
 - Exceptional fallback: research=false, headless=false, only when user assistance is required.
+
+Research-worker launch
+- A research launch is manual and outside the Rally Engine: it does not need a
+  scheduled engine tick or a production-like worker queue.
+- Give the economical worker one named actor, one playbook, and one bounded
+  task. The coordinator reads its receipt, diary, and sanitized evidence to
+  tune the routine before enabling it in default operations.
+- Research and operations preserve the same browser boundary: no product API,
+  integration, credential, or inferred-outcome shortcut is available to the
+  character worker.
 
 Handoff
 In a fresh chat, begin from the current dispatcher template and the local artifacts. Review deviations and blockers, then dispatch the next routine contract. Do not narrate routine engine ticks unless a meaningful decision, evidence change, or blocker occurs.
