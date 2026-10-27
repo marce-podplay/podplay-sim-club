@@ -528,6 +528,7 @@ def next_booking_task(root: Path, now: Optional[datetime] = None) -> Dict[str, A
         if isinstance(intent, dict)
         and intent.get("journey") == "customer_training"
         and intent.get("status") in {"agreed", "preview_ready"}
+        and _ready_for_booking_task(intent)
     ]
     if now is not None:
         candidates = [intent for intent in candidates if _booking_agreement_is_fresh(intent, now)]
@@ -559,6 +560,35 @@ def next_booking_task(root: Path, now: Optional[datetime] = None) -> Dict[str, A
         ],
         "detail": f"{len(intent['participants'])} named training players agreed; plan live W37 availability before the guarded player booking",
     }
+
+
+def _ready_for_booking_task(intent: Dict[str, Any]) -> bool:
+    """Whether the agreement's *current* step is booking work.
+
+    ``status == agreed`` records the durable social commitment, not a blanket
+    instruction to book again.  Once a visible booking has moved an intent to
+    invitation sharing or another named follow-up, it may remain ``agreed``
+    while that different player-owned step is outstanding.  Do not let that
+    historical agreement occupy the single booking-worker lane.
+
+    Older saved intents did not always carry ``nextAction``.  Treat those as
+    compatible booking candidates so the migration is additive rather than a
+    silent abandonment of valid agreements.
+    """
+    status = intent.get("status")
+    next_action = intent.get("nextAction")
+    if next_action is None:
+        return True
+    if not isinstance(next_action, str):
+        return False
+    if status == "agreed":
+        return next_action == "plan_live_w37_availability_then_player_booking"
+    if status == "preview_ready":
+        return next_action in {
+            "apply_training_booking",
+            "apply_live_w37_booking_after_named_payer_decision",
+        }
+    return False
 
 
 def _agreement_timestamp(intent: Dict[str, Any]) -> float:

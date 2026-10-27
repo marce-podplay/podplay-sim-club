@@ -356,6 +356,42 @@ class SimClubTestCase(unittest.TestCase):
         jobs = storage.load_json(storage.state / "browser-journeys.json")["jobs"]
         self.assertIn(job["jobKey"], jobs)
 
+    def test_training_booking_task_skips_an_agreement_waiting_for_invitation_sharing(self):
+        """An agreed booking must not starve a fresh player booking task."""
+        from podplay_sim_club.training_sessions import next_booking_task
+
+        storage = Storage(self.root)
+        ledger = load_intent_ledger(storage)
+        save_intent(storage, ledger, {
+            "schemaVersion": 1,
+            "id": "intent:training:share-first",
+            "journey": "customer_training",
+            "status": "agreed",
+            "createdAt": "2026-09-23T15:04:00Z",
+            "agreedAt": "2026-09-23T15:04:00Z",
+            "bookerActorId": "andy-bogard",
+            "participants": ["andy-bogard", "terry-bogard"],
+            "constraints": {"durationMinutes": 30},
+            "nextAction": "await_named_player_share_decision",
+        })
+        save_intent(storage, ledger, {
+            "schemaVersion": 1,
+            "id": "intent:training:fresh-booking",
+            "journey": "customer_training",
+            "status": "agreed",
+            "createdAt": "2026-09-23T15:03:00Z",
+            "agreedAt": "2026-09-23T15:03:00Z",
+            "bookerActorId": "ryu",
+            "participants": ["ryu", "ken-masters"],
+            "constraints": {"durationMinutes": 30},
+            "nextAction": "plan_live_w37_availability_then_player_booking",
+        })
+
+        task = next_booking_task(self.root, now=FIXED_NOW)
+
+        self.assertEqual("intent:training:fresh-booking", task["intentId"])
+        self.assertEqual("ryu", task["bookerActorId"])
+
     def test_rally_queue_resumes_after_each_ten_people_and_wraps_only_next_tick(self):
         from podplay_sim_club.rally_engine import tick
 
