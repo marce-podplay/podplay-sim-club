@@ -182,6 +182,63 @@ def launch(root: Path, *, worker_id: str, execute: bool) -> Dict[str, Any]:
     }
 
 
+def dispatch_once(root: Path, *, worker_id: str, execute: bool) -> Dict[str, Any]:
+    """Run one observable, single-flight outer-dispatcher cycle.
+
+    The Rally Engine only creates contracts.  A scheduler can call this
+    adapter after an engine turn without teaching the engine how to spawn
+    processes.  In execute mode it first reaps exited workers that supplied no
+    receipt, then starts *at most one* worker if there is no active launcher.
+    Preview mode is entirely read-only and answers whether the lane is ready.
+    """
+    storage = Storage(root)
+    state = storage.load_json(storage.state / "worker-contracts.json", default={})
+    contracts = state.get("contracts", {}) if isinstance(state, dict) else {}
+    contracts = contracts if isinstance(contracts, dict) else {}
+    active = [
+        item for item in contracts.values()
+        if isinstance(item, dict) and item.get("status") == "active"
+    ]
+    queued = [
+        item for item in contracts.values()
+        if isinstance(item, dict) and item.get("status") == "queued"
+    ]
+    if not execute:
+        return {
+            "action": "dispatcher_cycle_preview",
+            "detail": "pass --execute to reap one completed worker and launch at most one queued worker",
+            "activeContracts": len(active),
+            "queuedContracts": len(queued),
+            "remoteWrites": 0,
+        }
+
+    reaped = reap(root)
+    # Re-read after reaping, which may have moved a contract to coordinator
+    # review.  A single-flight lane avoids silently overlapping two character
+    # turns against the same local Chrome runtime.
+    refreshed = storage.load_json(storage.state / "worker-contracts.json", default={})
+    refreshed_contracts = refreshed.get("contracts", {}) if isinstance(refreshed, dict) else {}
+    active_after_reap = [
+        item for item in refreshed_contracts.values()
+        if isinstance(item, dict) and item.get("status") == "active"
+    ] if isinstance(refreshed_contracts, dict) else []
+    if active_after_reap:
+        return {
+            "action": "dispatcher_waiting_for_active_worker",
+            "detail": "an economical worker is still active; no overlapping worker was started",
+            "activeContracts": len(active_after_reap),
+            "reapedContractKeys": reaped.get("contractKeys", []),
+            "remoteWrites": 0,
+        }
+    launched = launch(root, worker_id=worker_id, execute=True)
+    return {
+        "action": "dispatcher_cycle_executed",
+        "reapedContractKeys": reaped.get("contractKeys", []),
+        "launch": launched,
+        "remoteWrites": 0,
+    }
+
+
 def reap(root: Path) -> Dict[str, Any]:
     """Quarantine exited worker processes that never supplied a receipt.
 

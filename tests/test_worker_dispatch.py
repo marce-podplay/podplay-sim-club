@@ -11,7 +11,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from podplay_sim_club.journey_policy import dispatch as dispatch_browser_journey, record_observation
 from podplay_sim_club.worker_dispatch import active_packet, claim, claim_next, queue, report, runbook
-from podplay_sim_club.codex_worker_launcher import launch, reap, worker_prompt
+from podplay_sim_club.codex_worker_launcher import dispatch_once, launch, reap, worker_prompt
 
 
 class WorkerDispatchTests(unittest.TestCase):
@@ -28,6 +28,40 @@ class WorkerDispatchTests(unittest.TestCase):
             self.assertEqual("worker_launch_preview", preview["action"])
             self.assertEqual(1, preview["queuedContracts"])
             self.assertEqual("queued", json.loads((root / "state" / "worker-contracts.json").read_text())["contracts"]["worker:" + job["jobKey"]]["status"])
+
+    def test_dispatcher_cycle_preview_reports_a_single_flight_lane_without_mutation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            job = dispatch_browser_journey(root, task={
+                "action": "plan_training_booking", "intentId": "intent:cycle-preview", "bookerActorId": "andy-bogard",
+            }, role="rally")
+            queue(root, browser_job=job)
+
+            preview = dispatch_once(root, worker_id="economical:dispatcher-1", execute=False)
+
+            self.assertEqual("dispatcher_cycle_preview", preview["action"])
+            self.assertEqual(1, preview["queuedContracts"])
+            self.assertEqual(0, preview["activeContracts"])
+            contract = json.loads((root / "state" / "worker-contracts.json").read_text())["contracts"]["worker:" + job["jobKey"]]
+            self.assertEqual("queued", contract["status"])
+
+    def test_dispatcher_cycle_never_overlaps_an_active_worker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            job = dispatch_browser_journey(root, task={
+                "action": "plan_training_booking", "intentId": "intent:cycle-active", "bookerActorId": "andy-bogard",
+            }, role="rally")
+            queue(root, browser_job=job)
+            claim_next(root, worker_id="economical:already-running")
+
+            with patch("podplay_sim_club.codex_worker_launcher.reap", return_value={"contractKeys": []}), patch(
+                "podplay_sim_club.codex_worker_launcher.launch"
+            ) as launch_worker:
+                result = dispatch_once(root, worker_id="economical:dispatcher-1", execute=True)
+
+            self.assertEqual("dispatcher_waiting_for_active_worker", result["action"])
+            self.assertEqual(1, result["activeContracts"])
+            launch_worker.assert_not_called()
 
     def test_launcher_starts_one_worker_and_persists_only_safe_launch_metadata(self):
         with tempfile.TemporaryDirectory() as directory:

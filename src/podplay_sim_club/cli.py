@@ -391,6 +391,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--execute", action="store_true",
         help="atomically claim and start the worker; without it this is a non-mutating queue preview",
     )
+    worker_dispatch_cycle = worker_dispatch_subcommands.add_parser(
+        "cycle", help="run one single-flight outer-dispatcher cycle"
+    )
+    worker_dispatch_cycle.add_argument("--worker", required=True, dest="worker_id")
+    worker_dispatch_cycle.add_argument(
+        "--execute", action="store_true",
+        help="reap an exited worker and start at most one queued worker; without it this is a non-mutating preview",
+    )
     worker_dispatch_reap = worker_dispatch_subcommands.add_parser(
         "reap", help="quarantine exited economical workers that did not return a receipt"
     )
@@ -1106,7 +1114,7 @@ def main(argv: Optional[list] = None) -> int:
             report as report_worker_contract,
             runbook as worker_runbook,
         )
-        from .codex_worker_launcher import launch as launch_codex_worker, reap as reap_codex_workers
+        from .codex_worker_launcher import dispatch_once as dispatch_codex_worker, launch as launch_codex_worker, reap as reap_codex_workers
         try:
             if args.worker_dispatch_command == "next":
                 result = claim_next_worker_contract(root, worker_id=args.worker_id)
@@ -1116,6 +1124,8 @@ def main(argv: Optional[list] = None) -> int:
                 result = worker_runbook(root, worker_id=args.worker_id)
             elif args.worker_dispatch_command == "launch":
                 result = launch_codex_worker(root, worker_id=args.worker_id, execute=args.execute)
+            elif args.worker_dispatch_command == "cycle":
+                result = dispatch_codex_worker(root, worker_id=args.worker_id, execute=args.execute)
             elif args.worker_dispatch_command == "reap":
                 result = reap_codex_workers(root)
             elif args.worker_dispatch_command == "recover-unobserved":
