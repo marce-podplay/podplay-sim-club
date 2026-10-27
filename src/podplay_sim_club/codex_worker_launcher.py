@@ -61,8 +61,11 @@ def _command(*, executable: str, root: Path, prompt: str) -> list[str]:
         "exec",
         "--ephemeral",
         "--model", "gpt-6-luna",
-        "--sandbox", "danger-full-access",
-        "--ask-for-approval", "never",
+        # Keep economical workers inside the standard workspace boundary.
+        # The current Codex CLI accepts these as exec options; the former
+        # post-command approval flag caused the worker to exit before it could
+        # reach its browser playbook.
+        "--sandbox", "workspace-write",
         "--cd", str(root),
         prompt,
     ]
