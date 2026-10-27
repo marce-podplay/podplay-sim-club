@@ -32,6 +32,7 @@ def worker_prompt(*, root: Path, worker_id: str, runbook_payload: Dict[str, Any]
     """Build a narrow, secret-free instruction for a single external worker."""
     packet = runbook_payload["launchPacket"]
     contract_key = packet["contractKey"]
+    session_ref = _reference(contract_key)
     return f"""You are one economical PodPlay Sim worker. Work only on the already-active contract below.
 
 Contract (not product proof):
@@ -41,14 +42,20 @@ Contract (not product proof):
 - browser job: {packet['browserJobKey']}
 - playbook: {packet['playbook']}
 - mode: headless=true, research=false
+- prepared browser session: state/worker-sessions/{session_ref}.json
 
 First run these commands from the repository root:
 1. `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m podplay_sim_club.cli worker-dispatch active --worker {worker_id}`
 2. `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m podplay_sim_club.cli worker-dispatch runbook --worker {worker_id}`
-3. `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python tools/sim-browser/worker-bootstrap.py --worker {worker_id}`
-4. Read `{packet['playbook']}` before any browser action.
+3. Read `{packet['playbook']}` before any browser action.
+4. Attach only to the prepared session with `tools/sim-browser/controller.mjs`.
 
-Use only the isolated rendered browser and approved sim-browser controls. Do not use product APIs, integrations, control-plane actions, direct HTTP requests, cookies, page-script evaluation, credentials, or private URLs. Do not edit repository code. Do not make a booking, payment, invitation, check-in, attendance, play, score, or result claim unless that exact rendered confirmation is visible.
+The coordinator, not you, performed the visible one-time login. Use only the
+isolated rendered browser and approved sim-browser controls. Do not use product APIs,
+integrations, control-plane actions, direct HTTP requests, cookies,
+page-script evaluation, credentials, or private URLs. Do not edit repository
+code. Do not make a booking, payment, invitation, check-in, attendance, play,
+score, or result claim unless that exact rendered confirmation is visible.
 
 Record an observation only for a visible browser fact. End this one bounded turn by calling `worker-dispatch report` exactly once for contract `{contract_key}`. Visible outcomes need the receipt created by worker-bootstrap. If the UI is ambiguous or the next action is not clearly authorized, report `blocked`; do not retry. Keep the diary line secret-free and factual.
 """
@@ -61,11 +68,11 @@ def _command(*, executable: str, root: Path, prompt: str) -> list[str]:
         "exec",
         "--ephemeral",
         "--model", "gpt-6-luna",
-        # Keep economical workers inside the standard workspace boundary.
-        # The current Codex CLI accepts these as exec options; the former
-        # post-command approval flag caused the worker to exit before it could
-        # reach its browser playbook.
-        "--sandbox", "workspace-write",
+        # The worker requires loopback access only to the coordinator-created
+        # isolated browser. This mode is explicitly enabled for the approved
+        # character-runtime boundary; it never carries credentials or URLs in
+        # the prompt.
+        "--sandbox", "danger-full-access",
         "--cd", str(root),
         prompt,
     ]
@@ -100,6 +107,23 @@ def launch(root: Path, *, worker_id: str, execute: bool) -> Dict[str, Any]:
         raise ValueError("claimed worker contract did not produce a runbook")
     packet = active_runbook["launchPacket"]
     contract_key = packet["contractKey"]
+    # Browser infrastructure is coordinator-owned: it starts the isolated
+    # profile and completes the visible credential handoff before the cheaper
+    # character worker receives its narrow playbook.
+    bootstrap = subprocess.run(
+        [
+            sys.executable, str(root / "tools" / "sim-browser" / "worker-bootstrap.py"),
+            "--worker", worker_id,
+        ],
+        cwd=root, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL, check=False, timeout=190,
+    )
+    if bootstrap.returncode != 0:
+        report(
+            root, contract_key=contract_key, worker_id=worker_id, outcome="not_started",
+            diary_line="Coordinator browser login did not become ready before the economical character turn.",
+        )
+        return {"action": "coordinator_browser_not_ready", "contractKey": contract_key, "remoteWrites": 0}
     executable = shutil.which("codex")
     if executable is None:
         # No model process has started, so this is safely retryable.

@@ -3,7 +3,7 @@ import hashlib
 import json
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 import sys
@@ -37,8 +37,8 @@ class WorkerDispatchTests(unittest.TestCase):
             }, role="rally")
             queued = queue(root, browser_job=job)
             with patch("podplay_sim_club.codex_worker_launcher.shutil.which", return_value="/opt/codex"), patch(
-                "podplay_sim_club.codex_worker_launcher.subprocess.Popen"
-            ) as popen:
+                "podplay_sim_club.codex_worker_launcher.subprocess.run", return_value=Mock(returncode=0)
+            ), patch("podplay_sim_club.codex_worker_launcher.subprocess.Popen") as popen:
                 popen.return_value.pid = 4567
                 started = launch(root, worker_id="economical:runner-1", execute=True)
 
