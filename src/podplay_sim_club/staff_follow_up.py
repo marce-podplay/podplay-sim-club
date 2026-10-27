@@ -67,6 +67,7 @@ def tick(root: Path, now: Optional[datetime] = None, *, intent_id: Optional[str]
     """Acknowledge one newly actionable initiative for Riley's follow-up queue."""
     storage = Storage(root)
     observed_at = isoformat(now or parse_instant(None))
+    requested_intent_id = intent_id
     payer_request = None
     with storage.writer_lock():
         ledger = load_intent_ledger(storage)
@@ -76,25 +77,25 @@ def tick(root: Path, now: Optional[datetime] = None, *, intent_id: Optional[str]
             watched = {}
         review_required = _review_required_intents(storage)
         candidates = []
-        for intent_id, intent in ledger.get("intents", {}).items():
-            if not isinstance(intent_id, str) or not isinstance(intent, dict):
+        for candidate_intent_id, intent in ledger.get("intents", {}).items():
+            if not isinstance(candidate_intent_id, str) or not isinstance(intent, dict):
                 continue
             status = str(intent.get("status") or "unknown")
             if status not in WATCHED_STATUSES:
                 continue
             next_action = (
                 "coordinator_review_observed_browser_journey"
-                if intent_id in review_required
+                if candidate_intent_id in review_required
                 else str(intent.get("nextAction") or "await a named decision")
             )
             # Bump the message contract when routing semantics improve so an
             # existing watch can receive one updated, more useful follow-up.
-            signature = f"v4:{status}:{next_action}" if intent_id in review_required else f"v3:{status}:{next_action}"
-            if watched.get(intent_id, {}).get("signature") != signature:
-                urgency = 2 if intent_id in review_required else (1 if status == "preview_ready" else 0)
-                candidates.append((urgency, str(intent.get("createdAt") or ""), intent_id, intent, signature))
-        if intent_id is not None:
-            candidates = [candidate for candidate in candidates if candidate[2] == intent_id]
+            signature = f"v4:{status}:{next_action}" if candidate_intent_id in review_required else f"v3:{status}:{next_action}"
+            if watched.get(candidate_intent_id, {}).get("signature") != signature:
+                urgency = 2 if candidate_intent_id in review_required else (1 if status == "preview_ready" else 0)
+                candidates.append((urgency, str(intent.get("createdAt") or ""), candidate_intent_id, intent, signature))
+        if requested_intent_id is not None:
+            candidates = [candidate for candidate in candidates if candidate[2] == requested_intent_id]
         if not candidates:
             storage.write_json(storage.state / STATE_FILE, {"schemaVersion": 1, "lastTickAt": observed_at, "watched": watched})
             return {"actorId": "riley", "action": "pass", "detail": "all actionable initiatives already have a current staff watch", "remoteWrites": 0}
