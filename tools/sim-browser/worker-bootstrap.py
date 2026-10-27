@@ -52,7 +52,7 @@ def _start_handoff(*, actor_id: str, lifetime_seconds: int) -> tuple[subprocess.
     """Start the existing one-time credential server without relaying its data."""
     process = subprocess.Popen(
         [
-            sys.executable, "-m", "podplay_sim_club.cli", "preview", "browser-credential-handoff",
+            sys.executable, "-u", "-m", "podplay_sim_club.cli", "preview", "browser-credential-handoff",
             "--actor", actor_id, "--lifetime", str(lifetime_seconds),
         ],
         cwd=ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -60,13 +60,21 @@ def _start_handoff(*, actor_id: str, lifetime_seconds: int) -> tuple[subprocess.
     )
     deadline = time.monotonic() + 10
     port = None
+    saw_output = False
     try:
         while time.monotonic() < deadline:
             if process.stdout is None:
                 break
-            ready, _, _ = select.select([process.stdout], [], [], 0.25)
+            # The handoff announces a short human-readable banner before its
+            # machine-readable port.  Once the first line is buffered,
+            # select() no longer reports the pipe as readable even though
+            # TextIO still holds the remaining banner lines.  Child unbuffered
+            # output plus direct reads after the first line avoids treating a
+            # healthy handoff as a login failure.
+            ready = [process.stdout] if saw_output else select.select([process.stdout], [], [], 0.25)[0]
             if ready:
                 line = process.stdout.readline()
+                saw_output = True
                 matched = re.fullmatch(r"port: ([0-9]{1,5})\n?", line)
                 if matched:
                     port = int(matched.group(1))
