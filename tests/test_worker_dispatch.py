@@ -70,6 +70,13 @@ class WorkerDispatchTests(unittest.TestCase):
                 "action": "plan_training_booking", "intentId": "intent:launch", "bookerActorId": "andy-bogard",
             }, role="rally")
             queued = queue(root, browser_job=job)
+            reference = hashlib.sha256(queued["contractKey"].encode("utf-8")).hexdigest()[:16]
+            receipt_path = root / "state" / "worker-evidence" / reference / "worker-receipt.json"
+            receipt_path.parent.mkdir(parents=True)
+            receipt_path.write_text(json.dumps({
+                "schemaVersion": 1, "actorId": "andy-bogard", "contractRef": reference,
+                "status": "browser_ready", "login": "visible_login_settled", "remoteWrites": 0,
+            }))
             with patch("podplay_sim_club.codex_worker_launcher.shutil.which", return_value="/opt/codex"), patch(
                 "podplay_sim_club.codex_worker_launcher.subprocess.run", return_value=Mock(returncode=0)
             ), patch("podplay_sim_club.codex_worker_launcher.subprocess.Popen") as popen:
@@ -86,6 +93,28 @@ class WorkerDispatchTests(unittest.TestCase):
             self.assertEqual("active", contract["status"])
             self.assertEqual(4567, contract["launcher"]["processId"])
             self.assertEqual("codex-cli-economical-worker", contract["launcher"]["kind"])
+
+    def test_launcher_does_not_delegate_a_public_shell_only_browser(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            job = dispatch_browser_journey(root, task={
+                "action": "plan_training_booking", "intentId": "intent:no-login-receipt", "bookerActorId": "andy-bogard",
+            }, role="rally")
+            queued = queue(root, browser_job=job)
+            reference = hashlib.sha256(queued["contractKey"].encode("utf-8")).hexdigest()[:16]
+            receipt_path = root / "state" / "worker-evidence" / reference / "worker-receipt.json"
+            receipt_path.parent.mkdir(parents=True)
+            receipt_path.write_text(json.dumps({
+                "schemaVersion": 1, "actorId": "andy-bogard", "contractRef": reference,
+                "status": "browser_ready", "login": "not_requested", "remoteWrites": 0,
+            }))
+            with patch("podplay_sim_club.codex_worker_launcher.subprocess.run", return_value=Mock(returncode=0)), patch(
+                "podplay_sim_club.codex_worker_launcher.subprocess.Popen"
+            ) as popen:
+                result = launch(root, worker_id="economical:runner-1", execute=True)
+
+            self.assertEqual("coordinator_browser_not_ready", result["action"])
+            popen.assert_not_called()
 
     def test_worker_prompt_is_bounded_and_never_contains_product_secrets(self):
         prompt = worker_prompt(root=REPO_ROOT, worker_id="economical:runner-1", runbook_payload={
@@ -160,7 +189,7 @@ class WorkerDispatchTests(unittest.TestCase):
             receipt_path.parent.mkdir(parents=True)
             receipt_path.write_text(json.dumps({
                 "schemaVersion": 1, "actorId": "andy-bogard", "contractRef": reference,
-                "status": "browser_ready", "remoteWrites": 0,
+                "status": "browser_ready", "login": "visible_login_settled", "remoteWrites": 0,
             }))
 
             reported = report(
@@ -172,6 +201,30 @@ class WorkerDispatchTests(unittest.TestCase):
             self.assertEqual("reported", reported["status"])
             contract = json.loads((root / "state" / "worker-contracts.json").read_text())["contracts"][contract_key]
             self.assertEqual(str(receipt_path.relative_to(root)), contract["receiptRef"])
+
+    def test_public_shell_only_receipt_cannot_support_visible_progress(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            job = dispatch_browser_journey(root, task={
+                "action": "plan_training_booking", "intentId": "intent:public-shell", "bookerActorId": "andy-bogard",
+            }, role="rally")
+            queued = queue(root, browser_job=job)
+            claim_next(root, worker_id="economical:runner-1")
+            record_observation(root, job_key=job["jobKey"], actor_id="andy-bogard", kind="visible_observation")
+            reference = hashlib.sha256(queued["contractKey"].encode("utf-8")).hexdigest()[:16]
+            receipt_path = root / "state" / "worker-evidence" / reference / "worker-receipt.json"
+            receipt_path.parent.mkdir(parents=True)
+            receipt_path.write_text(json.dumps({
+                "schemaVersion": 1, "actorId": "andy-bogard", "contractRef": reference,
+                "status": "browser_ready", "login": "not_requested", "remoteWrites": 0,
+            }))
+
+            with self.assertRaisesRegex(ValueError, "receipt is incomplete"):
+                report(
+                    root, contract_key=queued["contractKey"], worker_id="economical:runner-1",
+                    outcome="visible_progress", diary_line="Rendered booking entry was observed; no booking outcome inferred.",
+                    receipt_ref=str(receipt_path.relative_to(root)),
+                )
 
     def test_operations_worker_skips_a_stale_contract_for_a_runnable_one(self):
         with tempfile.TemporaryDirectory() as directory:

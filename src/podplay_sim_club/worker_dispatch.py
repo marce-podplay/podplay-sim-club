@@ -62,6 +62,11 @@ def _receipt_ref(storage: Storage, *, contract: Dict[str, Any], receipt_ref: str
         or receipt.get("actorId") != contract.get("actorId")
         or receipt.get("contractRef") != _contract_ref(str(contract["contractKey"]))
         or receipt.get("status") != "browser_ready"
+        # An economical character worker is only allowed to receive a browser
+        # after the coordinator has completed the one-time rendered login.
+        # A public-shell-only receipt is useful for diagnostics but cannot
+        # support a player journey.
+        or receipt.get("login") != "visible_login_settled"
         or receipt.get("remoteWrites") != 0
     ):
         raise ValueError("worker receipt is incomplete or does not match the active contract")

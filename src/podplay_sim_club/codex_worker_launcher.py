@@ -28,6 +28,35 @@ def _reference(contract_key: str) -> str:
     return hashlib.sha256(contract_key.encode("utf-8")).hexdigest()[:16]
 
 
+def _prepared_login_receipt(storage: Storage, *, packet: Dict[str, Any]) -> bool:
+    """Accept only the coordinator receipt for a visibly settled player login.
+
+    A browser can render the regional landing dialog before a player is signed
+    in.  Handing that page to an economical worker makes the worker appear to
+    have reached booking while it cannot legitimately continue.  The launcher
+    therefore treats the receipt as a strict handoff boundary, not merely an
+    evidence attachment.
+    """
+    contract_key = packet.get("contractKey")
+    actor_id = packet.get("actorId")
+    if not isinstance(contract_key, str) or not isinstance(actor_id, str):
+        return False
+    reference = _reference(contract_key)
+    receipt = storage.load_json(
+        storage.state / "worker-evidence" / reference / "worker-receipt.json",
+        default={},
+    )
+    return (
+        isinstance(receipt, dict)
+        and receipt.get("schemaVersion") == 1
+        and receipt.get("contractRef") == reference
+        and receipt.get("actorId") == actor_id
+        and receipt.get("status") == "browser_ready"
+        and receipt.get("login") == "visible_login_settled"
+        and receipt.get("remoteWrites") == 0
+    )
+
+
 def worker_prompt(*, root: Path, worker_id: str, runbook_payload: Dict[str, Any]) -> str:
     """Build a narrow, secret-free instruction for a single external worker."""
     packet = runbook_payload["launchPacket"]
@@ -127,6 +156,12 @@ def launch(root: Path, *, worker_id: str, execute: bool) -> Dict[str, Any]:
         report(
             root, contract_key=contract_key, worker_id=worker_id, outcome="not_started",
             diary_line="Coordinator browser login did not become ready before the economical character turn.",
+        )
+        return {"action": "coordinator_browser_not_ready", "contractKey": contract_key, "remoteWrites": 0}
+    if not _prepared_login_receipt(storage, packet=packet):
+        report(
+            root, contract_key=contract_key, worker_id=worker_id, outcome="not_started",
+            diary_line="Coordinator did not provide a visibly settled player-login receipt before the economical character turn.",
         )
         return {"action": "coordinator_browser_not_ready", "contractKey": contract_key, "remoteWrites": 0}
     executable = shutil.which("codex")
