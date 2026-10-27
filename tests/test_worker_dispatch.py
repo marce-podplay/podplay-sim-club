@@ -96,6 +96,7 @@ class WorkerDispatchTests(unittest.TestCase):
         })
         self.assertIn("Do not use product APIs", prompt)
         self.assertIn("worker-dispatch active", prompt)
+        self.assertIn("booking-entry.mjs", prompt)
         self.assertNotIn("password", prompt.lower())
 
     def test_reaper_quarantines_a_dead_worker_without_a_receipt(self):

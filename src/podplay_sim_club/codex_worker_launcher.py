@@ -50,6 +50,11 @@ First run these commands from the repository root:
 3. Read `{packet['playbook']}` before any browser action.
 4. Attach only to the prepared session with `tools/sim-browser/controller.mjs`.
 
+For a booking playbook, run `node tools/sim-browser/booking-entry.mjs --session
+state/worker-sessions/{session_ref}.json` after login. It resolves the
+rendered region-onboarding branch and stops at the approved West 37th venue
+control; it does not select a date, slot, payment, or booking confirmation.
+
 The coordinator, not you, performed the visible one-time login. Use only the
 isolated rendered browser and approved sim-browser controls. Do not use product APIs,
 integrations, control-plane actions, direct HTTP requests, cookies,

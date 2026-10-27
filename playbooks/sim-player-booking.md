@@ -18,10 +18,14 @@ character, not authority to create a booking.
 ## Visible booking path
 
 1. Sign in using the one-time browser credential handoff.
-2. Complete only any visible onboarding needed to reach Booking. If it is
-   absent, do not treat that as a failure; wait for the next rendered control.
-   The browser helper may resolve this entry branch, but it stops before any
-   booking choice.
+2. Complete only any visible onboarding needed to reach Booking. Run
+   `node tools/sim-browser/booking-entry.mjs --session <prepared-session>`
+   after login. It observes the rendered branch, selects the already-approved
+   **New York / New Jersey** region only when that onboarding is actually
+   present, confirms it, opens Booking, and stops at the rendered **West 37th
+   Manhattan** area control. If onboarding is absent, it follows the normal
+   Booking path instead. This routine stops before any date, slot, payment,
+   or booking choice.
 3. Open Booking and wait for the agreed area control to render before selecting
    it, then select the appropriate pod
    experience.
