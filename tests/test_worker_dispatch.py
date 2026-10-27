@@ -125,8 +125,8 @@ class WorkerDispatchTests(unittest.TestCase):
         })
         self.assertIn("Do not use product APIs", prompt)
         self.assertIn("worker-dispatch active", prompt)
-        self.assertIn("booking-entry.mjs", prompt)
-        self.assertIn("After the helper reaches live availability", prompt)
+        self.assertIn("detached runner has already completed", prompt)
+        self.assertIn("Begin by observing that current rendered state", prompt)
         self.assertNotIn("password", prompt.lower())
 
     def test_booking_entry_stops_before_a_volatile_slot_or_payment(self):
@@ -140,6 +140,12 @@ class WorkerDispatchTests(unittest.TestCase):
         runner = (REPO_ROOT / "tools" / "sim-browser" / "codex-worker-runner.py").read_text()
         self.assertIn("_prepared_login_receipt(storage, packet=packet)", runner)
         self.assertIn('outcome="not_started"', runner)
+
+    def test_detached_worker_makes_booking_entry_preflight_deterministic(self):
+        runner = (REPO_ROOT / "tools" / "sim-browser" / "codex-worker-runner.py").read_text()
+        self.assertIn("def _prepare_booking_entry", runner)
+        self.assertIn("booking-entry.mjs", runner)
+        self.assertIn("booking_entry_blocked", runner)
 
     def test_reaper_quarantines_a_dead_worker_without_a_receipt(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -85,11 +85,11 @@ First run these commands from the repository root:
 3. Read `{packet['playbook']}` before any browser action.
 4. Attach only to the prepared session with `tools/sim-browser/controller.mjs`.
 
-For a booking playbook, run `node tools/sim-browser/booking-entry.mjs --session
-state/worker-sessions/{session_ref}.json` after login. It resolves the
-rendered region-onboarding branch and stops at the approved West 37th venue
-and Open Pod availability; it does not select a date, slot, payment, or
-booking confirmation.
+For a booking playbook, the detached runner has already completed the
+allowlisted rendered region, West 37th venue, and Open Pod entry routine. It
+stopped at live availability before selecting a date, slot, payment, or
+booking confirmation. Begin by observing that current rendered state; do not
+repeat the entry routine.
 
 {phase_instruction}
 

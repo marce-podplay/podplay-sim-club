@@ -29,6 +29,49 @@ def _reference(contract_key: str) -> str:
     return hashlib.sha256(contract_key.encode("utf-8")).hexdigest()[:16]
 
 
+def _prepare_booking_entry(*, storage: Storage, packet: dict[str, object]) -> bool:
+    """Reach the stable, rendered availability screen before model handoff.
+
+    Region, club, and experience selection are durable context from the
+    contract, not a character decision about a volatile slot or purchase.
+    Leaving this routine as a prose instruction made the cheap worker liable
+    to stop on the first onboarding dialog.  Run the existing visible-browser
+    helper here so both research and operations workers begin from the same
+    inspected screen.  The helper deliberately stops before date, slot,
+    payment, invitation, or booking confirmation.
+    """
+    action = packet.get("journeyAction")
+    if action not in {"plan_training_booking", "review_training_availability"}:
+        return True
+    contract_key = packet.get("contractKey")
+    actor_id = packet.get("actorId")
+    worker_id = packet.get("workerId")
+    if not all(isinstance(value, str) for value in (contract_key, actor_id, worker_id)):
+        return False
+    session = storage.state / "worker-sessions" / f"{_reference(contract_key)}.json"
+    if not session.is_file():
+        report(
+            ROOT, contract_key=contract_key, worker_id=worker_id, outcome="blocked",
+            diary_line="Coordinator could not provide the isolated rendered browser session for booking entry.",
+        )
+        return False
+    try:
+        completed = subprocess.run(
+            ["node", str(ROOT / "tools" / "sim-browser" / "booking-entry.mjs"), "--session", str(session)],
+            cwd=ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            check=False, timeout=100,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        completed = None
+    if completed is None or completed.returncode != 0:
+        report(
+            ROOT, contract_key=contract_key, worker_id=worker_id, outcome="blocked",
+            diary_line="The rendered booking-entry routine did not reach live availability; no slot or booking action was attempted.",
+        )
+        return False
+    return True
+
+
 def run(*, worker_id: str, contract_key: str) -> int:
     storage = Storage(ROOT)
     reference = _reference(contract_key)
@@ -51,6 +94,14 @@ def run(*, worker_id: str, contract_key: str) -> int:
                 diary_line="Coordinator did not provide a visibly settled player-login receipt before the economical character turn.",
             )
             result.update({"status": "login_not_settled", "finishedAt": isoformat(parse_instant(None))})
+            storage.write_json(status_path, result)
+            return 2
+        # Make the routine entry deterministic.  The economical model still
+        # owns the character turn after this point, but never has to infer or
+        # remember a region-onboarding branch before it can see availability.
+        packet = {**packet, "workerId": worker_id}
+        if not _prepare_booking_entry(storage=storage, packet=packet):
+            result.update({"status": "booking_entry_blocked", "finishedAt": isoformat(parse_instant(None))})
             storage.write_json(status_path, result)
             return 2
         executable = shutil.which("codex")
