@@ -585,7 +585,7 @@ def _blocked_booking_intents(storage: Storage) -> set[str]:
         for job in jobs.values()
         if isinstance(job, dict)
         and job.get("role") == "player"
-        and job.get("journeyAction") == "plan_training_booking"
+        and job.get("journeyAction") in {"plan_training_booking", "review_training_availability"}
         and job.get("status") == "blocked"
         and isinstance((intent_id := job.get("intentId")), str)
     }
