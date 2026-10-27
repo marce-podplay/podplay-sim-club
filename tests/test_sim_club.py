@@ -392,6 +392,34 @@ class SimClubTestCase(unittest.TestCase):
         self.assertEqual("intent:training:fresh-booking", task["intentId"])
         self.assertEqual("ryu", task["bookerActorId"])
 
+    def test_training_booking_task_skips_a_blocked_browser_journey_for_a_fresh_agreement(self):
+        """One uncertain journey must not starve an independent fresh team."""
+        from podplay_sim_club.training_sessions import next_booking_task
+
+        storage = Storage(self.root)
+        ledger = load_intent_ledger(storage)
+        for intent_id, actor_id, agreed_at in [
+            ("intent:training:blocked", "andy-bogard", "2026-09-23T15:04:00Z"),
+            ("intent:training:fresh-after-block", "ryu", "2026-09-23T15:03:00Z"),
+        ]:
+            save_intent(storage, ledger, {
+                "schemaVersion": 1, "id": intent_id, "journey": "customer_training",
+                "status": "agreed", "createdAt": agreed_at, "agreedAt": agreed_at,
+                "bookerActorId": actor_id, "participants": [actor_id, "ken-masters"],
+                "constraints": {"durationMinutes": 30},
+                "nextAction": "plan_live_w37_availability_then_player_booking",
+            })
+        storage.write_json(storage.state / "browser-journeys.json", {"schemaVersion": 1, "jobs": {
+            "player:plan_training_booking:intent:training:blocked:andy-bogard": {
+                "role": "player", "journeyAction": "plan_training_booking",
+                "intentId": "intent:training:blocked", "status": "blocked",
+            },
+        }})
+
+        task = next_booking_task(self.root, now=FIXED_NOW)
+
+        self.assertEqual("intent:training:fresh-after-block", task["intentId"])
+
     def test_rally_queue_resumes_after_each_ten_people_and_wraps_only_next_tick(self):
         from podplay_sim_club.rally_engine import tick
 

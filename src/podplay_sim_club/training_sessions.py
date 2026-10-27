@@ -532,6 +532,12 @@ def next_booking_task(root: Path, now: Optional[datetime] = None) -> Dict[str, A
     ]
     if now is not None:
         candidates = [intent for intent in candidates if _booking_agreement_is_fresh(intent, now)]
+    # A blocked rendered journey is durable evidence of an uncertain product
+    # state, not permission to replay the same booking.  It should remain
+    # available to staff follow-up, while a separate fresh agreement can still
+    # enter the single worker lane.
+    blocked_intents = _blocked_booking_intents(storage)
+    candidates = [intent for intent in candidates if intent.get("id") not in blocked_intents]
     if not candidates:
         return {"action": "pass", "detail": "no agreed training session awaits planning"}
     # A Preview plan is perishable: live availability can change underneath it.
@@ -559,6 +565,22 @@ def next_booking_task(root: Path, now: Optional[datetime] = None) -> Dict[str, A
             "accept_invitation",
         ],
         "detail": f"{len(intent['participants'])} named training players agreed; plan live W37 availability before the guarded player booking",
+    }
+
+
+def _blocked_booking_intents(storage: Storage) -> set[str]:
+    journeys = storage.load_json(storage.state / "browser-journeys.json", default={})
+    jobs = journeys.get("jobs", {}) if isinstance(journeys, dict) else {}
+    if not isinstance(jobs, dict):
+        return set()
+    return {
+        intent_id
+        for job in jobs.values()
+        if isinstance(job, dict)
+        and job.get("role") == "player"
+        and job.get("journeyAction") == "plan_training_booking"
+        and job.get("status") == "blocked"
+        and isinstance((intent_id := job.get("intentId")), str)
     }
 
 
