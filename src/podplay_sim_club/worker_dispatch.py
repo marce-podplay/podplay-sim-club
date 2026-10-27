@@ -140,6 +140,36 @@ def claim(root: Path, *, contract_key: str, worker_id: str) -> Dict[str, Any]:
     return {"contractKey": contract_key, "actorId": contract["actorId"], "status": "active", "remoteWrites": 0}
 
 
+def claim_specific(root: Path, *, contract_key: str, worker_id: str) -> Dict[str, Any]:
+    """Claim one named runnable contract without letting older work preempt it.
+
+    Used only by the outer dispatcher when a current session has a named,
+    time-sensitive player step.  It preserves the same queue/job checks as
+    ``claim_next`` and never launches a browser or model by itself.
+    """
+    if not _is_economical_worker(worker_id):
+        raise ValueError("worker must use the economical worker identity")
+    storage = Storage(root)
+    observed_at = isoformat(parse_instant(None))
+    with storage.writer_lock():
+        state = storage.load_json(storage.state / STATE_FILE, default={})
+        contracts = state.get("contracts", {}) if isinstance(state, dict) else {}
+        contract = contracts.get(contract_key) if isinstance(contracts, dict) else None
+        if not isinstance(contract, dict) or contract.get("status") != "queued":
+            raise ValueError("named worker contract is unavailable")
+        job_key, actor_id = contract.get("browserJobKey"), contract.get("actorId")
+        journeys = storage.load_json(storage.state / JOURNEY_STATE_FILE, default={})
+        jobs = journeys.get("jobs", {}) if isinstance(journeys, dict) else {}
+        job = jobs.get(job_key) if isinstance(jobs, dict) and isinstance(job_key, str) else None
+        if not isinstance(job, dict) or job.get("status") != "queued" or job.get("actorId") != actor_id:
+            raise ValueError("named worker contract has no runnable browser job")
+        job.update({"status": "active", "claimedBy": actor_id, "claimedAt": observed_at, "lastObservedAt": observed_at})
+        contract.update({"status": "active", "workerId": worker_id, "claimedAt": observed_at})
+        storage.write_json(storage.state / JOURNEY_STATE_FILE, {"schemaVersion": 1, "jobs": jobs})
+        storage.write_json(storage.state / STATE_FILE, {"schemaVersion": 1, "contracts": contracts})
+    return {"action": "worker_contract_claimed", "status": "active", "workerId": worker_id, "launchPacket": _launch_packet(contract), "remoteWrites": 0}
+
+
 def claim_next(root: Path, *, worker_id: str) -> Dict[str, Any]:
     """Atomically launch the oldest runnable contract for one cheap worker.
 

@@ -387,6 +387,7 @@ def build_parser() -> argparse.ArgumentParser:
         "launch", help="optionally start one bounded economical Codex worker for the next queued contract"
     )
     worker_dispatch_launch.add_argument("--worker", required=True, dest="worker_id")
+    worker_dispatch_launch.add_argument("--contract", dest="contract_key", help="optionally launch one named runnable worker contract")
     worker_dispatch_launch.add_argument(
         "--execute", action="store_true",
         help="atomically claim and start the worker; without it this is a non-mutating queue preview",
@@ -1145,7 +1146,7 @@ def main(argv: Optional[list] = None) -> int:
             elif args.worker_dispatch_command == "runbook":
                 result = worker_runbook(root, worker_id=args.worker_id)
             elif args.worker_dispatch_command == "launch":
-                result = launch_codex_worker(root, worker_id=args.worker_id, execute=args.execute)
+                result = launch_codex_worker(root, worker_id=args.worker_id, execute=args.execute, contract_key=args.contract_key)
             elif args.worker_dispatch_command == "cycle":
                 result = dispatch_codex_worker(root, worker_id=args.worker_id, execute=args.execute)
             elif args.worker_dispatch_command == "reap":

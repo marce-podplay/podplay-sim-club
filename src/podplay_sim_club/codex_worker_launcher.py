@@ -18,7 +18,7 @@ from typing import Any, Dict
 
 from .storage import Storage
 from .time import isoformat, parse_instant
-from .worker_dispatch import claim_next, report, runbook
+from .worker_dispatch import claim_next, claim_specific, report, runbook
 
 
 LAUNCHER_NAME = "codex-cli-economical-worker"
@@ -121,7 +121,7 @@ def _command(*, executable: str, root: Path, prompt: str) -> list[str]:
     ]
 
 
-def launch(root: Path, *, worker_id: str, execute: bool) -> Dict[str, Any]:
+def launch(root: Path, *, worker_id: str, execute: bool, contract_key: str | None = None) -> Dict[str, Any]:
     """Claim and optionally start exactly one routine Codex worker.
 
     ``execute=False`` is deliberately non-mutating: callers can safely check
@@ -142,7 +142,7 @@ def launch(root: Path, *, worker_id: str, execute: bool) -> Dict[str, Any]:
             "remoteWrites": 0,
         }
 
-    claimed = claim_next(root, worker_id=worker_id)
+    claimed = claim_specific(root, contract_key=contract_key, worker_id=worker_id) if contract_key else claim_next(root, worker_id=worker_id)
     if claimed.get("action") == "pass":
         return claimed
     active_runbook = runbook(root, worker_id=worker_id)
