@@ -23,12 +23,12 @@ character, not authority to create a booking.
    after login. It observes the rendered branch, selects the already-approved
    **New York / New Jersey** region only when that onboarding is actually
    present, confirms it, opens Booking, and stops at the rendered **West 37th
-   Manhattan** area control. If onboarding is absent, it follows the normal
+   Manhattan** area control, selects the agreed **Open Pod** experience, and
+   stops at live availability. If onboarding is absent, it follows the normal
    Booking path instead. This routine stops before any date, slot, payment,
    or booking choice.
-3. Open Booking and wait for the agreed area control to render before selecting
-   it, then select the appropriate pod
-   experience.
+3. Re-read the now-rendered availability; do not treat the selected venue and
+   experience as proof that any particular time remains available.
 4. After selecting an experience, wait independently for the intended live
    slot control to render. After selecting that slot, wait independently for
    the rendered **Continue** control before trying to activate it. Do not

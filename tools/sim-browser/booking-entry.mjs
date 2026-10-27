@@ -53,7 +53,13 @@ try {
   if (!await visible('navigation.booking', 20)) throw new Error('Booking navigation did not render');
   await activate('navigation.booking');
   if (!await visible('booking.area.west_37th_manhattan', 30)) throw new Error('West 37th area control did not render');
-  console.log(JSON.stringify({ status: 'booking_entry_ready', branch, nextVisibleControl: 'booking.area.west_37th_manhattan' }));
+  // Area and experience are durable parts of the named Sim's agreed Club
+  // context.  Selecting them only reveals live availability; it does not
+  // choose a volatile time, payment, or create a booking.
+  await activate('booking.area.west_37th_manhattan');
+  if (!await visible('booking.experience.open_pod', 20)) throw new Error('Open Pod experience did not render');
+  await activate('booking.experience.open_pod');
+  console.log(JSON.stringify({ status: 'booking_entry_ready', branch, nextVisibleControl: 'live_availability' }));
 } catch (error) {
   console.error(`sim-browser booking-entry: ${error.message}`);
   process.exitCode = 2;

@@ -128,6 +128,13 @@ class WorkerDispatchTests(unittest.TestCase):
         self.assertIn("booking-entry.mjs", prompt)
         self.assertNotIn("password", prompt.lower())
 
+    def test_booking_entry_stops_before_a_volatile_slot_or_payment(self):
+        helper = (REPO_ROOT / "tools" / "sim-browser" / "booking-entry.mjs").read_text()
+        self.assertIn("booking.area.west_37th_manhattan", helper)
+        self.assertIn("booking.experience.open_pod", helper)
+        self.assertNotIn("booking.slot.", helper)
+        self.assertNotIn("booking.payment.", helper)
+
     def test_reaper_quarantines_a_dead_worker_without_a_receipt(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
