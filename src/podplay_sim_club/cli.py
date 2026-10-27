@@ -391,6 +391,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--execute", action="store_true",
         help="atomically claim and start the worker; without it this is a non-mutating queue preview",
     )
+    worker_dispatch_reap = worker_dispatch_subcommands.add_parser(
+        "reap", help="quarantine exited economical workers that did not return a receipt"
+    )
     worker_dispatch_recover = worker_dispatch_subcommands.add_parser(
         "recover-unobserved", help="release an older dispatcher-side failure that has no browser observation"
     )
@@ -1103,7 +1106,7 @@ def main(argv: Optional[list] = None) -> int:
             report as report_worker_contract,
             runbook as worker_runbook,
         )
-        from .codex_worker_launcher import launch as launch_codex_worker
+        from .codex_worker_launcher import launch as launch_codex_worker, reap as reap_codex_workers
         try:
             if args.worker_dispatch_command == "next":
                 result = claim_next_worker_contract(root, worker_id=args.worker_id)
@@ -1113,6 +1116,8 @@ def main(argv: Optional[list] = None) -> int:
                 result = worker_runbook(root, worker_id=args.worker_id)
             elif args.worker_dispatch_command == "launch":
                 result = launch_codex_worker(root, worker_id=args.worker_id, execute=args.execute)
+            elif args.worker_dispatch_command == "reap":
+                result = reap_codex_workers(root)
             elif args.worker_dispatch_command == "recover-unobserved":
                 result = recover_unobserved_release(root, contract_key=args.contract_key)
             elif args.worker_dispatch_command == "quarantine-legacy-release":

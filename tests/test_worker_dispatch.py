@@ -11,7 +11,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from podplay_sim_club.journey_policy import dispatch as dispatch_browser_journey, record_observation
 from podplay_sim_club.worker_dispatch import active_packet, claim, claim_next, queue, report, runbook
-from podplay_sim_club.codex_worker_launcher import launch, worker_prompt
+from podplay_sim_club.codex_worker_launcher import launch, reap, worker_prompt
 
 
 class WorkerDispatchTests(unittest.TestCase):
@@ -45,8 +45,8 @@ class WorkerDispatchTests(unittest.TestCase):
             self.assertEqual("economical_worker_started", started["action"])
             self.assertEqual("andy-bogard", started["actorId"])
             command = popen.call_args.args[0]
-            self.assertIn("gpt-6-luna", command)
-            self.assertIn("--ephemeral", command)
+            self.assertIn("codex-worker-runner.py", command[1])
+            self.assertIn("--contract", command)
             self.assertNotIn("@podplay", " ".join(command))
             contract = json.loads((root / "state" / "worker-contracts.json").read_text())["contracts"][queued["contractKey"]]
             self.assertEqual("active", contract["status"])
@@ -63,6 +63,29 @@ class WorkerDispatchTests(unittest.TestCase):
         self.assertIn("Do not use product APIs", prompt)
         self.assertIn("worker-dispatch active", prompt)
         self.assertNotIn("password", prompt.lower())
+
+    def test_reaper_quarantines_a_dead_worker_without_a_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            job = dispatch_browser_journey(root, task={
+                "action": "plan_training_booking", "intentId": "intent:reap", "bookerActorId": "blanka",
+            }, role="rally")
+            queued = queue(root, browser_job=job)
+            claim_next(root, worker_id="economical:runner-1")
+            state_path = root / "state" / "worker-contracts.json"
+            state = json.loads(state_path.read_text())
+            state["contracts"][queued["contractKey"]]["launcher"] = {
+                "kind": "codex-cli-economical-worker", "processId": 4567,
+            }
+            state_path.write_text(json.dumps(state))
+
+            with patch("podplay_sim_club.codex_worker_launcher.os.kill", side_effect=ProcessLookupError):
+                result = reap(root)
+
+            self.assertEqual([queued["contractKey"]], result["contractKeys"])
+            contract = json.loads(state_path.read_text())["contracts"][queued["contractKey"]]
+            self.assertEqual("reported", contract["status"])
+            self.assertEqual("blocked", contract["outcome"])
     def test_operations_worker_claims_oldest_runnable_contract_with_its_browser_job(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

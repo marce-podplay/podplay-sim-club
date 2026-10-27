@@ -52,6 +52,10 @@ secret-free packet/runbook, must bootstrap an isolated browser itself, and
 must close the contract with a receipt. The launcher never captures model
 output or browser data, and a process that has started is never auto-retried.
 
+Run `worker-dispatch reap` before choosing another worker. It changes only a
+dead worker process with no final receipt into `blocked` coordinator review;
+it does not assert a product failure and never requeues the browser journey.
+
 If the dispatcher launches the worker separately, that worker reads its already-assigned packet rather than calling `next` a second time:
 
 ```sh

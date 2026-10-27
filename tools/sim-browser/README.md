@@ -75,6 +75,12 @@ That worker still uses this bootstrap and the named playbook; the launcher is
 only an isolated, durable handoff and does not itself observe or act in the
 product.
 
+`codex-worker-runner.py` supervises a detached worker and stores only its exit
+code under `state/worker-launches/`. It never keeps model text, browser output,
+credentials, or network payloads. `worker-dispatch reap` uses that fact only
+to quarantine a receipt-less worker for review, never to infer a product
+failure or trigger a retry.
+
 The economical worker then follows the packet's playbook, records a visible
 browser observation when warranted, and closes its exact worker contract.
 

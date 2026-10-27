@@ -9,9 +9,11 @@ credentials, product URLs, or product APIs to that worker.
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 from typing import Any, Dict
 
 from .storage import Storage
@@ -103,8 +105,14 @@ def launch(root: Path, *, worker_id: str, execute: bool) -> Dict[str, Any]:
             diary_line="Economical worker launcher was unavailable before the browser journey began.",
         )
         raise ValueError("local Codex CLI is unavailable")
-    prompt = worker_prompt(root=root, worker_id=worker_id, runbook_payload=active_runbook)
-    command = _command(executable=executable, root=root, prompt=prompt)
+    # The detached runner records only a safe exit code.  It reconstructs this
+    # same prompt from the active contract and never retains model output.
+    command = [
+        sys.executable,
+        str(root / "tools" / "sim-browser" / "codex-worker-runner.py"),
+        "--worker", worker_id,
+        "--contract", contract_key,
+    ]
     try:
         process = subprocess.Popen(
             command,
@@ -145,3 +153,48 @@ def launch(root: Path, *, worker_id: str, execute: bool) -> Dict[str, Any]:
         "launchRef": launch_ref,
         "remoteWrites": 0,
     }
+
+
+def reap(root: Path) -> Dict[str, Any]:
+    """Quarantine exited worker processes that never supplied a receipt.
+
+    A dead launcher PID proves only that its Codex process is gone.  It cannot
+    prove that a browser action did or did not happen, so the only safe state
+    transition is the existing ``blocked`` review path.  It is deliberately
+    not a retry mechanism.
+    """
+    storage = Storage(root)
+    state = storage.load_json(storage.state / "worker-contracts.json", default={})
+    contracts = state.get("contracts", {}) if isinstance(state, dict) else {}
+    candidates = []
+    if isinstance(contracts, dict):
+        for contract in contracts.values():
+            launcher = contract.get("launcher") if isinstance(contract, dict) else None
+            if (
+                isinstance(contract, dict)
+                and contract.get("status") == "active"
+                and isinstance(launcher, dict)
+                and launcher.get("kind") == LAUNCHER_NAME
+                and isinstance(launcher.get("processId"), int)
+                and isinstance(contract.get("contractKey"), str)
+                and isinstance(contract.get("workerId"), str)
+            ):
+                candidates.append((contract["contractKey"], contract["workerId"], launcher["processId"]))
+    reaped = []
+    for contract_key, worker_id, process_id in candidates:
+        try:
+            os.kill(process_id, 0)
+        except ProcessLookupError:
+            status_ref = f"state/worker-launches/{_reference(contract_key)}.json"
+            status = storage.load_json(storage.root / status_ref, default={})
+            exit_detail = "" if not isinstance(status, dict) or status.get("status") != "exited" else " Detached worker exited without a final receipt."
+            report(
+                root, contract_key=contract_key, worker_id=worker_id, outcome="blocked",
+                diary_line=("Economical worker process exited before returning its required browser receipt; no product outcome is inferred." + exit_detail),
+            )
+            reaped.append(contract_key)
+        except PermissionError:
+            # An existing process owned by another execution context is still
+            # live enough to leave alone; a later coordinator can inspect it.
+            continue
+    return {"action": "worker_processes_reaped", "contractKeys": reaped, "remoteWrites": 0}
