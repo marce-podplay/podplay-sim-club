@@ -148,6 +148,12 @@
       "name": "Continue",
       "evidence": "the visible selected-slot Continue control was activated"
     },
+    "booking.slot.today_1700": {
+      "kind": "visible_click",
+      "role": "button",
+      "name": "5:00pm 4 open Pods",
+      "evidence": "the visible earliest current Open Pod slot was selected"
+    },
     "booking.slot.tonight_2200": {
       "kind": "visible_click",
       "role": "button",
