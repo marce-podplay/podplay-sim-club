@@ -136,6 +136,11 @@ class WorkerDispatchTests(unittest.TestCase):
         self.assertNotIn("booking.slot.", helper)
         self.assertNotIn("booking.payment.", helper)
 
+    def test_detached_worker_rechecks_the_settled_login_boundary(self):
+        runner = (REPO_ROOT / "tools" / "sim-browser" / "codex-worker-runner.py").read_text()
+        self.assertIn("_prepared_login_receipt(storage, packet=packet)", runner)
+        self.assertIn('outcome="not_started"', runner)
+
     def test_reaper_quarantines_a_dead_worker_without_a_receipt(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
