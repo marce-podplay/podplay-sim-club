@@ -126,6 +126,7 @@ class WorkerDispatchTests(unittest.TestCase):
         self.assertIn("Do not use product APIs", prompt)
         self.assertIn("worker-dispatch active", prompt)
         self.assertIn("booking-entry.mjs", prompt)
+        self.assertIn("After the helper reaches live availability", prompt)
         self.assertNotIn("password", prompt.lower())
 
     def test_booking_entry_stops_before_a_volatile_slot_or_payment(self):

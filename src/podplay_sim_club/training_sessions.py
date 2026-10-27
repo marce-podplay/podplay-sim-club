@@ -552,9 +552,12 @@ def next_booking_task(root: Path, now: Optional[datetime] = None) -> Dict[str, A
             str(row.get("id") or ""),
         ),
     )[0]
+    action = "apply_training_booking" if intent.get("status") == "preview_ready" else "plan_training_booking"
+    if action == "plan_training_booking" and intent.get("id") in _availability_review_intents(storage):
+        action = "review_training_availability"
     return {
         "actorId": "lead",
-        "action": "apply_training_booking" if intent.get("status") == "preview_ready" else "plan_training_booking",
+        "action": action,
         "intentId": intent["id"],
         "bookerActorId": intent["bookerActorId"],
         "participants": list(intent["participants"]),
@@ -564,7 +567,11 @@ def next_booking_task(root: Path, now: Optional[datetime] = None) -> Dict[str, A
             "invite_player",
             "accept_invitation",
         ],
-        "detail": f"{len(intent['participants'])} named training players agreed; plan live W37 availability before the guarded player booking",
+        "detail": (
+            f"{len(intent['participants'])} named training players agreed; observe current live W37 availability before any guarded player booking"
+            if action == "review_training_availability"
+            else f"{len(intent['participants'])} named training players agreed; plan live W37 availability before the guarded player booking"
+        ),
     }
 
 
@@ -581,6 +588,29 @@ def _blocked_booking_intents(storage: Storage) -> set[str]:
         and job.get("journeyAction") == "plan_training_booking"
         and job.get("status") == "blocked"
         and isinstance((intent_id := job.get("intentId")), str)
+    }
+
+
+def _availability_review_intents(storage: Storage) -> set[str]:
+    """Return agreements whose entry journey visibly reached its next stage.
+
+    The prior worker's ``visible_progress`` is a bounded fact: it permits a
+    new, read-only availability turn, but neither a slot choice nor a booking.
+    Keeping the phase as a separate contract prevents an economical worker
+    from stretching one browser turn across volatile UI decisions.
+    """
+    contracts_state = storage.load_json(storage.state / "worker-contracts.json", default={})
+    contracts = contracts_state.get("contracts", {}) if isinstance(contracts_state, dict) else {}
+    if not isinstance(contracts, dict):
+        return set()
+    return {
+        intent_id
+        for contract in contracts.values()
+        if isinstance(contract, dict)
+        and contract.get("journeyAction") == "plan_training_booking"
+        and contract.get("status") == "reported"
+        and contract.get("outcome") == "visible_progress"
+        and isinstance((intent_id := contract.get("intentId")), str)
     }
 
 

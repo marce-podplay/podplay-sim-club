@@ -420,6 +420,31 @@ class SimClubTestCase(unittest.TestCase):
 
         self.assertEqual("intent:training:fresh-after-block", task["intentId"])
 
+    def test_training_booking_visible_entry_progress_creates_availability_review_phase(self):
+        from podplay_sim_club.training_sessions import next_booking_task
+
+        storage = Storage(self.root)
+        ledger = load_intent_ledger(storage)
+        intent_id = "intent:training:availability-review"
+        save_intent(storage, ledger, {
+            "schemaVersion": 1, "id": intent_id, "journey": "customer_training",
+            "status": "agreed", "createdAt": "2026-09-23T15:04:00Z", "agreedAt": "2026-09-23T15:04:00Z",
+            "bookerActorId": "kyo-captain", "participants": ["kyo-captain", "benimaru-nikaido"],
+            "constraints": {"durationMinutes": 30},
+            "nextAction": "plan_live_w37_availability_then_player_booking",
+        })
+        storage.write_json(storage.state / "worker-contracts.json", {"schemaVersion": 1, "contracts": {
+            "worker:entry": {
+                "intentId": intent_id, "journeyAction": "plan_training_booking",
+                "status": "reported", "outcome": "visible_progress",
+            },
+        }})
+
+        task = next_booking_task(self.root, now=FIXED_NOW)
+
+        self.assertEqual("review_training_availability", task["action"])
+        self.assertEqual(intent_id, task["intentId"])
+
     def test_rally_queue_resumes_after_each_ten_people_and_wraps_only_next_tick(self):
         from podplay_sim_club.rally_engine import tick
 

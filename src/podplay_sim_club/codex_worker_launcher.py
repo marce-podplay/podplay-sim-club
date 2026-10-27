@@ -62,6 +62,12 @@ def worker_prompt(*, root: Path, worker_id: str, runbook_payload: Dict[str, Any]
     packet = runbook_payload["launchPacket"]
     contract_key = packet["contractKey"]
     session_ref = _reference(contract_key)
+    availability_only = packet.get("journeyAction") == "review_training_availability"
+    phase_instruction = (
+        "This is an availability-observation phase: after the helper reaches live availability, record only what is visibly rendered. Do not select a slot, Continue, payment, or submit control."
+        if availability_only else
+        "After the helper reaches live availability, follow the bounded booking playbook and stop whenever the next decision is not clearly authorized."
+    )
     return f"""You are one economical PodPlay Sim worker. Work only on the already-active contract below.
 
 Contract (not product proof):
@@ -82,7 +88,10 @@ First run these commands from the repository root:
 For a booking playbook, run `node tools/sim-browser/booking-entry.mjs --session
 state/worker-sessions/{session_ref}.json` after login. It resolves the
 rendered region-onboarding branch and stops at the approved West 37th venue
-control; it does not select a date, slot, payment, or booking confirmation.
+and Open Pod availability; it does not select a date, slot, payment, or
+booking confirmation.
+
+{phase_instruction}
 
 The coordinator, not you, performed the visible one-time login. Use only the
 isolated rendered browser and approved sim-browser controls. Do not use product APIs,

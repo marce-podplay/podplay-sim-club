@@ -25,6 +25,7 @@ OBSERVATION_KINDS = {
 
 BOOKING_PLAYBOOK_ACTIONS = {
     "plan_training_booking",
+    "review_training_availability",
     "apply_training_booking",
     "plan_team_signup_booking",
     "apply_team_signup_booking",
