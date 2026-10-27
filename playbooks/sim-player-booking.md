@@ -18,7 +18,8 @@ character, not authority to create a booking.
 ## Visible booking path
 
 1. Sign in using the one-time browser credential handoff.
-2. Complete only any visible onboarding needed to reach Booking. Run
+2. Complete only any visible onboarding needed to reach Booking. In a
+   **research** journey, run
    `node tools/sim-browser/booking-entry.mjs --session <prepared-session>`
    after login. It observes the rendered branch, selects the already-approved
    **New York / New Jersey** region only when that onboarding is actually
@@ -27,6 +28,10 @@ character, not authority to create a booking.
    stops at live availability. If onboarding is absent, it follows the normal
    Booking path instead. This routine stops before any date, slot, payment,
    or booking choice.
+   In an **operational economical-worker** journey, this routine has already
+   been completed by the detached runner before the character handoff. Start
+   from the post-entry evidence and current browser snapshot; do not reopen
+   Booking or repeat onboarding.
 3. Re-read the now-rendered availability; do not treat the selected venue and
    experience as proof that any particular time remains available.
 4. After selecting an experience, wait independently for the intended live

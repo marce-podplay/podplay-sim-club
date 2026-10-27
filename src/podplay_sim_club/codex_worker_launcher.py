@@ -89,7 +89,8 @@ For a booking playbook, the detached runner has already completed the
 allowlisted rendered region, West 37th venue, and Open Pod entry routine. It
 stopped at live availability before selecting a date, slot, payment, or
 booking confirmation. Begin by observing that current rendered state; do not
-repeat the entry routine.
+repeat the entry routine. The current evidence bundle was captured after that
+preflight, not before it.
 
 {phase_instruction}
 

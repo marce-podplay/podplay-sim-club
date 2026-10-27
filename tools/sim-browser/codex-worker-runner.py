@@ -69,6 +69,38 @@ def _prepare_booking_entry(*, storage: Storage, packet: dict[str, object]) -> bo
             diary_line="The rendered booking-entry routine did not reach live availability; no slot or booking action was attempted.",
         )
         return False
+    # The bootstrap evidence necessarily precedes this entry routine. Refresh
+    # it before the worker can inspect the bundle: otherwise a truthful
+    # screenshot of the initial Select Region dialog can make a worker stop
+    # even though the live browser has advanced to availability.
+    reference = _reference(contract_key)
+    evidence_directory = storage.state / "worker-evidence" / reference
+    try:
+        observed = subprocess.run(
+            [
+                "node", str(ROOT / "tools" / "sim-browser" / "controller.mjs"), "observe",
+                "--session", str(session), "--seconds", "2", "--out", str(evidence_directory),
+                "--card-screen", "booking live availability",
+                "--card-observed", "rendered region, West 37th venue, and Open Pod entry completed",
+                "--card-next", "character reviews current availability",
+                "--card-outcome", "entry only; no slot, payment, or booking selected",
+            ],
+            cwd=ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            check=False, timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        observed = None
+    if observed is None or observed.returncode != 0:
+        report(
+            ROOT, contract_key=contract_key, worker_id=worker_id, outcome="blocked",
+            diary_line="Rendered booking entry reached availability but its current evidence could not be captured; no slot or booking action was attempted.",
+        )
+        return False
+    receipt_path = evidence_directory / "worker-receipt.json"
+    receipt = storage.load_json(receipt_path, default={})
+    if isinstance(receipt, dict):
+        receipt["entry"] = "rendered_live_availability"
+        storage.write_json(receipt_path, receipt)
     return True
 
 

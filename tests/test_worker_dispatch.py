@@ -145,6 +145,8 @@ class WorkerDispatchTests(unittest.TestCase):
         runner = (REPO_ROOT / "tools" / "sim-browser" / "codex-worker-runner.py").read_text()
         self.assertIn("def _prepare_booking_entry", runner)
         self.assertIn("booking-entry.mjs", runner)
+        self.assertIn("rendered_live_availability", runner)
+        self.assertIn("booking live availability", runner)
         self.assertIn("booking_entry_blocked", runner)
 
     def test_reaper_quarantines_a_dead_worker_without_a_receipt(self):
