@@ -199,6 +199,24 @@ class WorkerDispatchTests(unittest.TestCase):
         self.assertIn("continue scanning for the next eligible future allowlisted row", prompt)
         self.assertIn("Do not treat the ordinary slot choice as an unresolved approval", prompt)
 
+    def test_queued_worker_carries_agreed_participant_and_duration_facts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            intents = root / "state" / "booking-intents.json"
+            intents.parent.mkdir(parents=True)
+            intents.write_text(json.dumps({"intents": {"intent:agreed": {
+                "status": "agreed", "bookerActorId": "andy-bogard",
+                "participants": ["andy-bogard", "terry-bogard"],
+                "constraints": {"durationMinutes": 30},
+            }}}))
+            job = dispatch_browser_journey(root, task={
+                "action": "plan_training_booking", "intentId": "intent:agreed", "bookerActorId": "andy-bogard",
+            }, role="rally")
+            queue(root, browser_job=job)
+            packet = claim_next(root, worker_id="economical:runner-1")["launchPacket"]
+
+            self.assertEqual({"participantCount": 2, "durationMinutes": 30}, packet["agreement"])
+
     def test_detached_worker_makes_booking_entry_preflight_deterministic(self):
         runner = (REPO_ROOT / "tools" / "sim-browser" / "codex-worker-runner.py").read_text()
         self.assertIn("def _prepare_booking_entry", runner)

@@ -15,6 +15,7 @@ from .time import isoformat, parse_instant
 
 
 STATE_FILE = "worker-contracts.json"
+INTENTS_FILE = "booking-intents.json"
 WORKER_OUTCOMES = {"visible_progress", "unexpected_ui", "blocked", "not_started", "pass"}
 
 
@@ -37,6 +38,7 @@ def _launch_packet(contract: Dict[str, Any]) -> Dict[str, Any]:
         "playbook": contract.get("playbook"),
         "mode": contract.get("mode"),
         "allowedEvidence": contract.get("allowedEvidence"),
+        "agreement": contract.get("agreement"),
     }
 
 
@@ -73,6 +75,25 @@ def _receipt_ref(storage: Storage, *, contract: Dict[str, Any], receipt_ref: str
     return receipt_ref
 
 
+def _agreement_context(storage: Storage, *, browser_job: Dict[str, Any]) -> Dict[str, Any] | None:
+    """Carry only stable social facts a player needs at product review."""
+    intent_id = browser_job.get("intentId")
+    actor_id = browser_job.get("actorId")
+    if not isinstance(intent_id, str) or not isinstance(actor_id, str):
+        return None
+    ledger = storage.load_json(storage.state / INTENTS_FILE, default={})
+    intents = ledger.get("intents", {}) if isinstance(ledger, dict) else {}
+    intent = intents.get(intent_id) if isinstance(intents, dict) else None
+    if not isinstance(intent, dict) or intent.get("status") != "agreed" or intent.get("bookerActorId") != actor_id:
+        return None
+    participants = [value for value in intent.get("participants", []) if isinstance(value, str)]
+    constraints = intent.get("constraints") if isinstance(intent.get("constraints"), dict) else {}
+    duration = constraints.get("durationMinutes")
+    if not participants or not isinstance(duration, int) or duration <= 0:
+        return None
+    return {"participantCount": len(participants), "durationMinutes": duration}
+
+
 def queue(root: Path, *, browser_job: Dict[str, Any]) -> Dict[str, Any]:
     """Queue one idempotent operations-mode worker contract for a browser job."""
     job_key = browser_job.get("jobKey")
@@ -81,6 +102,7 @@ def queue(root: Path, *, browser_job: Dict[str, Any]) -> Dict[str, Any]:
         return {"action": "pass", "detail": "browser job has no named worker contract", "remoteWrites": 0}
     storage = Storage(root)
     observed_at = isoformat(parse_instant(None))
+    agreement = _agreement_context(storage, browser_job=browser_job)
     contract_key = f"worker:{job_key}"
     with storage.writer_lock():
         state = storage.load_json(storage.state / STATE_FILE, default={})
@@ -99,6 +121,7 @@ def queue(root: Path, *, browser_job: Dict[str, Any]) -> Dict[str, Any]:
                 "playbook": browser_job.get("playbook"),
                 "mode": {"research": False, "headless": True, "modelTier": "economical"},
                 "allowedEvidence": ["visible_ui", "sanitized_console_network", "journey_packet", "diary_line"],
+                "agreement": agreement,
                 "remoteWrites": 0,
             }
         elif existing.get("status") == "reported":

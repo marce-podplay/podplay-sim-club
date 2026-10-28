@@ -106,11 +106,22 @@ def worker_prompt(*, root: Path, worker_id: str, runbook_payload: Dict[str, Any]
     packet = runbook_payload["launchPacket"]
     contract_key = packet["contractKey"]
     session_ref = _reference(contract_key)
+    agreement = packet.get("agreement") if isinstance(packet.get("agreement"), dict) else {}
+    participant_count = agreement.get("participantCount")
+    duration_minutes = agreement.get("durationMinutes")
+    agreement_instruction = ""
+    if isinstance(participant_count, int) and participant_count > 0 and isinstance(duration_minutes, int) and duration_minutes > 0:
+        agreement_instruction = (
+            f" Agreement fact: {participant_count} named participants for {duration_minutes} minutes. "
+            f"If the review shows another group size and the visible group controls can reach {participant_count}, "
+            f"adjust only to {participant_count}, re-observe, and then continue the review."
+        )
     availability_only = packet.get("journeyAction") == "review_training_availability"
     phase_instruction = (
         "This is an availability-observation phase: after the helper reaches live availability, record only what is visibly rendered. Do not select a slot, Continue, payment, or submit control."
         if availability_only else
         "This Preview booking contract has coordinator authorization for the named Sim to select the earliest future currently rendered allowlisted Open Pod slot, then activate Continue when it visibly appears. If an earlier rendered row has no matching allowlisted control, continue scanning for the next eligible future allowlisted row instead of treating that unmapped row as a blocker. Do not treat the ordinary slot choice as an unresolved approval. Proceed beyond review or payment only if the rendered participants, time, duration, venue, and price still match the accepted agreement."
+        + agreement_instruction
     )
     return f"""You are one economical PodPlay Sim worker. Work only on the already-active contract below.
 
