@@ -92,6 +92,11 @@ booking confirmation. Begin by observing that current rendered state; do not
 repeat the entry routine. The current evidence bundle was captured after that
 preflight, not before it.
 
+Normal page transitions may take a few seconds. If a needed rendered control
+is initially absent or loading, wait and re-observe the current screen before
+calling it unavailable. Report a blocker only after that bounded visible wait;
+do not invent an underlying product or runtime error.
+
 {phase_instruction}
 
 The coordinator, not you, performed the visible one-time login. Use only the

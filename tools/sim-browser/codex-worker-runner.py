@@ -19,6 +19,12 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
+# A booking screen can render its date/pod shell before the sessions request
+# settles.  This is deliberately a small human-scale pause, not a polling
+# assertion: the worker receives a stable post-entry snapshot and still must
+# verify the actual controls it plans to use.
+AVAILABILITY_SETTLE_SECONDS = 8
+
 from podplay_sim_club.codex_worker_launcher import _command, _prepared_login_receipt, worker_prompt  # noqa: E402
 from podplay_sim_club.storage import Storage  # noqa: E402
 from podplay_sim_club.worker_dispatch import report, runbook  # noqa: E402
@@ -79,7 +85,7 @@ def _prepare_booking_entry(*, storage: Storage, packet: dict[str, object]) -> bo
         observed = subprocess.run(
             [
                 "node", str(ROOT / "tools" / "sim-browser" / "controller.mjs"), "observe",
-                "--session", str(session), "--seconds", "2", "--out", str(evidence_directory),
+                "--session", str(session), "--seconds", str(AVAILABILITY_SETTLE_SECONDS), "--out", str(evidence_directory),
                 "--card-screen", "booking live availability",
                 "--card-observed", "rendered region, West 37th venue, and Open Pod entry completed",
                 "--card-next", "character reviews current availability",

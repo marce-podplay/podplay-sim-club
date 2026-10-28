@@ -147,6 +147,7 @@ class WorkerDispatchTests(unittest.TestCase):
         self.assertIn("booking-entry.mjs", runner)
         self.assertIn("rendered_live_availability", runner)
         self.assertIn("booking live availability", runner)
+        self.assertIn("AVAILABILITY_SETTLE_SECONDS = 8", runner)
         self.assertIn("booking_entry_blocked", runner)
 
     def test_reaper_quarantines_a_dead_worker_without_a_receipt(self):

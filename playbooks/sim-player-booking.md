@@ -34,6 +34,9 @@ character, not authority to create a booking.
    Booking or repeat onboarding.
 3. Re-read the now-rendered availability; do not treat the selected venue and
    experience as proof that any particular time remains available.
+   The sessions grid may arrive shortly after the date/pod shell. Wait through
+   that rendered loading transition and re-observe before deciding a time row
+   or button is absent. An initially missing control is not a product failure.
 4. After selecting an experience, wait independently for the intended live
    slot control to render. After selecting that slot, wait independently for
    the rendered **Continue** control before trying to activate it. Do not
