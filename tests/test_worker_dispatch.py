@@ -198,6 +198,7 @@ class WorkerDispatchTests(unittest.TestCase):
         self.assertIn("select the earliest future currently rendered allowlisted Open Pod slot", prompt)
         self.assertIn("continue scanning for the next eligible future allowlisted row", prompt)
         self.assertIn("Do not treat the ordinary slot choice as an unresolved approval", prompt)
+        self.assertIn("rendered review total is the permitted price source", prompt)
 
     def test_queued_worker_carries_agreed_participant_and_duration_facts(self):
         with tempfile.TemporaryDirectory() as directory:

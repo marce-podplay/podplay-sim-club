@@ -71,6 +71,10 @@ booking.
 5. Re-read the booking review. Submit payment only when the masked method,
    total, group size, venue, date, and duration still match the agreement.
 
+For an explicitly authorized Club Lab Preview booking with no separately
+negotiated price cap, the currently rendered review total is the permitted
+price source. This does not apply to a production payment journey.
+
 For a real product, this routine requires the player's own payment decision.
 The Preview sandbox test-card exception is bounded to an explicitly authorized
 Club Lab run.
