@@ -170,6 +170,11 @@ class WorkerDispatchTests(unittest.TestCase):
         self.assertIn("handoff_id=handoff_id", runner)
         self.assertIn('outcome="not_started"', runner)
 
+    def test_detached_worker_closes_an_unreported_model_turn(self):
+        runner = (REPO_ROOT / "tools" / "sim-browser" / "codex-worker-runner.py").read_text()
+        self.assertIn("def _finalize_if_unreported", runner)
+        self.assertIn("_finalize_if_unreported(worker_id=worker_id, contract_key=contract_key)", runner)
+
     def test_detached_worker_makes_booking_entry_preflight_deterministic(self):
         runner = (REPO_ROOT / "tools" / "sim-browser" / "codex-worker-runner.py").read_text()
         self.assertIn("def _prepare_booking_entry", runner)

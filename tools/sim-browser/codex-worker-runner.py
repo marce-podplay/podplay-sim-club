@@ -115,6 +115,30 @@ def _prepare_booking_entry(*, storage: Storage, packet: dict[str, object]) -> bo
     return True
 
 
+def _finalize_if_unreported(*, worker_id: str, contract_key: str) -> None:
+    """Close a finished model turn that omitted its mandatory report.
+
+    The model process ending is not evidence of a booking or even of a browser
+    action.  Leaving that contract active, however, prevents the dispatcher
+    from making progress and eventually forces a less specific reaper path.
+    Record the narrowest truthful outcome immediately: a visible journey may
+    have occurred, but the character did not provide a final report.
+    """
+    try:
+        report(
+            ROOT,
+            contract_key=contract_key,
+            worker_id=worker_id,
+            outcome="blocked",
+            diary_line="Economical worker ended without its required final browser report; no product outcome is inferred from the retained visible evidence.",
+        )
+    except ValueError:
+        # The normal worker may have reported during the tiny interval between
+        # process exit and this supervisor check.  In that case there is
+        # nothing left for the supervisor to close.
+        return
+
+
 def run(*, worker_id: str, contract_key: str) -> int:
     storage = Storage(ROOT)
     reference = _reference(contract_key)
@@ -160,6 +184,7 @@ def run(*, worker_id: str, contract_key: str) -> int:
             cwd=ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             check=False,
         )
+        _finalize_if_unreported(worker_id=worker_id, contract_key=contract_key)
         result.update({"status": "exited", "exitCode": completed.returncode, "finishedAt": isoformat(parse_instant(None))})
         storage.write_json(status_path, result)
         return completed.returncode
