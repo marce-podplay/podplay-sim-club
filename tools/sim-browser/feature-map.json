@@ -166,6 +166,12 @@
       "name": "10:00am 4 open Pods",
       "evidence": "the visible 10:00 am Open Pod slot was selected"
     },
+    "booking.slot.today_0900": {
+      "kind": "visible_click",
+      "role": "button",
+      "name": "9:00am 4 open Pods",
+      "evidence": "the visible 9:00 am Open Pod slot was selected"
+    },
     "booking.slot.today_1400": {
       "kind": "visible_click",
       "role": "button",

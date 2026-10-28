@@ -136,6 +136,13 @@ class WorkerDispatchTests(unittest.TestCase):
         self.assertNotIn("booking.slot.", helper)
         self.assertNotIn("booking.payment.", helper)
 
+    def test_feature_map_contains_the_observed_earliest_open_pod_row(self):
+        feature_map = json.loads((REPO_ROOT / "tools" / "sim-browser" / "feature-map.json").read_text())
+        self.assertEqual(
+            "9:00am 4 open Pods",
+            feature_map["features"]["booking.slot.today_0900"]["name"],
+        )
+
     def test_detached_worker_rechecks_the_settled_login_boundary(self):
         runner = (REPO_ROOT / "tools" / "sim-browser" / "codex-worker-runner.py").read_text()
         self.assertIn("_prepared_login_receipt(storage, packet=packet)", runner)
