@@ -10,8 +10,9 @@ import sys
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from podplay_sim_club.journey_policy import dispatch as dispatch_browser_journey, record_observation
+from podplay_sim_club.storage import Storage
 from podplay_sim_club.worker_dispatch import active_packet, claim, claim_next, queue, report, runbook
-from podplay_sim_club.codex_worker_launcher import dispatch_once, launch, reap, worker_prompt
+from podplay_sim_club.codex_worker_launcher import _prepared_login_receipt, dispatch_once, launch, reap, worker_prompt
 
 
 class WorkerDispatchTests(unittest.TestCase):
@@ -79,7 +80,9 @@ class WorkerDispatchTests(unittest.TestCase):
             }))
             with patch("podplay_sim_club.codex_worker_launcher.shutil.which", return_value="/opt/codex"), patch(
                 "podplay_sim_club.codex_worker_launcher.subprocess.run", return_value=Mock(returncode=0)
-            ), patch("podplay_sim_club.codex_worker_launcher.subprocess.Popen") as popen:
+            ), patch("podplay_sim_club.codex_worker_launcher._prepared_login_receipt", return_value=True), patch(
+                "podplay_sim_club.codex_worker_launcher.subprocess.Popen"
+            ) as popen:
                 popen.return_value.pid = 4567
                 started = launch(root, worker_id="economical:runner-1", execute=True)
 
@@ -116,6 +119,24 @@ class WorkerDispatchTests(unittest.TestCase):
             self.assertEqual("coordinator_browser_not_ready", result["action"])
             popen.assert_not_called()
 
+    def test_launch_marker_binds_the_settled_receipt_to_one_handoff(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            storage = Storage(root)
+            contract_key = "worker:opaque"
+            reference = hashlib.sha256(contract_key.encode("utf-8")).hexdigest()[:16]
+            receipt_path = root / "state" / "worker-evidence" / reference / "worker-receipt.json"
+            receipt_path.parent.mkdir(parents=True)
+            receipt_path.write_text(json.dumps({
+                "schemaVersion": 1, "actorId": "andy-bogard", "contractRef": reference,
+                "status": "browser_ready", "login": "visible_login_settled", "handoffId": "previoushandoff123",
+                "remoteWrites": 0,
+            }))
+            packet = {"contractKey": contract_key, "actorId": "andy-bogard"}
+
+            self.assertTrue(_prepared_login_receipt(storage, packet=packet, handoff_id="previoushandoff123"))
+            self.assertFalse(_prepared_login_receipt(storage, packet=packet, handoff_id="newhandoffmarker456"))
+
     def test_worker_prompt_is_bounded_and_never_contains_product_secrets(self):
         prompt = worker_prompt(root=REPO_ROOT, worker_id="economical:runner-1", runbook_payload={
             "launchPacket": {
@@ -145,7 +166,8 @@ class WorkerDispatchTests(unittest.TestCase):
 
     def test_detached_worker_rechecks_the_settled_login_boundary(self):
         runner = (REPO_ROOT / "tools" / "sim-browser" / "codex-worker-runner.py").read_text()
-        self.assertIn("_prepared_login_receipt(storage, packet=packet)", runner)
+        self.assertIn("_prepared_login_receipt(", runner)
+        self.assertIn("handoff_id=handoff_id", runner)
         self.assertIn('outcome="not_started"', runner)
 
     def test_detached_worker_makes_booking_entry_preflight_deterministic(self):

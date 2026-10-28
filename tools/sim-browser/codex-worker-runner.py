@@ -25,7 +25,12 @@ sys.path.insert(0, str(ROOT / "src"))
 # verify the actual controls it plans to use.
 AVAILABILITY_SETTLE_SECONDS = 8
 
-from podplay_sim_club.codex_worker_launcher import _command, _prepared_login_receipt, worker_prompt  # noqa: E402
+from podplay_sim_club.codex_worker_launcher import (  # noqa: E402
+    _active_handoff_id,
+    _command,
+    _prepared_login_receipt,
+    worker_prompt,
+)
 from podplay_sim_club.storage import Storage  # noqa: E402
 from podplay_sim_club.worker_dispatch import report, runbook  # noqa: E402
 from podplay_sim_club.time import isoformat, parse_instant  # noqa: E402
@@ -125,11 +130,16 @@ def run(*, worker_id: str, contract_key: str) -> int:
         # public-shell-only receipt.  That prevents a stale subprocess or an
         # unexpected bootstrap path from handing a cheap character worker an
         # unauthenticated page that merely resembles Booking.
-        if not _prepared_login_receipt(storage, packet=packet):
+        handoff_id = _active_handoff_id(
+            storage, contract_key=contract_key, worker_id=worker_id,
+        )
+        if handoff_id is None or not _prepared_login_receipt(
+            storage, packet=packet, handoff_id=handoff_id,
+        ):
             report(
                 ROOT, contract_key=contract_key, worker_id=worker_id,
                 outcome="not_started",
-                diary_line="Coordinator did not provide a visibly settled player-login receipt before the economical character turn.",
+                diary_line="Coordinator did not provide this launch's visibly settled player-login receipt before the economical character turn.",
             )
             result.update({"status": "login_not_settled", "finishedAt": isoformat(parse_instant(None))})
             storage.write_json(status_path, result)

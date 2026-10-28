@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path
+import secrets
 import shutil
 import subprocess
 import sys
@@ -28,7 +29,12 @@ def _reference(contract_key: str) -> str:
     return hashlib.sha256(contract_key.encode("utf-8")).hexdigest()[:16]
 
 
-def _prepared_login_receipt(storage: Storage, *, packet: Dict[str, Any]) -> bool:
+def _prepared_login_receipt(
+    storage: Storage,
+    *,
+    packet: Dict[str, Any],
+    handoff_id: str | None = None,
+) -> bool:
     """Accept only the coordinator receipt for a visibly settled player login.
 
     A browser can render the regional landing dialog before a player is signed
@@ -54,7 +60,45 @@ def _prepared_login_receipt(storage: Storage, *, packet: Dict[str, Any]) -> bool
         and receipt.get("status") == "browser_ready"
         and receipt.get("login") == "visible_login_settled"
         and receipt.get("remoteWrites") == 0
+        and (handoff_id is None or receipt.get("handoffId") == handoff_id)
     )
+
+
+def _record_handoff_start(
+    storage: Storage,
+    *,
+    contract_key: str,
+    worker_id: str,
+    handoff_id: str,
+) -> None:
+    """Persist the one launch marker before a browser is created.
+
+    The detached runner reads this metadata back before it trusts a receipt.
+    It is coordination metadata only: never a credential or product state.
+    """
+    with storage.writer_lock():
+        state = storage.load_json(storage.state / "worker-contracts.json", default={})
+        contracts = state.get("contracts", {}) if isinstance(state, dict) else {}
+        contract = contracts.get(contract_key) if isinstance(contracts, dict) else None
+        if not isinstance(contract, dict) or contract.get("status") != "active" or contract.get("workerId") != worker_id:
+            raise ValueError("worker contract changed before browser handoff")
+        contract["launcher"] = {
+            "kind": LAUNCHER_NAME,
+            "modelTier": "economical",
+            "handoffId": handoff_id,
+            "handoffStartedAt": isoformat(parse_instant(None)),
+        }
+        storage.write_json(storage.state / "worker-contracts.json", {"schemaVersion": 1, "contracts": contracts})
+
+
+def _active_handoff_id(storage: Storage, *, contract_key: str, worker_id: str) -> str | None:
+    """Read the launcher-owned marker for the currently active contract."""
+    state = storage.load_json(storage.state / "worker-contracts.json", default={})
+    contracts = state.get("contracts", {}) if isinstance(state, dict) else {}
+    contract = contracts.get(contract_key) if isinstance(contracts, dict) else None
+    launcher = contract.get("launcher") if isinstance(contract, dict) else None
+    marker = launcher.get("handoffId") if isinstance(launcher, dict) else None
+    return marker if isinstance(marker, str) and contract.get("workerId") == worker_id else None
 
 
 def worker_prompt(*, root: Path, worker_id: str, runbook_payload: Dict[str, Any]) -> str:
@@ -156,6 +200,10 @@ def launch(root: Path, *, worker_id: str, execute: bool, contract_key: str | Non
         raise ValueError("claimed worker contract did not produce a runbook")
     packet = active_runbook["launchPacket"]
     contract_key = packet["contractKey"]
+    handoff_id = secrets.token_hex(12)
+    _record_handoff_start(
+        storage, contract_key=contract_key, worker_id=worker_id, handoff_id=handoff_id,
+    )
     # Browser infrastructure is coordinator-owned: it starts the isolated
     # profile and completes the visible credential handoff before the cheaper
     # character worker receives its narrow playbook.
@@ -163,6 +211,7 @@ def launch(root: Path, *, worker_id: str, execute: bool, contract_key: str | Non
         [
             sys.executable, str(root / "tools" / "sim-browser" / "worker-bootstrap.py"),
             "--worker", worker_id,
+            "--handoff-id", handoff_id,
         ],
         cwd=root, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL, check=False, timeout=190,
@@ -173,7 +222,7 @@ def launch(root: Path, *, worker_id: str, execute: bool, contract_key: str | Non
             diary_line="Coordinator browser login did not become ready before the economical character turn.",
         )
         return {"action": "coordinator_browser_not_ready", "contractKey": contract_key, "remoteWrites": 0}
-    if not _prepared_login_receipt(storage, packet=packet):
+    if not _prepared_login_receipt(storage, packet=packet, handoff_id=handoff_id):
         report(
             root, contract_key=contract_key, worker_id=worker_id, outcome="not_started",
             diary_line="Coordinator did not provide a visibly settled player-login receipt before the economical character turn.",
@@ -219,7 +268,9 @@ def launch(root: Path, *, worker_id: str, execute: bool, contract_key: str | Non
         contract = contracts.get(contract_key) if isinstance(contracts, dict) else None
         if not isinstance(contract, dict) or contract.get("status") != "active" or contract.get("workerId") != worker_id:
             raise ValueError("worker contract changed while the launcher was starting")
+        launcher = contract.get("launcher") if isinstance(contract.get("launcher"), dict) else {}
         contract["launcher"] = {
+            **launcher,
             "kind": LAUNCHER_NAME,
             "modelTier": "economical",
             "launchedAt": observed_at,

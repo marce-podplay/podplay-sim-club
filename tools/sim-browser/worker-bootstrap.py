@@ -102,11 +102,20 @@ def _stop_handoff(process: subprocess.Popen[str]) -> None:
             process.wait(timeout=5)
 
 
-def bootstrap(*, worker_id: str, timeout_seconds: int, observe_seconds: int, login: bool) -> dict[str, Any]:
+def bootstrap(
+    *,
+    worker_id: str,
+    timeout_seconds: int,
+    observe_seconds: int,
+    login: bool,
+    handoff_id: str | None,
+) -> dict[str, Any]:
     if timeout_seconds < 30 or timeout_seconds > 180:
         raise ValueError("timeout seconds must be between 30 and 180")
     if observe_seconds < 1 or observe_seconds > min(15, timeout_seconds):
         raise ValueError("observe seconds must be between 1 and 15 and no greater than timeout")
+    if handoff_id is not None and (not handoff_id.isalnum() or len(handoff_id) < 12):
+        raise ValueError("handoff id must be an alphanumeric launch marker of at least 12 characters")
     packet_result = active_packet(ROOT, worker_id=worker_id)
     if packet_result.get("action") == "pass":
         return packet_result
@@ -153,6 +162,11 @@ def bootstrap(*, worker_id: str, timeout_seconds: int, observe_seconds: int, log
         "mode": mode,
         "status": "browser_ready",
         "login": login_status,
+        # A public-shell diagnostic may use the same actor and contract shape.
+        # The launcher-generated marker binds this receipt to the one worker
+        # launch that created it, so such a diagnostic cannot satisfy a later
+        # operational handoff by accident.
+        "handoffId": handoff_id,
         "evidence": {"directory": str(evidence_directory.relative_to(ROOT)), "screenshot": "page.png", "summary": "evidence.json"},
         "doesNotMean": ["booking", "invitation", "payment", "check-in", "attendance", "play", "result"],
         "remoteWrites": 0,
@@ -166,12 +180,14 @@ def main() -> int:
     parser.add_argument("--worker", required=True)
     parser.add_argument("--timeout-seconds", type=int, default=150)
     parser.add_argument("--observe-seconds", type=int, default=3)
+    parser.add_argument("--handoff-id", help="launcher-generated marker binding this receipt to one worker launch")
     parser.add_argument("--skip-login", action="store_true", help="capture only the public login shell; do not start a credential handoff")
     args = parser.parse_args()
     try:
         result = bootstrap(
             worker_id=args.worker, timeout_seconds=args.timeout_seconds,
             observe_seconds=args.observe_seconds, login=not args.skip_login,
+            handoff_id=args.handoff_id,
         )
     except (RuntimeError, ValueError) as exc:
         print(f"ERROR worker bootstrap: {exc}", file=sys.stderr)
