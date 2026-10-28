@@ -110,7 +110,7 @@ def worker_prompt(*, root: Path, worker_id: str, runbook_payload: Dict[str, Any]
     phase_instruction = (
         "This is an availability-observation phase: after the helper reaches live availability, record only what is visibly rendered. Do not select a slot, Continue, payment, or submit control."
         if availability_only else
-        "This Preview booking contract has coordinator authorization for the named Sim to select the earliest currently rendered allowlisted Open Pod slot, then activate Continue when it visibly appears. Do not treat the ordinary slot choice as an unresolved approval. Proceed beyond review or payment only if the rendered participants, time, duration, venue, and price still match the accepted agreement."
+        "This Preview booking contract has coordinator authorization for the named Sim to select the earliest future currently rendered allowlisted Open Pod slot, then activate Continue when it visibly appears. If an earlier rendered row has no matching allowlisted control, continue scanning for the next eligible future allowlisted row instead of treating that unmapped row as a blocker. Do not treat the ordinary slot choice as an unresolved approval. Proceed beyond review or payment only if the rendered participants, time, duration, venue, and price still match the accepted agreement."
     )
     return f"""You are one economical PodPlay Sim worker. Work only on the already-active contract below.
 

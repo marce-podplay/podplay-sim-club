@@ -193,7 +193,8 @@ class WorkerDispatchTests(unittest.TestCase):
                 "journeyAction": "plan_training_booking", "playbook": "playbooks/sim-player-booking.md",
             }
         })
-        self.assertIn("select the earliest currently rendered allowlisted Open Pod slot", prompt)
+        self.assertIn("select the earliest future currently rendered allowlisted Open Pod slot", prompt)
+        self.assertIn("continue scanning for the next eligible future allowlisted row", prompt)
         self.assertIn("Do not treat the ordinary slot choice as an unresolved approval", prompt)
 
     def test_detached_worker_makes_booking_entry_preflight_deterministic(self):
