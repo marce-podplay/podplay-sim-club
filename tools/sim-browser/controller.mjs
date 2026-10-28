@@ -156,10 +156,11 @@ async function act() {
       const model = nodeId ? await cdp.send('DOM.getBoxModel', { nodeId }) : null; const quad = model?.model.content;
       const centerX = quad ? (quad[0] + quad[2] + quad[4] + quad[6]) / 4 : mapped.coordinates.x, y = quad ? (quad[1] + quad[3] + quad[5] + quad[7]) / 4 : mapped.coordinates.y;
       // A time row is exposed as one accessible button while its visible
-      // selection affordance sits at the right edge.  The map can request
-      // that exact, still-visible target without relying on a selector.
+      // selection affordance sits at the right edge.  The map supplies the
+      // measured toggle-center inset, so this remains a visible pointer
+      // action rather than a selector-only or script-driven state change.
       const x = quad && mapped.clickTarget === 'right_edge'
-        ? Math.max(quad[0], quad[2], quad[4], quad[6]) - 50
+        ? Math.max(quad[0], quad[2], quad[4], quad[6]) - (Number.isFinite(mapped.rightEdgeInset) ? mapped.rightEdgeInset : 50)
         : centerX;
       await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none', buttons: 0, pointerType: 'mouse' });
       await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1, pointerType: 'mouse' });

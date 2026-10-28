@@ -153,7 +153,7 @@
       "role": "button",
       "name": "5:00pm 4 open Pods",
       "clickTarget": "right_edge",
-      "key": "Space",
+      "rightEdgeInset": 34,
       "evidence": "the visible earliest current Open Pod slot was selected"
     },
     "booking.slot.tonight_2200": {
@@ -161,7 +161,7 @@
       "role": "button",
       "name": "10:00pm 4 open Pods",
       "clickTarget": "right_edge",
-      "key": "Space",
+      "rightEdgeInset": 34,
       "evidence": "the visible 10:00 pm Open Pod slot was selected"
     },
     "booking.slot.today_1000": {
@@ -169,7 +169,7 @@
       "role": "button",
       "name": "10:00am 4 open Pods",
       "clickTarget": "right_edge",
-      "key": "Space",
+      "rightEdgeInset": 34,
       "evidence": "the visible 10:00 am Open Pod slot was selected"
     },
     "booking.slot.today_0900": {
@@ -177,7 +177,7 @@
       "role": "button",
       "name": "9:00am 4 open Pods",
       "clickTarget": "right_edge",
-      "key": "Space",
+      "rightEdgeInset": 34,
       "evidence": "the visible 9:00 am Open Pod slot was selected"
     },
     "booking.slot.today_1400": {
@@ -185,7 +185,7 @@
       "role": "button",
       "name": "2:00pm 4 open Pods",
       "clickTarget": "right_edge",
-      "key": "Space",
+      "rightEdgeInset": 34,
       "evidence": "the visible 2:00 pm Open Pod slot was selected"
     },
     "booking.slot.today_1500": {
@@ -193,7 +193,7 @@
       "role": "button",
       "name": "3:00pm 4 open Pods",
       "clickTarget": "right_edge",
-      "key": "Space",
+      "rightEdgeInset": 34,
       "evidence": "the visible 3:00 pm Open Pod slot was selected"
     },
     "booking.group.fewer_players": {

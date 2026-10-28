@@ -43,7 +43,7 @@ CHECK_IN_PLAYBOOK_ACTIONS = {"check_in_training"}
 # match the social group size and accept the rendered Preview price the
 # coordinator authorized.  A later revision may reopen such a job once, while
 # preserving every earlier observation as history.
-BOOKING_PLAYBOOK_REVISION = "rendered-review-group-price-and-slot-affordance-v2"
+BOOKING_PLAYBOOK_REVISION = "rendered-review-group-price-and-slot-toggle-v3"
 
 
 def _playbook_for(action: str) -> Optional[str]:
