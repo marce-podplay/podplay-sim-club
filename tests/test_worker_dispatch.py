@@ -186,6 +186,16 @@ class WorkerDispatchTests(unittest.TestCase):
         self.assertIn("MUST run exactly one report command", prompt)
         self.assertIn("--outcome blocked", prompt)
 
+    def test_booking_worker_prompt_carries_preview_slot_authorization(self):
+        prompt = worker_prompt(root=REPO_ROOT, worker_id="economical:runner-1", runbook_payload={
+            "launchPacket": {
+                "contractKey": "worker:opaque", "actorId": "andy-bogard", "browserJobKey": "job:opaque",
+                "journeyAction": "plan_training_booking", "playbook": "playbooks/sim-player-booking.md",
+            }
+        })
+        self.assertIn("select the earliest currently rendered allowlisted Open Pod slot", prompt)
+        self.assertIn("Do not treat the ordinary slot choice as an unresolved approval", prompt)
+
     def test_detached_worker_makes_booking_entry_preflight_deterministic(self):
         runner = (REPO_ROOT / "tools" / "sim-browser" / "codex-worker-runner.py").read_text()
         self.assertIn("def _prepare_booking_entry", runner)
