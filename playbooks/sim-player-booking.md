@@ -87,6 +87,9 @@ Club Lab run.
   must not improvise consent or payment.
 - End the isolated session after the bounded step. A later named Sim gets a
   fresh browser profile and work item.
+- End every economical-worker turn with exactly one `worker-dispatch report`
+  command. When no specific visible outcome was recorded, report `blocked`
+  with a concise factual diary line; never end silently.
 
 ## Club Floor boundary
 

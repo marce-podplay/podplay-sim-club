@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT / "src"))
 # assertion: the worker receives a stable post-entry snapshot and still must
 # verify the actual controls it plans to use.
 AVAILABILITY_SETTLE_SECONDS = 8
+FINAL_OBSERVATION_SECONDS = 3
 
 from podplay_sim_club.codex_worker_launcher import (  # noqa: E402
     _active_handoff_id,
@@ -115,7 +116,32 @@ def _prepare_booking_entry(*, storage: Storage, packet: dict[str, object]) -> bo
     return True
 
 
-def _finalize_if_unreported(*, worker_id: str, contract_key: str) -> None:
+def _capture_final_observation(*, storage: Storage, contract_key: str) -> bool:
+    """Keep a separate, sanitized end-of-turn screen for coordinator review."""
+    session = storage.state / "worker-sessions" / f"{_reference(contract_key)}.json"
+    if not session.is_file():
+        return False
+    completion_dir = storage.state / "worker-evidence" / _reference(contract_key) / "completion"
+    try:
+        completed = subprocess.run(
+            [
+                "node", str(ROOT / "tools" / "sim-browser" / "controller.mjs"), "observe",
+                "--session", str(session), "--seconds", str(FINAL_OBSERVATION_SECONDS),
+                "--out", str(completion_dir),
+                "--card-screen", "economical worker completion",
+                "--card-observed", "final bounded rendered observation after the character turn",
+                "--card-next", "coordinator reads the worker report or review state",
+                "--card-outcome", "observation only; no product outcome inferred",
+            ],
+            cwd=ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            check=False, timeout=20,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return completed.returncode == 0
+
+
+def _finalize_if_unreported(*, storage: Storage, worker_id: str, contract_key: str) -> None:
     """Close a finished model turn that omitted its mandatory report.
 
     The model process ending is not evidence of a booking or even of a browser
@@ -124,13 +150,18 @@ def _finalize_if_unreported(*, worker_id: str, contract_key: str) -> None:
     Record the narrowest truthful outcome immediately: a visible journey may
     have occurred, but the character did not provide a final report.
     """
+    final_observation = _capture_final_observation(storage=storage, contract_key=contract_key)
     try:
         report(
             ROOT,
             contract_key=contract_key,
             worker_id=worker_id,
             outcome="blocked",
-            diary_line="Economical worker ended without its required final browser report; no product outcome is inferred from the retained visible evidence.",
+            diary_line=(
+                "Economical worker ended without its required final browser report; a final rendered observation "
+                "was captured." if final_observation else
+                "Economical worker ended without its required final browser report; no product outcome is inferred."
+            ),
         )
     except ValueError:
         # The normal worker may have reported during the tiny interval between
@@ -184,7 +215,7 @@ def run(*, worker_id: str, contract_key: str) -> int:
             cwd=ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             check=False,
         )
-        _finalize_if_unreported(worker_id=worker_id, contract_key=contract_key)
+        _finalize_if_unreported(storage=storage, worker_id=worker_id, contract_key=contract_key)
         result.update({"status": "exited", "exitCode": completed.returncode, "finishedAt": isoformat(parse_instant(None))})
         storage.write_json(status_path, result)
         return completed.returncode

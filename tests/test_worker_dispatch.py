@@ -145,7 +145,7 @@ class WorkerDispatchTests(unittest.TestCase):
             }
         })
         self.assertIn("Do not use product APIs", prompt)
-        self.assertIn("worker-dispatch active", prompt)
+        self.assertIn("worker-dispatch report", prompt)
         self.assertIn("detached runner has already completed", prompt)
         self.assertIn("Begin by observing that current rendered state", prompt)
         self.assertNotIn("password", prompt.lower())
@@ -173,7 +173,18 @@ class WorkerDispatchTests(unittest.TestCase):
     def test_detached_worker_closes_an_unreported_model_turn(self):
         runner = (REPO_ROOT / "tools" / "sim-browser" / "codex-worker-runner.py").read_text()
         self.assertIn("def _finalize_if_unreported", runner)
-        self.assertIn("_finalize_if_unreported(worker_id=worker_id, contract_key=contract_key)", runner)
+        self.assertIn("def _capture_final_observation", runner)
+        self.assertIn("_finalize_if_unreported(storage=storage, worker_id=worker_id, contract_key=contract_key)", runner)
+
+    def test_worker_prompt_includes_a_mandatory_safe_final_report(self):
+        prompt = worker_prompt(root=REPO_ROOT, worker_id="economical:runner-1", runbook_payload={
+            "launchPacket": {
+                "contractKey": "worker:opaque", "actorId": "andy-bogard", "browserJobKey": "job:opaque",
+                "journeyAction": "plan_training_booking", "playbook": "playbooks/sim-player-booking.md",
+            }
+        })
+        self.assertIn("MUST run exactly one report command", prompt)
+        self.assertIn("--outcome blocked", prompt)
 
     def test_detached_worker_makes_booking_entry_preflight_deterministic(self):
         runner = (REPO_ROOT / "tools" / "sim-browser" / "codex-worker-runner.py").read_text()

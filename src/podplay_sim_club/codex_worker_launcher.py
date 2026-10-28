@@ -124,10 +124,11 @@ Contract (not product proof):
 - prepared browser session: state/worker-sessions/{session_ref}.json
 
 First run these commands from the repository root:
-1. `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m podplay_sim_club.cli worker-dispatch active --worker {worker_id}`
-2. `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m podplay_sim_club.cli worker-dispatch runbook --worker {worker_id}`
-3. Read `{packet['playbook']}` before any browser action.
-4. Attach only to the prepared session with `tools/sim-browser/controller.mjs`.
+1. Read `{packet['playbook']}` before any browser action.
+2. Attach only to the prepared session with `tools/sim-browser/controller.mjs`.
+3. Inspect the current rendered state. Use only a currently visible allowlisted control; wait and re-observe through normal loading transitions.
+4. Before ending, you MUST run exactly one report command. If no visible outcome was recorded, use this safe fallback:
+   `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m podplay_sim_club.cli worker-dispatch report --contract {contract_key} --worker {worker_id} --outcome blocked --diary "Stopped with no confirmed product outcome after the bounded visible-browser review."`
 
 For a booking playbook, the detached runner has already completed the
 allowlisted rendered region, West 37th venue, and Open Pod entry routine. It
@@ -150,7 +151,7 @@ page-script evaluation, credentials, or private URLs. Do not edit repository
 code. Do not make a booking, payment, invitation, check-in, attendance, play,
 score, or result claim unless that exact rendered confirmation is visible.
 
-Record an observation only for a visible browser fact. End this one bounded turn by calling `worker-dispatch report` exactly once for contract `{contract_key}`. Visible outcomes need the receipt created by worker-bootstrap. If the UI is ambiguous or the next action is not clearly authorized, report `blocked`; do not retry. Keep the diary line secret-free and factual.
+Record an observation only for a visible browser fact. The report command is mandatory even if the screen is ambiguous; use `blocked` rather than ending silently. Visible outcomes need the receipt created by worker-bootstrap. Do not retry an uncertain journey. Keep the diary line secret-free and factual.
 """
 
 
