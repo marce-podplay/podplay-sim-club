@@ -138,8 +138,9 @@ def queue(root: Path, *, browser_job: Dict[str, Any]) -> Dict[str, Any]:
                     "status": "queued",
                     "queuedAt": observed_at,
                     "retryOfOutcome": existing.get("outcome"),
+                    "agreement": agreement,
                 }
-                for field in ("workerId", "claimedAt", "reportedAt", "outcome", "diaryLine"):
+                for field in ("workerId", "claimedAt", "reportedAt", "outcome", "diaryLine", "receiptRef", "launcher"):
                     contracts[contract_key].pop(field, None)
         storage.write_json(storage.state / STATE_FILE, {"schemaVersion": 1, "contracts": contracts})
     contract = contracts[contract_key]

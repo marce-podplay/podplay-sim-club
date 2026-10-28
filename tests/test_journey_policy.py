@@ -9,7 +9,7 @@ import sys
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from podplay_sim_club.journey_policy import (  # noqa: E402
-    browser_journey_required, claim, dispatch, pending_or_new, record_observation,
+    blocked_job_is_reopenable, browser_journey_required, claim, dispatch, pending_or_new, record_observation,
 )
 
 
@@ -98,3 +98,32 @@ class JourneyPolicyTests(unittest.TestCase):
             fresh_task = {"action": "plan_training_booking", "intentId": "intent:fresh", "bookerActorId": "andy-bogard"}
             self.assertFalse(pending_or_new(root, task=old_task, role="player"))
             self.assertTrue(pending_or_new(root, task=fresh_task, role="player"))
+
+    def test_new_booking_playbook_revision_reopens_a_blocked_job_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            task = {"action": "plan_training_booking", "intentId": "intent:one", "bookerActorId": "andy-bogard"}
+            first = dispatch(root, task=task, role="player", observed_at="2026-10-22T12:00:00Z")
+            path = root / "state" / "browser-journeys.json"
+            state = json.loads(path.read_text())
+            state["jobs"][first["jobKey"]].update({"status": "blocked", "playbookRevision": "older-review-policy"})
+            path.write_text(json.dumps(state))
+
+            reopened = dispatch(root, task=task, role="player", observed_at="2026-10-22T12:01:00Z")
+            saved = json.loads(path.read_text())["jobs"][first["jobKey"]]
+            self.assertEqual("queued", reopened["status"])
+            self.assertEqual("queued", saved["status"])
+            self.assertEqual("booking_playbook_revision", saved["retryReason"])
+            self.assertTrue(pending_or_new(root, task=task, role="player"))
+            self.assertFalse(blocked_job_is_reopenable(saved))
+
+    def test_stale_blocked_booking_job_is_pending_for_its_revision_retry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            task = {"action": "plan_training_booking", "intentId": "intent:one", "bookerActorId": "andy-bogard"}
+            job = dispatch(root, task=task, role="player")
+            path = root / "state" / "browser-journeys.json"
+            state = json.loads(path.read_text())
+            state["jobs"][job["jobKey"]].update({"status": "blocked", "playbookRevision": "older-review-policy"})
+            path.write_text(json.dumps(state))
+            self.assertTrue(pending_or_new(root, task=task, role="player"))

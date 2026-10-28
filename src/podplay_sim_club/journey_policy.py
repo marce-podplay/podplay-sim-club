@@ -38,6 +38,13 @@ INVITATION_PLAYBOOK_ACTIONS = {
 
 CHECK_IN_PLAYBOOK_ACTIONS = {"check_in_training"}
 
+# A blocked rendered journey remains quarantined by default.  This revision is
+# deliberately narrow: it represents the booking playbook learning how to
+# match the social group size and accept the rendered Preview price the
+# coordinator authorized.  A later revision may reopen such a job once, while
+# preserving every earlier observation as history.
+BOOKING_PLAYBOOK_REVISION = "rendered-review-group-price-and-slot-affordance-v2"
+
 
 def _playbook_for(action: str) -> Optional[str]:
     """Return a local decision aid, never a product-action capability."""
@@ -48,6 +55,25 @@ def _playbook_for(action: str) -> Optional[str]:
     if action in CHECK_IN_PLAYBOOK_ACTIONS:
         return "playbooks/sim-player-check-in.md"
     return None
+
+
+def _playbook_revision(action: str) -> Optional[str]:
+    if action in BOOKING_PLAYBOOK_ACTIONS:
+        return BOOKING_PLAYBOOK_REVISION
+    return None
+
+
+def blocked_job_is_reopenable(job: Dict[str, Any]) -> bool:
+    """Whether a quarantined job predates its current narrow playbook revision.
+
+    This is a local scheduling fact only.  It never converts a prior browser
+    observation into a product outcome, and it applies solely to a booking
+    playbook whose explicit revision changed.
+    """
+    if not isinstance(job, dict) or job.get("status") != "blocked":
+        return False
+    revision = _playbook_revision(str(job.get("journeyAction") or ""))
+    return revision is not None and job.get("playbookRevision") != revision
 
 
 def _actor_for(task: Dict[str, Any]) -> Optional[str]:
@@ -103,22 +129,31 @@ def dispatch(root: Path, *, task: Dict[str, Any], role: str, observed_at: Option
         return job
     key = ":".join(str(job.get(field) or "-") for field in ("role", "journeyAction", "intentId", "actorId"))
     observed = observed_at or isoformat(parse_instant(None))
+    revision = _playbook_revision(job["journeyAction"])
     storage = Storage(root)
     with storage.writer_lock():
         state = storage.load_json(storage.state / STATE_FILE, default={})
         jobs = state.get("jobs", {}) if isinstance(state, dict) else {}
         jobs = jobs if isinstance(jobs, dict) else {}
         existing = jobs.get(key) if isinstance(jobs.get(key), dict) else {}
-        jobs[key] = {
-            # Preserve the runner-owned lifecycle and observation history when
-            # a recurring Rally tick rediscovers the same product step.
-            **{
+        reopen_for_revision = (
+            existing.get("status") == "blocked"
+            and revision is not None
+            and existing.get("playbookRevision") != revision
+        )
+        preserved_lifecycle = (
+            {} if reopen_for_revision else {
                 field: existing[field]
                 for field in ("claimedBy", "claimedAt", "lastObservedAt", "lastObservation", "observations")
                 if field in existing
-            },
+            }
+        )
+        jobs[key] = {
+            # Preserve the runner-owned lifecycle and observation history when
+            # a recurring Rally tick rediscovers the same product step.
+            **preserved_lifecycle,
             "jobKey": key,
-            "status": existing.get("status", "queued"),
+            "status": "queued" if reopen_for_revision else existing.get("status", "queued"),
             "queuedAt": existing.get("queuedAt", observed),
             "lastDispatchedAt": observed,
             "actorId": actor,
@@ -127,7 +162,14 @@ def dispatch(root: Path, *, task: Dict[str, Any], role: str, observed_at: Option
             "intentId": job.get("intentId"),
             "workflow": job["workflow"],
             "playbook": job.get("playbook"),
+            "playbookRevision": revision,
         }
+        if reopen_for_revision:
+            jobs[key].update({
+                "retryOfPlaybookRevision": existing.get("playbookRevision", "unversioned"),
+                "retryReason": "booking_playbook_revision",
+                "reopenedAt": observed,
+            })
         storage.write_json(storage.state / STATE_FILE, {"schemaVersion": 1, "jobs": jobs})
     return {**job, "jobKey": key, "status": "queued"}
 
@@ -148,7 +190,11 @@ def pending_or_new(root: Path, *, task: Dict[str, Any], role: str) -> bool:
     state = Storage(root).load_json(Storage(root).state / STATE_FILE, default={})
     jobs = state.get("jobs", {}) if isinstance(state, dict) else {}
     existing = jobs.get(key) if isinstance(jobs, dict) else None
-    return not isinstance(existing, dict) or existing.get("status") in {"queued", "active"}
+    return (
+        not isinstance(existing, dict)
+        or existing.get("status") in {"queued", "active"}
+        or blocked_job_is_reopenable(existing)
+    )
 
 
 def claim(root: Path, *, job_key: str, actor_id: str, observed_at: Optional[str] = None) -> Dict[str, Any]:

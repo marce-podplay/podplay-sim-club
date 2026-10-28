@@ -576,6 +576,8 @@ def next_booking_task(root: Path, now: Optional[datetime] = None) -> Dict[str, A
 
 
 def _blocked_booking_intents(storage: Storage) -> set[str]:
+    from .journey_policy import blocked_job_is_reopenable
+
     journeys = storage.load_json(storage.state / "browser-journeys.json", default={})
     jobs = journeys.get("jobs", {}) if isinstance(journeys, dict) else {}
     if not isinstance(jobs, dict):
@@ -587,6 +589,7 @@ def _blocked_booking_intents(storage: Storage) -> set[str]:
         and job.get("role") == "player"
         and job.get("journeyAction") in {"plan_training_booking", "review_training_availability"}
         and job.get("status") == "blocked"
+        and not blocked_job_is_reopenable(job)
         and isinstance((intent_id := job.get("intentId")), str)
     }
 
