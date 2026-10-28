@@ -25,6 +25,11 @@ sys.path.insert(0, str(ROOT / "src"))
 # verify the actual controls it plans to use.
 AVAILABILITY_SETTLE_SECONDS = 8
 FINAL_OBSERVATION_SECONDS = 3
+# Keep economical character turns bounded. This is intentionally longer than
+# the normal UI settle period because the model must read its playbook, inspect
+# the rendered screen, and write one report; tune it only with worker timing
+# evidence rather than treating it as a product timeout.
+ECONOMICAL_TURN_TIMEOUT_SECONDS = 120
 
 from podplay_sim_club.codex_worker_launcher import (  # noqa: E402
     _active_handoff_id,
@@ -210,11 +215,17 @@ def run(*, worker_id: str, contract_key: str) -> int:
         executable = shutil.which("codex")
         if executable is None:
             raise RuntimeError("local Codex CLI is unavailable")
-        completed = subprocess.run(
-            _command(executable=executable, root=ROOT, prompt=worker_prompt(root=ROOT, worker_id=worker_id, runbook_payload=active)),
-            cwd=ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            check=False,
-        )
+        try:
+            completed = subprocess.run(
+                _command(executable=executable, root=ROOT, prompt=worker_prompt(root=ROOT, worker_id=worker_id, runbook_payload=active)),
+                cwd=ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                check=False, timeout=ECONOMICAL_TURN_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            _finalize_if_unreported(storage=storage, worker_id=worker_id, contract_key=contract_key)
+            result.update({"status": "model_timeout", "finishedAt": isoformat(parse_instant(None))})
+            storage.write_json(status_path, result)
+            return 2
         _finalize_if_unreported(storage=storage, worker_id=worker_id, contract_key=contract_key)
         result.update({"status": "exited", "exitCode": completed.returncode, "finishedAt": isoformat(parse_instant(None))})
         storage.write_json(status_path, result)

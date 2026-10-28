@@ -175,6 +175,8 @@ class WorkerDispatchTests(unittest.TestCase):
         self.assertIn("def _finalize_if_unreported", runner)
         self.assertIn("def _capture_final_observation", runner)
         self.assertIn("_finalize_if_unreported(storage=storage, worker_id=worker_id, contract_key=contract_key)", runner)
+        self.assertIn("ECONOMICAL_TURN_TIMEOUT_SECONDS = 120", runner)
+        self.assertIn("status\": \"model_timeout", runner)
 
     def test_worker_prompt_includes_a_mandatory_safe_final_report(self):
         prompt = worker_prompt(root=REPO_ROOT, worker_id="economical:runner-1", runbook_payload={
