@@ -24,6 +24,11 @@ sys.path.insert(0, str(ROOT / "src"))
 # assertion: the worker receives a stable post-entry snapshot and still must
 # verify the actual controls it plans to use.
 AVAILABILITY_SETTLE_SECONDS = 8
+# A selected visible slot has been observed to reveal Continue within this
+# short, separate transition.  Keep it named rather than folding it into the
+# broader availability settling budget so future performance work can tune the
+# two behaviours independently.
+POST_SLOT_SELECTION_SETTLE_SECONDS = 1
 FINAL_OBSERVATION_SECONDS = 3
 # Keep economical character turns bounded. This is intentionally longer than
 # the normal UI settle period because the model must read its playbook, inspect

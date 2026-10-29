@@ -141,6 +141,12 @@
       "name": "Try again",
       "evidence": "the visible availability retry control was activated"
     },
+    "booking.availability.next_available_tomorrow": {
+      "kind": "visible_click",
+      "role": "button",
+      "name": "Next Available: Tomorrow →",
+      "evidence": "the visible next-available-day control was activated"
+    },
     "booking.slot.continue": {
       "kind": "visible_click",
       "selector": "[data-cy=booking-cta-checkout-button]",

@@ -37,18 +37,23 @@ character, not authority to create a booking.
    The sessions grid may arrive shortly after the date/pod shell. Wait through
    that rendered loading transition and re-observe before deciding a time row
    or button is absent. An initially missing control is not a product failure.
-4. After selecting an experience, wait independently for the intended live
-   slot control to render. After selecting that slot, wait independently for
-   the rendered **Continue** control before trying to activate it. Do not
-   classify an absent control during its loading transition as a product
-   failure.
-5. Inspect date, time, duration, court/pod, price, and any player-count or
+4. If the current day has no availability but a rendered **Next Available:
+   Tomorrow** control is present, use that normal visible navigation only
+   when the resulting day remains inside the intent's current local-window
+   constraint. Re-observe the new day before choosing a slot; do not infer
+   that today's empty grid applies to it.
+5. After selecting an experience, wait independently for the intended live
+   slot control to render. After selecting that slot, wait one second and
+   re-observe for the rendered **Continue** control before trying to activate
+   it. Do not classify an absent control during its loading transition as a
+   product failure.
+6. Inspect date, time, duration, court/pod, price, and any player-count or
    invitation controls before progressing. Availability labels are volatile:
    map a slot only after this actor sees its current rendered label.
-6. Compare the rendered review with the intent. The named booker may continue
+7. Compare the rendered review with the intent. The named booker may continue
    only if it still satisfies the accepted agreement and no separate payer or
    price-evidence gate is outstanding.
-7. After a successful visible booking, follow the recipient-owned invitation
+8. After a successful visible booking, follow the recipient-owned invitation
    journey separately. Do not infer acceptance, check-in, attendance, play,
    or a result from booking progress.
 
