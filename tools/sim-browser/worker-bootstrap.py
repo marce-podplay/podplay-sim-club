@@ -35,6 +35,15 @@ def _safe_ref(value: str) -> str:
 
 def _run(command: list[str], *, timeout_seconds: int) -> subprocess.CompletedProcess[str]:
     """Run a local helper without relaying potentially sensitive stdout."""
+    # Keep the receipt and launcher diagnostics useful without copying browser
+    # output, which may contain an invite URL or other session data.  A stable
+    # executable/stage label is enough to distinguish a credential handoff
+    # failure from an actor-session or private-invite handoff failure.
+    stage = (
+        Path(command[1]).name
+        if len(command) > 1 and command[0] in {sys.executable, "node"}
+        else Path(command[0]).name
+    )
     try:
         completed = subprocess.run(
             command, cwd=ROOT, stdin=subprocess.DEVNULL,
@@ -42,9 +51,17 @@ def _run(command: list[str], *, timeout_seconds: int) -> subprocess.CompletedPro
             text=True, timeout=timeout_seconds, check=False,
         )
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError("local browser helper timed out") from exc
+        raise RuntimeError(f"local browser helper timed out at {stage}") from exc
     if completed.returncode != 0:
-        raise RuntimeError("local browser helper failed")
+        # login.mjs emits only these fixed rendered-state descriptions.  Keep
+        # one of them as the diagnostic; discard all other stderr so product
+        # content and handoff data never enter a diary or worker receipt.
+        safe_login_detail = re.search(
+            r"sim-browser login: (email field did not render|enabled Continue control did not render|password field did not render|enabled Sign in control did not render|login did not visibly settle into the product)",
+            completed.stderr,
+        )
+        detail = f": {safe_login_detail.group(1)}" if safe_login_detail else ""
+        raise RuntimeError(f"local browser helper failed at {stage}{detail}")
     return completed
 
 
@@ -211,7 +228,7 @@ def bootstrap(
 def main() -> int:
     parser = argparse.ArgumentParser(description="prepare a bounded headless browser for one active economical Sim worker")
     parser.add_argument("--worker", required=True)
-    parser.add_argument("--timeout-seconds", type=int, default=150)
+    parser.add_argument("--timeout-seconds", type=int, default=180)
     parser.add_argument("--observe-seconds", type=int, default=3)
     parser.add_argument("--handoff-id", help="launcher-generated marker binding this receipt to one worker launch")
     parser.add_argument("--skip-login", action="store_true", help="capture only the public login shell; do not start a credential handoff")

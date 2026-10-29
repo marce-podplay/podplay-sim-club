@@ -42,7 +42,11 @@ CHECK_IN_PLAYBOOK_ACTIONS = {"check_in_training"}
 # narrow playbook revision may reopen a job once while preserving every earlier
 # observation as history.
 BOOKING_PLAYBOOK_REVISION = "rendered-review-group-capacity-window-context-v6"
-INVITATION_PLAYBOOK_REVISION = "authenticated-private-invite-rendered-booking-detail-v4"
+# v5 adds a member-only Reservations render check after a delayed login
+# redirect.  It prevents the worker from mistaking the public root shell for
+# an authenticated invitation session, and is a narrow reason to reopen prior
+# blank-invite blockers once.
+INVITATION_PLAYBOOK_REVISION = "authenticated-private-invite-member-route-v5"
 
 
 def _playbook_for(action: str) -> Optional[str]:

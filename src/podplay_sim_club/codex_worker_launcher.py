@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path
+import re
 import secrets
 import shutil
 import subprocess
@@ -23,6 +24,26 @@ from .worker_dispatch import claim_next, claim_specific, report, runbook
 
 
 LAUNCHER_NAME = "codex-cli-economical-worker"
+# The rendered password sequence can legitimately consume its full bounded
+# 160-second visible-control budget (email validation, password field, and
+# redirect).  Leave a small margin for the post-login observation rather than
+# terminating the coordinator during a healthy slow sign-in.
+COORDINATOR_BOOTSTRAP_TIMEOUT_SECONDS = 180
+COORDINATOR_PROCESS_TIMEOUT_SECONDS = 205
+
+
+def _safe_bootstrap_failure(stderr: str) -> str:
+    """Return only a stable local stage label from coordinator stderr.
+
+    Browser helpers intentionally suppress their output because it can include
+    private invite material.  The coordinator still needs to distinguish a
+    login delay from a failure opening the local private handoff.
+    """
+    matched = re.search(r"(?:failed|timed out) at ([A-Za-z0-9_.-]+)(?:: ([A-Za-z ]+))?", stderr)
+    if matched:
+        detail = f" ({matched.group(2)})" if matched.group(2) else ""
+        return f"Coordinator browser preparation did not finish at {matched.group(1)}{detail} before the economical character turn."
+    return "Coordinator browser login did not become ready before the economical character turn."
 
 
 def _reference(contract_key: str) -> str:
@@ -255,14 +276,15 @@ def launch(root: Path, *, worker_id: str, execute: bool, contract_key: str | Non
             sys.executable, str(root / "tools" / "sim-browser" / "worker-bootstrap.py"),
             "--worker", worker_id,
             "--handoff-id", handoff_id,
+            "--timeout-seconds", str(COORDINATOR_BOOTSTRAP_TIMEOUT_SECONDS),
         ],
         cwd=root, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL, check=False, timeout=190,
+        stderr=subprocess.PIPE, text=True, check=False, timeout=COORDINATOR_PROCESS_TIMEOUT_SECONDS,
     )
     if bootstrap.returncode != 0:
         report(
             root, contract_key=contract_key, worker_id=worker_id, outcome="not_started",
-            diary_line="Coordinator browser login did not become ready before the economical character turn.",
+            diary_line=_safe_bootstrap_failure(bootstrap.stderr or ""),
         )
         return {"action": "coordinator_browser_not_ready", "contractKey": contract_key, "remoteWrites": 0}
     if not _prepared_login_receipt(storage, packet=packet, handoff_id=handoff_id):

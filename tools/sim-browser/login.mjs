@@ -42,6 +42,15 @@ const activate = async (feature, extra = []) => {
   }
 };
 
+const confirmAuthenticatedReservations = async () => {
+  // Reservations is a normal member-facing route. Its rendered Upcoming tab
+  // is a stronger proof of an authenticated session than the public root
+  // shell, which can render for both signed-out and signed-in visitors.
+  const navigation = await call(['act', '--session', session, '--feature', 'navigation.reservations']);
+  if (navigation.code !== 0 || !navigation.out.includes('visible_action_completed')) return false;
+  return await waitVisible('reservation.upcoming', 15);
+};
+
 try {
   if (!await waitVisible('login.email', 30)) throw new Error('email field did not render');
   await activate('login.email', ['--handoff-port', handoffPort]);
@@ -54,7 +63,22 @@ try {
   await activate('login.password', ['--handoff-port', handoffPort]);
   if (!await waitVisible('login.sign_in', 10)) throw new Error('enabled Sign in control did not render');
   await activate('login.sign_in');
-  const redirect = await call(['wait-login-redirect', '--session', session, '--seconds', '45']);
+  let redirect = await call(['wait-login-redirect', '--session', session, '--seconds', '45']);
+  // Some normal product sessions leave the success/redirect shell rendered
+  // even after the session cookie has been established.  A customer can
+  // reopen the ordinary root route; do the same bounded, visible navigation
+  // once, then require the same settled-render criterion.  This does not
+  // create product data or bypass the rendered login experience.
+  if (redirect.code === 0 && redirect.out.includes('login_redirect_pending')) {
+    const root = await call(['navigate', '--session', session, '--path', '/']);
+    if (root.code === 0 && root.out.includes('visible_navigation_completed')) {
+      if (await confirmAuthenticatedReservations()) {
+        console.log(JSON.stringify({ status: 'visible_login_complete' }));
+        process.exit(0);
+      }
+      redirect = await call(['wait-login-redirect', '--session', session, '--seconds', '15']);
+    }
+  }
   if (redirect.code !== 0 || !redirect.out.includes('login_redirect_settled')) {
     throw new Error('login did not visibly settle into the product');
   }
