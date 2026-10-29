@@ -288,6 +288,12 @@
       "name": "Share invite",
       "evidence": "the visible product share-invite control was activated"
     },
+    "booking.invitation.done": {
+      "kind": "visible_click",
+      "role": "button",
+      "name": "Done",
+      "evidence": "the visible invitation-link dialog was closed after private retention"
+    },
     "booking.invitation.accept": {
       "kind": "visible_click",
       "role": "button",
