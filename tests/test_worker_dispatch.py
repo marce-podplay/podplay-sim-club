@@ -343,7 +343,7 @@ class WorkerDispatchTests(unittest.TestCase):
             self.assertEqual("terry-bogard", launched["launchPacket"]["actorId"])
             contracts = json.loads((root / "state" / "worker-contracts.json").read_text())["contracts"]
             self.assertEqual("retired", contracts[stale["contractKey"]]["status"])
-            self.assertEqual("agreement_is_no_longer_agreed", contracts[stale["contractKey"]]["retirementReason"])
+            self.assertEqual("browser_job_no_longer_runnable", contracts[stale["contractKey"]]["retirementReason"])
 
     def test_not_started_worker_releases_unobserved_job_for_a_later_retry(self):
         with tempfile.TemporaryDirectory() as directory:

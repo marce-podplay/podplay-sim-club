@@ -39,6 +39,15 @@ def _retire_obsolete_booking_contracts_locked(storage: Storage, contracts: Dict[
     for contract in contracts.values():
         if not isinstance(contract, dict) or contract.get("status") != "queued":
             continue
+        job_key = contract.get("browserJobKey")
+        job = jobs.get(job_key) if isinstance(jobs, dict) and isinstance(job_key, str) else None
+        if not isinstance(job, dict) or job.get("status") != "queued" or job.get("actorId") != contract.get("actorId"):
+            contract.update({
+                "status": "retired",
+                "retiredAt": observed_at,
+                "retirementReason": "browser_job_no_longer_runnable",
+            })
+            continue
         if contract.get("journeyAction") not in BOOKING_ACTIONS:
             continue
         intent_id = contract.get("intentId")
@@ -50,8 +59,6 @@ def _retire_obsolete_booking_contracts_locked(storage: Storage, contracts: Dict[
             "retiredAt": observed_at,
             "retirementReason": "agreement_is_no_longer_agreed",
         })
-        job_key = contract.get("browserJobKey")
-        job = jobs.get(job_key) if isinstance(jobs, dict) and isinstance(job_key, str) else None
         if isinstance(job, dict) and job.get("status") == "queued":
             job.update({"status": "retired", "retiredAt": observed_at, "retirementReason": "agreement_is_no_longer_agreed"})
             jobs_changed = True
