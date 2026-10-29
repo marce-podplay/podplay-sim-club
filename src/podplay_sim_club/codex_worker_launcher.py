@@ -109,6 +109,8 @@ def worker_prompt(*, root: Path, worker_id: str, runbook_payload: Dict[str, Any]
     agreement = packet.get("agreement") if isinstance(packet.get("agreement"), dict) else {}
     participant_count = agreement.get("participantCount")
     duration_minutes = agreement.get("durationMinutes")
+    days_ahead = agreement.get("daysAhead")
+    local_windows = agreement.get("localWindows")
     agreement_instruction = ""
     if isinstance(participant_count, int) and participant_count > 0 and isinstance(duration_minutes, int) and duration_minutes > 0:
         agreement_instruction = (
@@ -119,6 +121,12 @@ def worker_prompt(*, root: Path, worker_id: str, runbook_payload: Dict[str, Any]
             "treat the rendered group count as the agreement check and use the post-booking invitation link "
             "to bring in the other named participant. Do not block merely because that future invitee is not yet named."
         )
+        if isinstance(days_ahead, list) and len(days_ahead) == 2 and all(isinstance(value, int) for value in days_ahead):
+            agreement_instruction += f" The accepted day window is {days_ahead[0]}–{days_ahead[1]} days ahead."
+        if isinstance(local_windows, list) and local_windows:
+            agreement_instruction += " The accepted local time window(s): " + ", ".join(
+                value for value in local_windows if isinstance(value, str)
+            ) + "."
     availability_only = packet.get("journeyAction") == "review_training_availability"
     phase_instruction = (
         "This is an availability-observation phase: after the helper reaches live availability, record only what is visibly rendered. Do not select a slot, Continue, payment, or submit control."

@@ -96,7 +96,25 @@ def _agreement_context(storage: Storage, *, browser_job: Dict[str, Any]) -> Dict
     duration = constraints.get("durationMinutes")
     if not participants or not isinstance(duration, int) or duration <= 0:
         return None
-    return {"participantCount": len(participants), "durationMinutes": duration}
+    days_ahead = constraints.get("daysAhead")
+    local_windows = constraints.get("localWindows")
+    context: Dict[str, Any] = {
+        "participantCount": len(participants),
+        "durationMinutes": duration,
+    }
+    # These are social agreement facts, not product-derived availability. They
+    # let an economical browser worker judge a rendered time row without
+    # guessing at an otherwise invisible scheduling window.
+    if (
+        isinstance(days_ahead, list)
+        and len(days_ahead) == 2
+        and all(isinstance(value, int) and value >= 0 for value in days_ahead)
+        and days_ahead[0] <= days_ahead[1]
+    ):
+        context["daysAhead"] = days_ahead
+    if isinstance(local_windows, list) and all(isinstance(value, str) for value in local_windows):
+        context["localWindows"] = local_windows
+    return context
 
 
 def queue(root: Path, *, browser_job: Dict[str, Any]) -> Dict[str, Any]:
