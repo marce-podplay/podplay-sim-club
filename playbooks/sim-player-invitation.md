@@ -80,6 +80,12 @@ state as a blocker; do not copy the link into a diary or report.
   Pay** (when the rendered Preview card and total are shown). Both are
   recipient-owned visible decisions. Do not use this exception for production
   payments or if the session details differ from the agreement.
+- After activating either control, wait through the transition and take a new
+  rendered snapshot. A completed acceptance may land directly on the booking
+  detail rather than a success toast: the named recipient appearing in the
+  group alongside **Leave booking** and a rendered payment state (for example
+  **Held**) is a visible acceptance confirmation. Record that confirmation;
+  do not call it attendance, check-in, play, or a result.
 
 ## Boundary
 
