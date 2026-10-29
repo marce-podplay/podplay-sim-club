@@ -42,7 +42,7 @@ CHECK_IN_PLAYBOOK_ACTIONS = {"check_in_training"}
 # narrow playbook revision may reopen a job once while preserving every earlier
 # observation as history.
 BOOKING_PLAYBOOK_REVISION = "rendered-review-group-price-slot-toggle-and-next-day-v4"
-INVITATION_PLAYBOOK_REVISION = "authenticated-private-invite-after-login-v1"
+INVITATION_PLAYBOOK_REVISION = "authenticated-private-invite-and-owner-reservations-v2"
 
 
 def _playbook_for(action: str) -> Optional[str]:

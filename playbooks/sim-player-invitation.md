@@ -10,6 +10,10 @@ decision after booking; it is never implied by a team agreement.
   booking and the local intent says an invitation handoff is ready.
 - In the rendered product, find the invitation/share control and inspect its
   recipient, event, and timing context before creating or sending anything.
+- In an operational economical-worker journey, the coordinator has already
+  opened the rendered **Reservations → Upcoming** list after visible login.
+  Start from that screen and open the matching **Manage booking** card; do not
+  return to Booking or optional region onboarding.
 - Record only the visible action and sanitized browser evidence. Do not put a
   share URL, key, token, or raw product identifier into the dashboard, diary,
   or social channel.
@@ -47,6 +51,20 @@ current link:
 Generating a replacement link does not imply that an earlier link was invalid,
 that anyone accepted it, or that the session changed. It only refreshes the
 owner's private handoff material after a visible owner action.
+
+### Economical-worker private retention
+
+When the rendered **Your invite link is ready** confirmation is visible, retain
+the link before reporting the browser outcome:
+
+```sh
+node tools/sim-browser/controller.mjs capture-invite-link \
+  --session <prepared-session> --intent <contract-intent>
+```
+
+The controller writes only to the owner’s private local handoff and never
+prints the link. If that retention fails, report the exact visible link-ready
+state as a blocker; do not copy the link into a diary or report.
 
 ## Recipient routine
 

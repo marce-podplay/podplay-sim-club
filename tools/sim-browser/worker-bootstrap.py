@@ -162,6 +162,24 @@ def bootstrap(
             "node", str(ROOT / "tools" / "sim-browser" / "controller.mjs"), "open-private-invite",
             "--session", str(session_path), "--intent", invitation_intent,
         ], timeout_seconds=timeout_seconds)
+    elif journey_action == "capture_share_invitation":
+        # A fresh owner login can land on optional region onboarding even
+        # though a confirmed reservation already exists. The regular
+        # Reservations → Upcoming route is visible, reversible navigation;
+        # the economical character still chooses Manage booking and creates a
+        # link through rendered controls.
+        _run([
+            "node", str(ROOT / "tools" / "sim-browser" / "controller.mjs"), "navigate",
+            "--session", str(session_path), "--path", "/reservations",
+        ], timeout_seconds=timeout_seconds)
+        _run([
+            "node", str(ROOT / "tools" / "sim-browser" / "controller.mjs"), "wait-feature",
+            "--session", str(session_path), "--feature", "reservation.upcoming", "--seconds", "8",
+        ], timeout_seconds=timeout_seconds)
+        _run([
+            "node", str(ROOT / "tools" / "sim-browser" / "controller.mjs"), "act",
+            "--session", str(session_path), "--feature", "reservation.upcoming",
+        ], timeout_seconds=timeout_seconds)
     _run([
         "node", str(ROOT / "tools" / "sim-browser" / "controller.mjs"), "observe",
         "--session", str(session_path), "--seconds", str(observe_seconds),

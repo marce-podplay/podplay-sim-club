@@ -128,6 +128,7 @@ def worker_prompt(*, root: Path, worker_id: str, runbook_payload: Dict[str, Any]
 Contract (not product proof):
 - worker: {worker_id}
 - contract: {contract_key}
+- intent: {packet.get('intentId')}
 - actor: {packet['actorId']}
 - browser job: {packet['browserJobKey']}
 - playbook: {packet['playbook']}
@@ -147,6 +148,15 @@ stopped at live availability before selecting a date, slot, payment, or
 booking confirmation. Begin by observing that current rendered state; do not
 repeat the entry routine. The current evidence bundle was captured after that
 preflight, not before it.
+
+For an owner invitation-capture playbook, the coordinator has already opened
+the rendered Reservations → Upcoming list after visible login. Inspect the
+matching current booking card, then use its visible Manage booking and
+invitation controls. Do not return to optional Booking onboarding.
+When the rendered link-ready confirmation appears, run
+`node tools/sim-browser/controller.mjs capture-invite-link --session state/worker-sessions/{session_ref}.json --intent {packet.get('intentId')}`
+before the required final report. This retains the link privately and never
+prints it.
 
 Normal page transitions may take a few seconds. If a needed rendered control
 is initially absent or loading, wait and re-observe the current screen before
