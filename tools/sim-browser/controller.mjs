@@ -116,7 +116,14 @@ async function nodeFor(cdp, mapped) {
     await cdp.send('Accessibility.enable');
     await cdp.send('DOM.getDocument');
     const tree = await cdp.send('Accessibility.getFullAXTree');
-    const matches = (tree.nodes ?? []).filter((node) => node.role?.value === mapped.role && node.name?.value === mapped.name && Number.isInteger(node.backendDOMNodeId));
+    // Availability capacity is live product text (for example, "3 open Pods"
+    // rather than "4 open Pods").  A mapped `namePrefix` keeps the action
+    // constrained to one visible time row without treating a capacity change
+    // as a different control.
+    const nameMatches = (node) => typeof mapped.namePrefix === 'string'
+      ? node.name?.value?.startsWith(mapped.namePrefix)
+      : node.name?.value === mapped.name;
+    const matches = (tree.nodes ?? []).filter((node) => node.role?.value === mapped.role && nameMatches(node) && Number.isInteger(node.backendDOMNodeId));
     if (!matches.length) throw new Error('allowlisted visible control is not present');
     if (matches.every((match) => match.properties?.some((property) => property.name === 'disabled' && property.value?.value === true))) {
       throw new Error('allowlisted visible control is disabled');
@@ -390,7 +397,8 @@ async function waitFeature() {
     while (Date.now() < deadline) {
       const tree = await cdp.send('Accessibility.getFullAXTree');
       const ready = (tree.nodes ?? []).some((node) =>
-        node.role?.value === mapped.role && node.name?.value === mapped.name &&
+        node.role?.value === mapped.role &&
+        (typeof mapped.namePrefix === 'string' ? node.name?.value?.startsWith(mapped.namePrefix) : node.name?.value === mapped.name) &&
         !node.properties?.some((property) => property.name === 'disabled' && property.value?.value === true));
       if (ready) {
         console.log(JSON.stringify({ status: 'visible_feature_ready', actor: session.actor, feature: args.feature }));

@@ -114,7 +114,10 @@ def worker_prompt(*, root: Path, worker_id: str, runbook_payload: Dict[str, Any]
         agreement_instruction = (
             f" Agreement fact: {participant_count} named participants for {duration_minutes} minutes. "
             f"If the review shows another group size and the visible group controls can reach {participant_count}, "
-            f"adjust only to {participant_count}, re-observe, and then continue the review."
+            f"adjust only to {participant_count}, re-observe, and then continue the review. "
+            "At pre-booking review, the product can show only the booker even for a multi-player group; "
+            "treat the rendered group count as the agreement check and use the post-booking invitation link "
+            "to bring in the other named participant. Do not block merely because that future invitee is not yet named."
         )
     availability_only = packet.get("journeyAction") == "review_training_availability"
     phase_instruction = (

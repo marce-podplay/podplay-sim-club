@@ -189,10 +189,10 @@
     "booking.slot.today_1400": {
       "kind": "visible_click",
       "role": "button",
-      "name": "2:00pm 4 open Pods",
+      "namePrefix": "2:00pm ",
       "clickTarget": "right_edge",
       "rightEdgeInset": 34,
-      "evidence": "the visible 2:00 pm Open Pod slot was selected"
+      "evidence": "the visible 2:00 pm Open Pod slot was selected regardless of its live capacity label"
     },
     "booking.slot.today_1500": {
       "kind": "visible_click",

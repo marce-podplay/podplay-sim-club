@@ -41,7 +41,7 @@ CHECK_IN_PLAYBOOK_ACTIONS = {"check_in_training"}
 # A blocked rendered journey remains quarantined by default.  A deliberately
 # narrow playbook revision may reopen a job once while preserving every earlier
 # observation as history.
-BOOKING_PLAYBOOK_REVISION = "rendered-review-group-price-slot-toggle-and-next-day-v4"
+BOOKING_PLAYBOOK_REVISION = "rendered-review-group-capacity-invitee-after-booking-v5"
 INVITATION_PLAYBOOK_REVISION = "authenticated-private-invite-owner-route-and-accept-pay-v3"
 
 

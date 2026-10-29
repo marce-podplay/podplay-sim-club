@@ -51,8 +51,12 @@ character, not authority to create a booking.
    invitation controls before progressing. Availability labels are volatile:
    map a slot only after this actor sees its current rendered label.
 7. Compare the rendered review with the intent. The named booker may continue
-   only if it still satisfies the accepted agreement and no separate payer or
-   price-evidence gate is outstanding.
+   only if its date, time, duration, venue, and **group capacity** satisfy the
+   accepted agreement and no separate payer or price-evidence gate is
+   outstanding. A group booking review can show the booker alone before the
+   product creates its share link; the future invitee's name is therefore not
+   required at this stage. The post-booking invitation journey is where that
+   named participant claims their slot.
 8. After a successful visible booking, follow the recipient-owned invitation
    journey separately. Do not infer acceptance, check-in, attendance, play,
    or a result from booking progress.
