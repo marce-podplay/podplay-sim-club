@@ -75,6 +75,11 @@ state as a blocker; do not copy the link into a diary or report.
   agreement.
 - Accept only after the recipient sees the expected session and chooses to do
   so. Otherwise record the visible mismatch, ask a social question, or pass.
+- In an explicitly authorized Club Lab Preview journey, a matching invitation
+  may show either **Accept invite** (when no payment is due) or **Accept and
+  Pay** (when the rendered Preview card and total are shown). Both are
+  recipient-owned visible decisions. Do not use this exception for production
+  payments or if the session details differ from the agreement.
 
 ## Boundary
 

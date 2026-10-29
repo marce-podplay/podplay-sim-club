@@ -293,6 +293,12 @@
       "role": "button",
       "name": "Accept invite",
       "evidence": "the visible player invitation acceptance was activated"
+    },
+    "booking.invitation.accept_and_pay": {
+      "kind": "visible_click",
+      "role": "button",
+      "name": "Accept and Pay",
+      "evidence": "the visible player invitation acceptance and Preview payment was activated"
     }
   }
 }

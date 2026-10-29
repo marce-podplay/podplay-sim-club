@@ -158,6 +158,12 @@ When the rendered link-ready confirmation appears, run
 before the required final report. This retains the link privately and never
 prints it.
 
+For a recipient invitation playbook in this explicitly authorized Preview
+environment, a matching session may expose either Accept invite or Accept and
+Pay. When the rendered card and total are present and the details match the
+agreement, the latter is an allowed visible acceptance step; wait for the
+product's rendered outcome before reporting it.
+
 Normal page transitions may take a few seconds. If a needed rendered control
 is initially absent or loading, wait and re-observe the current screen before
 calling it unavailable. Report a blocker only after that bounded visible wait;
