@@ -127,6 +127,11 @@ def bootstrap(
     contract_key = packet.get("contractKey")
     if not isinstance(actor_id, str) or not isinstance(contract_key, str):
         raise ValueError("active worker packet is incomplete")
+    journey_action = packet.get("journeyAction")
+    invitation_intent = packet.get("intentId")
+    needs_private_invitation = journey_action == "redeem_share_invitation"
+    if needs_private_invitation and not isinstance(invitation_intent, str):
+        raise ValueError("invitation worker is missing its local intent reference")
 
     reference = _safe_ref(contract_key)
     storage = Storage(ROOT)
@@ -147,6 +152,16 @@ def bootstrap(
             login_status = "visible_login_settled"
         finally:
             _stop_handoff(handoff)
+    # The product may complete sign-in at its ordinary root route, which can
+    # expose first-use onboarding before the recipient ever sees the private
+    # invitation.  Reopen the owner-delivered local mailbox item only after
+    # visible login settles, using the controller's origin-checked private
+    # handoff rather than retaining or printing the bearer URL here.
+    if needs_private_invitation:
+        _run([
+            "node", str(ROOT / "tools" / "sim-browser" / "controller.mjs"), "open-private-invite",
+            "--session", str(session_path), "--intent", invitation_intent,
+        ], timeout_seconds=timeout_seconds)
     _run([
         "node", str(ROOT / "tools" / "sim-browser" / "controller.mjs"), "observe",
         "--session", str(session_path), "--seconds", str(observe_seconds),

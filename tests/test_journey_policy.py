@@ -113,7 +113,7 @@ class JourneyPolicyTests(unittest.TestCase):
             saved = json.loads(path.read_text())["jobs"][first["jobKey"]]
             self.assertEqual("queued", reopened["status"])
             self.assertEqual("queued", saved["status"])
-            self.assertEqual("booking_playbook_revision", saved["retryReason"])
+            self.assertEqual("playbook_revision", saved["retryReason"])
             self.assertTrue(pending_or_new(root, task=task, role="player"))
             self.assertFalse(blocked_job_is_reopenable(saved))
 

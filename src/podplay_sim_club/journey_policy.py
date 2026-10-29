@@ -38,12 +38,11 @@ INVITATION_PLAYBOOK_ACTIONS = {
 
 CHECK_IN_PLAYBOOK_ACTIONS = {"check_in_training"}
 
-# A blocked rendered journey remains quarantined by default.  This revision is
-# deliberately narrow: it represents the booking playbook learning how to
-# match the social group size and accept the rendered Preview price the
-# coordinator authorized.  A later revision may reopen such a job once, while
-# preserving every earlier observation as history.
+# A blocked rendered journey remains quarantined by default.  A deliberately
+# narrow playbook revision may reopen a job once while preserving every earlier
+# observation as history.
 BOOKING_PLAYBOOK_REVISION = "rendered-review-group-price-slot-toggle-and-next-day-v4"
+INVITATION_PLAYBOOK_REVISION = "authenticated-private-invite-after-login-v1"
 
 
 def _playbook_for(action: str) -> Optional[str]:
@@ -60,15 +59,16 @@ def _playbook_for(action: str) -> Optional[str]:
 def _playbook_revision(action: str) -> Optional[str]:
     if action in BOOKING_PLAYBOOK_ACTIONS:
         return BOOKING_PLAYBOOK_REVISION
+    if action in INVITATION_PLAYBOOK_ACTIONS:
+        return INVITATION_PLAYBOOK_REVISION
     return None
 
 
 def blocked_job_is_reopenable(job: Dict[str, Any]) -> bool:
     """Whether a quarantined job predates its current narrow playbook revision.
 
-    This is a local scheduling fact only.  It never converts a prior browser
-    observation into a product outcome, and it applies solely to a booking
-    playbook whose explicit revision changed.
+    This is a local scheduling fact only. It never converts a prior browser
+    observation into a product outcome.
     """
     if not isinstance(job, dict) or job.get("status") != "blocked":
         return False
@@ -167,7 +167,7 @@ def dispatch(root: Path, *, task: Dict[str, Any], role: str, observed_at: Option
         if reopen_for_revision:
             jobs[key].update({
                 "retryOfPlaybookRevision": existing.get("playbookRevision", "unversioned"),
-                "retryReason": "booking_playbook_revision",
+                "retryReason": "playbook_revision",
                 "reopenedAt": observed,
             })
         storage.write_json(storage.state / STATE_FILE, {"schemaVersion": 1, "jobs": jobs})

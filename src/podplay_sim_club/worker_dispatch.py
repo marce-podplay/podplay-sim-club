@@ -33,6 +33,11 @@ def _launch_packet(contract: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "contractKey": contract["contractKey"],
         "actorId": contract["actorId"],
+        # The intent reference is a local scheduling fact, not a product ID,
+        # URL, credential, or bearer secret. Recipient invitation workers need
+        # it to select the already delivered private mailbox entry only after
+        # the coordinator completes visible login.
+        "intentId": contract.get("intentId"),
         "browserJobKey": contract["browserJobKey"],
         "journeyAction": contract.get("journeyAction"),
         "playbook": contract.get("playbook"),
