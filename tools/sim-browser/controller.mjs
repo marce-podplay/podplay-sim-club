@@ -95,7 +95,8 @@ async function feature(name) {
   const map = JSON.parse(await readFile(new URL('./feature-map.json', import.meta.url), 'utf8'));
   const row = map.features?.[name];
   const validSelector = typeof row?.selector === 'string';
-  const validAccessibleName = typeof row?.role === 'string' && typeof row.name === 'string';
+  const validAccessibleName = typeof row?.role === 'string'
+    && (typeof row.name === 'string' || typeof row.namePrefix === 'string');
   const validCoordinates = Number.isFinite(row?.coordinates?.x) && Number.isFinite(row?.coordinates?.y);
   const validClickTarget = row?.clickTarget === undefined || row.clickTarget === 'right_edge';
   if (!row || !['visible_click', 'visible_text_replace', 'secure_browser_handoff_fill'].includes(row.kind) || (!validSelector && !validAccessibleName && !validCoordinates) || !validClickTarget) throw new Error('feature is not allowlisted');
