@@ -17,10 +17,46 @@ from .time import isoformat, parse_instant
 STATE_FILE = "worker-contracts.json"
 INTENTS_FILE = "booking-intents.json"
 WORKER_OUTCOMES = {"visible_progress", "unexpected_ui", "blocked", "not_started", "pass"}
+BOOKING_ACTIONS = {"plan_training_booking", "review_training_availability"}
 
 
 def _is_economical_worker(worker_id: str) -> bool:
     return isinstance(worker_id, str) and worker_id.startswith("economical:") and len(worker_id) > len("economical:")
+
+
+def _retire_obsolete_booking_contracts_locked(storage: Storage, contracts: Dict[str, Any], *, observed_at: str) -> None:
+    """Remove superseded/expired agreements from the economical worker lane.
+
+    A durable queued contract can outlive the social agreement that created
+    it.  Retiring it locally preserves the audit trail while ensuring a stale
+    booking never preempts a newer agreed team session.
+    """
+    ledger = storage.load_json(storage.state / INTENTS_FILE, default={})
+    intents = ledger.get("intents", {}) if isinstance(ledger, dict) else {}
+    journeys = storage.load_json(storage.state / JOURNEY_STATE_FILE, default={})
+    jobs = journeys.get("jobs", {}) if isinstance(journeys, dict) else {}
+    jobs_changed = False
+    for contract in contracts.values():
+        if not isinstance(contract, dict) or contract.get("status") != "queued":
+            continue
+        if contract.get("journeyAction") not in BOOKING_ACTIONS:
+            continue
+        intent_id = contract.get("intentId")
+        intent = intents.get(intent_id) if isinstance(intents, dict) and isinstance(intent_id, str) else None
+        if isinstance(intent, dict) and intent.get("status") == "agreed":
+            continue
+        contract.update({
+            "status": "retired",
+            "retiredAt": observed_at,
+            "retirementReason": "agreement_is_no_longer_agreed",
+        })
+        job_key = contract.get("browserJobKey")
+        job = jobs.get(job_key) if isinstance(jobs, dict) and isinstance(job_key, str) else None
+        if isinstance(job, dict) and job.get("status") == "queued":
+            job.update({"status": "retired", "retiredAt": observed_at, "retirementReason": "agreement_is_no_longer_agreed"})
+            jobs_changed = True
+    if jobs_changed:
+        storage.write_json(storage.state / JOURNEY_STATE_FILE, {"schemaVersion": 1, "jobs": jobs})
 
 
 def _launch_packet(contract: Dict[str, Any]) -> Dict[str, Any]:
@@ -131,6 +167,7 @@ def queue(root: Path, *, browser_job: Dict[str, Any]) -> Dict[str, Any]:
         state = storage.load_json(storage.state / STATE_FILE, default={})
         contracts = state.get("contracts", {}) if isinstance(state, dict) else {}
         contracts = contracts if isinstance(contracts, dict) else {}
+        _retire_obsolete_booking_contracts_locked(storage, contracts, observed_at=observed_at)
         existing = contracts.get(contract_key) if isinstance(contracts.get(contract_key), dict) else None
         if existing is None:
             contracts[contract_key] = {
