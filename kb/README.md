@@ -50,12 +50,23 @@ Start here:
   — current journey status, verified timing behaviour, and the reconstruction
   checklist for a fresh chat.
 
-The short version is:
+Current player operation is the [lead and dispatcher operating model](lead-and-dispatcher-operating-model.md)
+and the [operations hand-off — 2026-10-30](current-operations-handoff-2026-10-30.md).
+Those two documents are canonical. Older notes in this directory that describe
+a lead-owned Preview adapter, bearer token, or direct product integration are
+design history, not authority to call a product API for a Sim.
 
 ```text
 motive -> belief -> intention -> social commitment -> legal offer
-       -> lead-validated product action -> read-back evidence -> learning
+       -> social-engine work item -> one isolated rendered-browser contract
+       -> rendered evidence -> learning
 ```
+
+The social engine forms social agreements and emits work items. The
+coordinator/lead handles dispatch, login/bootstrap, research, and evidence
+review. A cheap worker performs one named, isolated rendered-browser contract.
+Sims do not use product APIs or integrations. A product claim requires the
+corresponding rendered confirmation.
 
 Every arrow is a boundary. A desire is not an intention; a message is not an
 agreement; an agreement is not a booking; an accepted invitation is not a

@@ -108,13 +108,23 @@ among offers already made legal here.
 
 ## 6. Execution, evidence, and learning — *what really happened?*
 
-The lead owns adapters and read-backs:
+Player product steps are dispatched rendered-browser journeys. The social
+engine emits a work item after a social agreement. The coordinator handles
+login/bootstrap, research, and evidence review, and assigns one cheap worker
+to one isolated contract. A booking, invitation, acceptance, check-in, or
+other product claim requires the corresponding rendered confirmation. The
+lead does not call product APIs or integrations on a Sim's behalf. See the
+[lead and dispatcher operating model](lead-and-dispatcher-operating-model.md)
+and the [operations hand-off](current-operations-handoff-2026-10-30.md).
 
-- product login and safe self-discovery;
-- availability, evaluation, booking, invitation, redemption, check-in, and
-  cancellation adapters;
-- owner/admin probes such as creating or updating a series;
-- read-back evidence and compact issue creation;
+These are capability boundaries, not lead-owned product API calls:
+
+- product login and safe self-discovery on the isolated browser handoff;
+- availability, booking, invitation, redemption, and check-in as named
+  browser journeys;
+- owner/admin probes, which remain separate research and are not Sim player
+  actions;
+- sanitized evidence and compact issue creation;
 - feedback into beliefs, motives, relationships, and commitments.
 
 Examples:
@@ -141,7 +151,7 @@ These invariants are more important than any individual scenario:
 | played -> winner | deterministic replay or named reporter attests |
 | expected asset -> actual asset | actor self-discovery reads the product |
 | mismatch -> defect | evidence is compared with a documented contract |
-| actor proposal -> preview write | lead applies the guarded adapter |
+| actor proposal -> preview write | social engine emits a work item; coordinator dispatches one rendered-browser contract |
 
 ## Capability growth
 

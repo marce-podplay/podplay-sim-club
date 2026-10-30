@@ -43,10 +43,12 @@ character, not authority to create a booking.
    constraint. Re-observe the new day before choosing a slot; do not infer
    that today's empty grid applies to it.
 5. After selecting an experience, wait independently for the intended live
-   slot control to render. After selecting that slot, wait one second and
-   re-observe for the rendered **Continue** control before trying to activate
-   it. Do not classify an absent control during its loading transition as a
-   product failure.
+   slot control to render. After selecting that slot, wait at least eight
+   seconds before classifying the rendered **Continue** control as absent.
+   Prefer the mapped `wait-feature` wait when that control is in the feature
+   map. The control was absent at one and three seconds and enabled at eight
+   seconds. Do not classify an absent control during its loading transition
+   as a product failure.
 6. Inspect date, time, duration, court/pod, price, and any player-count or
    invitation controls before progressing. Availability labels are volatile:
    map a slot only after this actor sees its current rendered label.

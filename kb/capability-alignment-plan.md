@@ -100,10 +100,16 @@ observe product/community
   -> advertise legal offers
   -> actor accepts, asks, or passes
   -> update conversation/commitment
-  -> lead executes authorized adapter
-  -> read back and append evidence
+  -> social engine emits a browser work item
+  -> coordinator dispatches one rendered-browser contract
+  -> append rendered evidence
   -> update motives, beliefs, relationships, issues
 ```
+
+A product claim requires that rendered confirmation. The lead does not execute
+a product API on behalf of a Sim. See the
+[lead and dispatcher operating model](lead-and-dispatcher-operating-model.md)
+and the [operations hand-off](current-operations-handoff-2026-10-30.md).
 
 No model call writes a fact, projection, URL, slot, price, participant state, or
 winner directly. It proposes one choice from already legal offers.

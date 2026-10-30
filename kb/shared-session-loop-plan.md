@@ -19,6 +19,13 @@ invitation was opened, a captured link does not imply that it was sent, an
 accepted invitation does not imply check-in, and a replay is not PodPlay
 attendance evidence.
 
+Current player booking, invitation, and check-in follow the rendered-browser
+playbooks, the [lead and dispatcher operating model](lead-and-dispatcher-operating-model.md),
+and the [operations hand-off](current-operations-handoff-2026-10-30.md).
+Slices below that describe a lead or adapter redeeming a bearer URL are
+earlier design notes. They are not authority to call a product API for a Sim.
+A product claim still requires the corresponding rendered confirmation.
+
 ## Slice 1 — owner share opportunity (implemented)
 
 **Purpose:** once a player-owned training or team-signup booking exists, expose

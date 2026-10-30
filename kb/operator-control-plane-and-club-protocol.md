@@ -103,7 +103,7 @@ life.
 | **Operator control plane** | Preview target policy, feature contracts, release/change evidence, probe approval, issue candidates | request bounded research, surface evidence, authorize an adapter within policy | impersonate a community decision; place credentials or raw product data in community state |
 | **Club operations** | Sofia/Riley staff inbox, staff acknowledgement, player-facing explanation, support follow-up | translate operator evidence into an addressed community request; pass or defer inappropriate work | override product permissions, player consent, payment approval, or attendance evidence |
 | **Community communication** | proposals, invitations, questions, acceptance/pass/counter, observations, results | form social commitments and report observed outcomes | treat delivery as acceptance, a booking as attendance, or configuration as entitlement |
-| **Preview product adapter** | one actor's bounded browser/API session and read-back | execute an approved capability and return sanitized evidence | persist credentials, bypass roles, follow redirects off the approved origin, or infer missing facts |
+| **Preview product adapter** | one actor's isolated rendered-browser session and sanitized evidence | execute an approved visible capability and return sanitized evidence | call a product API for a Sim, persist credentials, bypass roles, follow redirects off the approved origin, or infer missing facts |
 | **Product research and change detection** | versioned feature contracts, baselines, probes, issue candidates | classify observed/change/unknown; request controlled reproduction | label a regression from one failed journey |
 
 ## Channels
@@ -130,10 +130,15 @@ social message—never an automatic acceptance.
 
 ### 3. Product-session boundary
 
-Browser and API access is not a chat channel. A named actor receives a
-time-bounded capability grant for a feature contract and acts only with that
-actor's existing Preview identity. Credentials, tokens, browser handoffs, raw
-IDs, product URLs, and raw responses remain in ignored local sidecars.
+A rendered browser session is not a chat channel. Current Sim journeys use
+that isolated browser only; the lead does not call product APIs or
+integrations on a Sim's behalf. See the
+[lead and dispatcher operating model](lead-and-dispatcher-operating-model.md)
+and the [operations hand-off](current-operations-handoff-2026-10-30.md).
+A named actor receives a time-bounded capability grant for a feature contract
+and acts only with that actor's existing Preview identity. Credentials,
+tokens, browser handoffs, raw IDs, product URLs, and raw responses remain in
+ignored local sidecars.
 
 ## Control-plane envelope
 
