@@ -20,7 +20,7 @@ from typing import Any, Dict
 
 from .storage import Storage
 from .time import isoformat, parse_instant
-from .worker_dispatch import claim_next, claim_specific, report, runbook
+from .worker_dispatch import active_packet, claim_next, claim_specific, report, runbook
 
 
 LAUNCHER_NAME = "codex-cli-economical-worker"
@@ -256,7 +256,20 @@ def launch(root: Path, *, worker_id: str, execute: bool, contract_key: str | Non
             "remoteWrites": 0,
         }
 
-    claimed = claim_specific(root, contract_key=contract_key, worker_id=worker_id) if contract_key else claim_next(root, worker_id=worker_id)
+    # ``worker-dispatch next`` is a valid dispatcher handoff: it atomically
+    # claims the contract, then a coordinator can launch that same named
+    # worker.  Do not reject this normal two-command flow as unavailable.
+    # A pre-existing active contract is reusable only by the same economical
+    # worker and only when it is exactly the requested key.
+    if contract_key:
+        active = active_packet(root, worker_id=worker_id)
+        packet = active.get("launchPacket") if isinstance(active, dict) else None
+        if active.get("action") == "worker_contract_active" and isinstance(packet, dict) and packet.get("contractKey") == contract_key:
+            claimed = {"action": "worker_contract_resumed", "status": "active", "workerId": worker_id, "launchPacket": packet, "remoteWrites": 0}
+        else:
+            claimed = claim_specific(root, contract_key=contract_key, worker_id=worker_id)
+    else:
+        claimed = claim_next(root, worker_id=worker_id)
     if claimed.get("action") == "pass":
         return claimed
     active_runbook = runbook(root, worker_id=worker_id)

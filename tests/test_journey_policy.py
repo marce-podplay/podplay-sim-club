@@ -117,6 +117,22 @@ class JourneyPolicyTests(unittest.TestCase):
             self.assertTrue(pending_or_new(root, task=task, role="player"))
             self.assertFalse(blocked_job_is_reopenable(saved))
 
+    def test_new_check_in_playbook_revision_reopens_a_blocked_job_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            task = {"action": "check_in_training", "intentId": "intent:one", "actorId": "andy-bogard"}
+            first = dispatch(root, task=task, role="player", observed_at="2026-10-22T12:00:00Z")
+            path = root / "state" / "browser-journeys.json"
+            state = json.loads(path.read_text())
+            state["jobs"][first["jobKey"]].update({"status": "blocked", "playbookRevision": None})
+            path.write_text(json.dumps(state))
+
+            reopened = dispatch(root, task=task, role="player", observed_at="2026-10-22T12:01:00Z")
+            saved = json.loads(path.read_text())["jobs"][first["jobKey"]]
+            self.assertEqual("queued", reopened["status"])
+            self.assertEqual("first-use-region-reservations-v1", saved["playbookRevision"])
+            self.assertEqual("playbook_revision", saved["retryReason"])
+
     def test_stale_blocked_booking_job_is_pending_for_its_revision_retry(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

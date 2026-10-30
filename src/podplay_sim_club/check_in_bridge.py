@@ -93,6 +93,16 @@ def next_task(root: Path, *, now: datetime) -> Dict[str, Any]:
             continue
         booking = intent.get("booking") if isinstance(intent.get("booking"), dict) else {}
         occurrence = booking.get("occurrenceKey")
+        plan = intent.get("previewPlan") if isinstance(intent.get("previewPlan"), dict) else {}
+        start, end = plan.get("startTime"), plan.get("endTime")
+        # Do not let an old unanswered arrival choice monopolize the single
+        # sequential browser lane.  The product check-in journey is only
+        # meaningful during its own verified session window.
+        if not isinstance(start, str) or not isinstance(end, str):
+            continue
+        eligible, _detail = check_in_window(parse_instant(start), parse_instant(end), now)
+        if not eligible:
+            continue
         choices = intent.get("checkInChoices") if isinstance(intent.get("checkInChoices"), dict) else {}
         for actor_id, choice in choices.items():
             if (

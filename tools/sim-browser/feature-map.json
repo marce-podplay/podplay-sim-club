@@ -71,7 +71,7 @@
     "navigation.reservations": {
       "kind": "visible_click",
       "role": "link",
-      "name": "Reservations",
+      "namePrefix": "Reservations",
       "evidence": "the visible Reservations navigation control was activated"
     },
     "reservation.manage_booking": {

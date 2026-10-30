@@ -47,6 +47,10 @@ BOOKING_PLAYBOOK_REVISION = "rendered-review-group-capacity-window-context-v6"
 # an authenticated invitation session, and is a narrow reason to reopen prior
 # blank-invite blockers once.
 INVITATION_PLAYBOOK_REVISION = "authenticated-private-invite-member-route-v5"
+# v1 teaches the worker the normal first-use region choice and the rendered
+# Reservations tab variant which includes a notification label.  This is a
+# narrow retry reason for a check-in that stopped at that visible dialog.
+CHECK_IN_PLAYBOOK_REVISION = "first-use-region-reservations-v1"
 
 
 def _playbook_for(action: str) -> Optional[str]:
@@ -65,6 +69,8 @@ def _playbook_revision(action: str) -> Optional[str]:
         return BOOKING_PLAYBOOK_REVISION
     if action in INVITATION_PLAYBOOK_ACTIONS:
         return INVITATION_PLAYBOOK_REVISION
+    if action in CHECK_IN_PLAYBOOK_ACTIONS:
+        return CHECK_IN_PLAYBOOK_REVISION
     return None
 
 

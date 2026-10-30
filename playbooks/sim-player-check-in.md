@@ -13,18 +13,25 @@ It is an arrival routine for a booking the Sim can already see in the product.
 
 ## Visible routine
 
-1. Open the **Reservations list** in the product UI and locate the current
+1. If a first-use **Select Region** dialog is rendered, choose the Sim's
+   expected region and use its rendered **Confirm** control. Re-observe the
+   product before continuing. This normal preference selection is not a
+   check-in and must not be inferred from a blank or loading page.
+2. Open the **Reservations list** in the product UI and locate the current
    reservation there. Do not begin from a reservation-detail page: the
    rendered check-in control can be present there without opening the
    front-desk handoff.
-2. Compare the rendered session with the local agreement: people, venue,
+   The tab may include a notification suffix (for example, “Reservations New
+   notifications”); choose that rendered Reservations control rather than
+   requiring an exact text match.
+3. Compare the rendered session with the local agreement: people, venue,
    timing, and the available arrival control.
-3. Use the visible check-in control only if it is present and the Sim elects
+4. Use the visible check-in control only if it is present and the Sim elects
    to arrive. A rendered QR dialog saying to show it at the front desk is an
    arrival handoff, not a completed check-in; keep the code ephemeral and use
    the staff QR playbook. Capture a bounded screenshot plus sanitized
    console/network evidence after the rendered state changes.
-4. Record the observation as check-in evidence only. Wait for independently
+5. Record the observation as check-in evidence only. Wait for independently
    observed `PLAYING` before the Club Floor places the Sim in a pod.
 
 ## Stops

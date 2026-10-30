@@ -97,6 +97,27 @@ class WorkerDispatchTests(unittest.TestCase):
             self.assertEqual(4567, contract["launcher"]["processId"])
             self.assertEqual("codex-cli-economical-worker", contract["launcher"]["kind"])
 
+    def test_launcher_can_start_the_same_contract_after_dispatcher_next_claimed_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            job = dispatch_browser_journey(root, task={
+                "action": "plan_training_booking", "intentId": "intent:resume", "bookerActorId": "andy-bogard",
+            }, role="rally")
+            queued = queue(root, browser_job=job)
+            claim_next(root, worker_id="economical:runner-1")
+            with patch("podplay_sim_club.codex_worker_launcher.shutil.which", return_value="/opt/codex"), patch(
+                "podplay_sim_club.codex_worker_launcher.subprocess.run", return_value=Mock(returncode=0)
+            ), patch("podplay_sim_club.codex_worker_launcher._prepared_login_receipt", return_value=True), patch(
+                "podplay_sim_club.codex_worker_launcher.subprocess.Popen"
+            ) as popen:
+                popen.return_value.pid = 457
+                started = launch(
+                    root, worker_id="economical:runner-1", execute=True,
+                    contract_key=queued["contractKey"],
+                )
+            self.assertEqual("economical_worker_started", started["action"])
+            self.assertEqual("active", json.loads((root / "state" / "worker-contracts.json").read_text())["contracts"][queued["contractKey"]]["status"])
+
     def test_launcher_does_not_delegate_a_public_shell_only_browser(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
