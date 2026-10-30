@@ -41,7 +41,10 @@ CHECK_IN_PLAYBOOK_ACTIONS = {"check_in_training"}
 # A blocked rendered journey remains quarantined by default.  A deliberately
 # narrow playbook revision may reopen a job once while preserving every earlier
 # observation as history.
-BOOKING_PLAYBOOK_REVISION = "rendered-review-group-capacity-window-context-v6"
+# v8 supplies an explicit rendered snapshot handoff to economical workers and
+# maps the observed 9:00 pm through 10:00 pm Open Pod rows by time, not a
+# volatile capacity label.
+BOOKING_PLAYBOOK_REVISION = "rendered-snapshot-evening-slots-v8"
 # v5 adds a member-only Reservations render check after a delayed login
 # redirect.  It prevents the worker from mistaking the public root shell for
 # an authenticated invitation session, and is a narrow reason to reopen prior

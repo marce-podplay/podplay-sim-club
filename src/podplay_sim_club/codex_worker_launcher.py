@@ -170,7 +170,7 @@ Contract (not product proof):
 First run these commands from the repository root:
 1. Read `{packet['playbook']}` before any browser action.
 2. Attach only to the prepared session with `tools/sim-browser/controller.mjs`.
-3. Inspect the current rendered state. Use only a currently visible allowlisted control; wait and re-observe through normal loading transitions.
+3. First run `node tools/sim-browser/controller.mjs snapshot --session state/worker-sessions/{session_ref}.json` and use its rendered accessibility output as the current screen. Do not call the prepared session unobservable until that command itself fails. Use only a currently visible allowlisted control; wait and re-observe through normal loading transitions.
 4. Before ending, you MUST run exactly one report command. If no visible outcome was recorded, use this safe fallback:
    `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m podplay_sim_club.cli worker-dispatch report --contract {contract_key} --worker {worker_id} --outcome blocked --diary "Stopped with no confirmed product outcome after the bounded visible-browser review."`
 

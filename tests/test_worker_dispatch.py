@@ -185,6 +185,11 @@ class WorkerDispatchTests(unittest.TestCase):
             feature_map["features"]["booking.slot.today_0900"]["name"],
         )
 
+    def test_feature_map_allows_observed_evening_rows_without_a_stale_capacity_match(self):
+        feature_map = json.loads((REPO_ROOT / "tools" / "sim-browser" / "feature-map.json").read_text())
+        self.assertEqual("9:00pm ", feature_map["features"]["booking.slot.tonight_2100"]["namePrefix"])
+        self.assertEqual("9:30pm ", feature_map["features"]["booking.slot.tonight_2130"]["namePrefix"])
+
     def test_detached_worker_rechecks_the_settled_login_boundary(self):
         runner = (REPO_ROOT / "tools" / "sim-browser" / "codex-worker-runner.py").read_text()
         self.assertIn("_prepared_login_receipt(", runner)

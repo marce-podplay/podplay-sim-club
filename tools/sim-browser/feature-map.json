@@ -165,10 +165,26 @@
     "booking.slot.tonight_2200": {
       "kind": "visible_click",
       "role": "button",
-      "name": "10:00pm 4 open Pods",
+      "namePrefix": "10:00pm ",
       "clickTarget": "right_edge",
       "rightEdgeInset": 34,
-      "evidence": "the visible 10:00 pm Open Pod slot was selected"
+      "evidence": "the visible 10:00 pm Open Pod slot was selected regardless of its live capacity label"
+    },
+    "booking.slot.tonight_2100": {
+      "kind": "visible_click",
+      "role": "button",
+      "namePrefix": "9:00pm ",
+      "clickTarget": "right_edge",
+      "rightEdgeInset": 34,
+      "evidence": "the visible 9:00 pm Open Pod slot was selected regardless of its live capacity label"
+    },
+    "booking.slot.tonight_2130": {
+      "kind": "visible_click",
+      "role": "button",
+      "namePrefix": "9:30pm ",
+      "clickTarget": "right_edge",
+      "rightEdgeInset": 34,
+      "evidence": "the visible 9:30 pm Open Pod slot was selected regardless of its live capacity label"
     },
     "booking.slot.today_1000": {
       "kind": "visible_click",
