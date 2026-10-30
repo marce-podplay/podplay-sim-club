@@ -1,18 +1,23 @@
 from pathlib import Path
 import hashlib
+import importlib.util
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-import sys
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from podplay_sim_club.journey_policy import dispatch as dispatch_browser_journey, record_observation
 from podplay_sim_club.storage import Storage
 from podplay_sim_club.worker_dispatch import active_packet, claim, claim_next, queue, report, runbook
-from podplay_sim_club.codex_worker_launcher import _prepared_login_receipt, dispatch_once, launch, reap, worker_prompt
+from podplay_sim_club.codex_worker_launcher import (
+    _prepared_login_receipt, _safe_bootstrap_failure, dispatch_once, launch, reap, worker_prompt,
+)
 
 
 class WorkerDispatchTests(unittest.TestCase):
@@ -139,6 +144,52 @@ class WorkerDispatchTests(unittest.TestCase):
 
             self.assertEqual("coordinator_browser_not_ready", result["action"])
             popen.assert_not_called()
+
+    def test_credential_handoff_child_keeps_existing_pythonpath_and_repo_src(self):
+        spec = importlib.util.spec_from_file_location(
+            "worker_bootstrap_under_test",
+            REPO_ROOT / "tools" / "sim-browser" / "worker-bootstrap.py",
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        src = str(REPO_ROOT / "src")
+        bootstrap = (REPO_ROOT / "tools" / "sim-browser" / "worker-bootstrap.py").read_text()
+        self.assertEqual(1, bootstrap.count("env=_handoff_env()"))
+        with tempfile.TemporaryDirectory() as marker:
+            with patch.dict(os.environ, {"PYTHONPATH": marker}, clear=False):
+                env = module._handoff_env()
+                self.assertEqual(marker, os.environ["PYTHONPATH"])
+            self.assertEqual([src, marker], env["PYTHONPATH"].split(os.pathsep))
+            env["HANDOFF_PATH_MARKER"] = marker
+            probe = subprocess.run(
+                [
+                    sys.executable, "-c",
+                    "import os\n"
+                    "import podplay_sim_club.cli\n"
+                    "parts = os.environ['PYTHONPATH'].split(os.pathsep)\n"
+                    "marker = os.environ['HANDOFF_PATH_MARKER']\n"
+                    "raise SystemExit(0 if parts[0].endswith('/src') and marker in parts else 1)\n",
+                ],
+                cwd=REPO_ROOT,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=30,
+            )
+            self.assertEqual(0, probe.returncode)
+            with patch.dict(os.environ, {"PYTHONPATH": os.pathsep.join([marker, src])}, clear=False):
+                preserved = module._handoff_env()
+            self.assertEqual([marker, src], preserved["PYTHONPATH"].split(os.pathsep))
+        self.assertIn(
+            "Coordinator credential handoff did not become ready",
+            _safe_bootstrap_failure("ERROR worker bootstrap: local credential handoff did not become ready"),
+        )
+        self.assertIn(
+            "did not finish at login.mjs",
+            _safe_bootstrap_failure("ERROR worker bootstrap: local browser helper failed at login.mjs: login did not visibly settle into the product"),
+        )
 
     def test_launch_marker_binds_the_settled_receipt_to_one_handoff(self):
         with tempfile.TemporaryDirectory() as directory:

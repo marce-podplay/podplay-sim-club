@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import select
@@ -65,6 +66,21 @@ def _run(command: list[str], *, timeout_seconds: int) -> subprocess.CompletedPro
     return completed
 
 
+def _handoff_env() -> dict[str, str]:
+    """Make the repo package importable to a fresh ``-m`` interpreter.
+
+    This process inserts ``src`` into its own path. The credential server is a
+    separate interpreter and does not inherit that insertion.
+    """
+    env = os.environ.copy()
+    src = str(ROOT / "src")
+    parts = [part for part in env.get("PYTHONPATH", "").split(os.pathsep) if part]
+    if src not in parts:
+        parts.insert(0, src)
+    env["PYTHONPATH"] = os.pathsep.join(parts)
+    return env
+
+
 def _start_handoff(*, actor_id: str, lifetime_seconds: int) -> tuple[subprocess.Popen[str], int]:
     """Start the existing one-time credential server without relaying its data."""
     process = subprocess.Popen(
@@ -72,7 +88,7 @@ def _start_handoff(*, actor_id: str, lifetime_seconds: int) -> tuple[subprocess.
             sys.executable, "-u", "-m", "podplay_sim_club.cli", "preview", "browser-credential-handoff",
             "--actor", actor_id, "--lifetime", str(lifetime_seconds),
         ],
-        cwd=ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        cwd=ROOT, env=_handoff_env(), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True,
     )
     deadline = time.monotonic() + 10

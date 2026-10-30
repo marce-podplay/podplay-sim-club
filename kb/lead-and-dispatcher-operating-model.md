@@ -106,6 +106,10 @@ Use facts for externally visible confirmations, receipts for a worker's local
 completion, and diaries for the Sim's compact social interpretation. A worker
 exit code is diagnostic only.
 
+Bounded dispatcher assignments are recorded one JSON line at a time in ignored
+`state/agent-attempts/YYYY-MM-DD.jsonl`. The field list, including
+`authorization`, is [agent attempt receipts](agent-attempt-receipts.md).
+
 ## How to handle blockers
 
 1. Inspect the existing contract, local journey state, diary, and sanitized
@@ -128,8 +132,8 @@ In a fresh chat, start by reading:
    `playbooks/`;
 3. this document and `kb/current-operations-handoff-2026-10-30.md`;
 4. ignored local state: `state/browser-journeys.json`,
-   `state/worker-contracts.json`, `state/worker-evidence/`, actor diaries,
-   and any active-session projection; and
+   `state/worker-contracts.json`, `state/worker-evidence/`,
+   `state/agent-attempts/`, actor diaries, and any active-session projection; and
 5. the latest `git log --oneline` and `git status`.
 
 Run a bounded engine tick only when the user requests progression. Launch only

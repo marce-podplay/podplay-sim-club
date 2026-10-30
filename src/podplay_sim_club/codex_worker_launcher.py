@@ -39,6 +39,8 @@ def _safe_bootstrap_failure(stderr: str) -> str:
     private invite material.  The coordinator still needs to distinguish a
     login delay from a failure opening the local private handoff.
     """
+    if "local credential handoff did not become ready" in stderr:
+        return "Coordinator credential handoff did not become ready before the economical character turn."
     matched = re.search(r"(?:failed|timed out) at ([A-Za-z0-9_.-]+)(?:: ([A-Za-z ]+))?", stderr)
     if matched:
         detail = f" ({matched.group(2)})" if matched.group(2) else ""
