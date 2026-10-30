@@ -432,3 +432,208 @@ class WorkerDispatchTests(unittest.TestCase):
             self.assertEqual("blocked", row["outcome"])
             self.assertEqual(0, row["remoteWrites"])
 
+
+PAST_SESSION_END = "2020-01-01T00:00:00Z"
+FUTURE_SESSION_END = "2099-01-01T00:00:00Z"
+
+
+def _write_intent(root: Path, intent_id: str, *, end_time: str | None = None, status: str = "agreed") -> None:
+    path = root / "state" / "booking-intents.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ledger = json.loads(path.read_text()) if path.is_file() else {"schemaVersion": 1, "intents": {}}
+    intent = {"id": intent_id, "status": status, "journey": "customer_training"}
+    if end_time is not None:
+        intent["previewPlan"] = {"endTime": end_time}
+    ledger.setdefault("intents", {})[intent_id] = intent
+    path.write_text(json.dumps(ledger))
+
+
+class SessionWindowRetirementTests(unittest.TestCase):
+    def test_expired_booking_work_is_retired_and_cannot_launch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_intent(root, "intent:expired-booking", end_time=PAST_SESSION_END)
+            job = dispatch_browser_journey(root, task={
+                "action": "plan_training_booking", "intentId": "intent:expired-booking", "bookerActorId": "andy-bogard",
+            }, role="player")
+            queued = queue(root, browser_job=job)
+
+            self.assertEqual("retired", job["status"])
+            self.assertEqual("retired", queued["status"])
+            saved = json.loads((root / "state" / "worker-contracts.json").read_text())["contracts"][queued["contractKey"]]
+            self.assertEqual("session_window_elapsed", saved["retirementReason"])
+            with self.assertRaisesRegex(ValueError, "unavailable"):
+                claim(root, contract_key=queued["contractKey"], worker_id="economical:runner-1")
+            self.assertEqual("pass", claim_next(root, worker_id="economical:runner-1")["action"])
+
+    def test_expired_invitation_work_is_retired_and_cannot_launch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_intent(root, "intent:expired-invite", end_time=PAST_SESSION_END, status="booked")
+            job = dispatch_browser_journey(root, task={
+                "action": "redeem_share_invitation", "intentId": "intent:expired-invite", "recipientActorId": "terry-bogard",
+            }, role="player")
+            queued = queue(root, browser_job=job)
+
+            self.assertEqual("retired", queued["status"])
+            saved = json.loads((root / "state" / "worker-contracts.json").read_text())["contracts"][queued["contractKey"]]
+            self.assertEqual("redeem_share_invitation", saved["journeyAction"])
+            self.assertEqual("session_window_elapsed", saved["retirementReason"])
+            with self.assertRaisesRegex(ValueError, "unavailable"):
+                claim(root, contract_key=queued["contractKey"], worker_id="economical:runner-1")
+            self.assertEqual("pass", claim_next(root, worker_id="economical:runner-1")["action"])
+
+    def test_in_window_work_remains_launchable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_intent(root, "intent:open-booking", end_time=FUTURE_SESSION_END)
+            job = dispatch_browser_journey(root, task={
+                "action": "plan_training_booking", "intentId": "intent:open-booking", "bookerActorId": "andy-bogard",
+            }, role="player")
+            queued = queue(root, browser_job=job)
+
+            self.assertEqual("queued", queued["status"])
+            launched = claim_next(root, worker_id="economical:runner-1")
+            self.assertEqual("worker_contract_claimed", launched["action"])
+            self.assertEqual("andy-bogard", launched["launchPacket"]["actorId"])
+            self.assertEqual("intent:open-booking", launched["launchPacket"]["intentId"])
+
+    def test_malformed_booking_end_falls_through_to_later_fields(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "state" / "booking-intents.json"
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps({"schemaVersion": 1, "intents": {
+                "intent:bad-booking-past-plan": {
+                    "id": "intent:bad-booking-past-plan", "status": "agreed", "journey": "customer_training",
+                    "booking": {"endTime": "not-a-timestamp"},
+                    "previewPlan": {"endTime": PAST_SESSION_END},
+                },
+            }}))
+            job = dispatch_browser_journey(root, task={
+                "action": "plan_training_booking", "intentId": "intent:bad-booking-past-plan", "bookerActorId": "andy-bogard",
+            }, role="player")
+            queued = queue(root, browser_job=job)
+            self.assertEqual("retired", queued["status"])
+            self.assertEqual(
+                "session_window_elapsed",
+                json.loads((root / "state" / "worker-contracts.json").read_text())["contracts"][queued["contractKey"]]["retirementReason"],
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "state" / "booking-intents.json"
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps({"schemaVersion": 1, "intents": {
+                "intent:bad-booking-open-plan": {
+                    "id": "intent:bad-booking-open-plan", "status": "agreed", "journey": "customer_training",
+                    "booking": {"endTime": "not-a-timestamp"},
+                    "previewPlan": {"endTime": FUTURE_SESSION_END},
+                },
+                "intent:bad-booking-and-plan": {
+                    "id": "intent:bad-booking-and-plan", "status": "booked", "journey": "customer_training",
+                    "booking": {"endTime": "not-a-timestamp"},
+                    "previewPlan": {"endTime": ""},
+                    "event": {"endTime": PAST_SESSION_END},
+                },
+            }}))
+            open_job = dispatch_browser_journey(root, task={
+                "action": "plan_training_booking", "intentId": "intent:bad-booking-open-plan", "bookerActorId": "andy-bogard",
+            }, role="player")
+            open_queued = queue(root, browser_job=open_job)
+            self.assertEqual("queued", open_queued["status"])
+            event_job = dispatch_browser_journey(root, task={
+                "action": "redeem_share_invitation", "intentId": "intent:bad-booking-and-plan", "recipientActorId": "terry-bogard",
+            }, role="player")
+            event_queued = queue(root, browser_job=event_job)
+            self.assertEqual("retired", event_queued["status"])
+            launched = claim_next(root, worker_id="economical:runner-1")
+            self.assertEqual("worker_contract_claimed", launched["action"])
+            self.assertEqual("intent:bad-booking-open-plan", launched["launchPacket"]["intentId"])
+
+    def test_time_unknown_work_is_not_retired(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_intent(root, "intent:unknown-window", end_time="not-a-timestamp")
+            job = dispatch_browser_journey(root, task={
+                "action": "capture_share_invitation", "intentId": "intent:unknown-window", "ownerActorId": "andy-bogard",
+            }, role="player")
+            queued = queue(root, browser_job=job)
+
+            self.assertEqual("queued", queued["status"])
+            launched = claim_next(root, worker_id="economical:runner-1")
+            self.assertEqual("worker_contract_claimed", launched["action"])
+            self.assertEqual("intent:unknown-window", launched["launchPacket"]["intentId"])
+
+    def test_retirement_keeps_observations_receipts_and_diary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            job = dispatch_browser_journey(root, task={
+                "action": "plan_training_booking", "intentId": "intent:history", "bookerActorId": "andy-bogard",
+            }, role="player")
+            journeys_path = root / "state" / "browser-journeys.json"
+            journeys = json.loads(journeys_path.read_text())
+            journeys["jobs"][job["jobKey"]].update({
+                "observations": [{"kind": "visible_observation", "observedAt": "2026-10-30T12:00:00Z"}],
+                "lastObservation": "visible_observation",
+            })
+            journeys_path.write_text(json.dumps(journeys))
+            queued = queue(root, browser_job=job)
+            contracts_path = root / "state" / "worker-contracts.json"
+            contracts = json.loads(contracts_path.read_text())
+            contracts["contracts"][queued["contractKey"]].update({
+                "diaryLine": "Stopped at the rendered review.",
+                "receiptRef": "state/worker-evidence/example/worker-receipt.json",
+            })
+            contracts_path.write_text(json.dumps(contracts))
+            journal = root / "state" / "actors" / "andy-bogard" / "journal.jsonl"
+            journal.parent.mkdir(parents=True)
+            journal.write_text(json.dumps({"kind": "worker_journey", "outcome": "blocked", "text": "Stopped at the rendered review."}) + "\n")
+            _write_intent(root, "intent:history", end_time=PAST_SESSION_END)
+
+            launched = claim_next(root, worker_id="economical:runner-1")
+
+            self.assertEqual("pass", launched["action"])
+            saved_job = json.loads(journeys_path.read_text())["jobs"][job["jobKey"]]
+            saved_contract = json.loads(contracts_path.read_text())["contracts"][queued["contractKey"]]
+            self.assertEqual("retired", saved_job["status"])
+            self.assertEqual("session_window_elapsed", saved_job["retirementReason"])
+            self.assertEqual("visible_observation", saved_job["lastObservation"])
+            self.assertEqual([{"kind": "visible_observation", "observedAt": "2026-10-30T12:00:00Z"}], saved_job["observations"])
+            self.assertEqual("retired", saved_contract["status"])
+            self.assertEqual("Stopped at the rendered review.", saved_contract["diaryLine"])
+            self.assertEqual("state/worker-evidence/example/worker-receipt.json", saved_contract["receiptRef"])
+            self.assertEqual("Stopped at the rendered review.", json.loads(journal.read_text())["text"])
+            with self.assertRaisesRegex(ValueError, "unavailable"):
+                claim(root, contract_key=queued["contractKey"], worker_id="economical:runner-1")
+
+    def test_fresh_contract_is_selected_when_stale_rows_exist(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_intent(root, "intent:stale-booking")
+            _write_intent(root, "intent:fresh-booking")
+            stale_job = dispatch_browser_journey(root, task={
+                "action": "plan_training_booking", "intentId": "intent:stale-booking", "bookerActorId": "andy-bogard",
+            }, role="player")
+            fresh_job = dispatch_browser_journey(root, task={
+                "action": "redeem_share_invitation", "intentId": "intent:fresh-booking", "recipientActorId": "terry-bogard",
+            }, role="player")
+            stale = queue(root, browser_job=stale_job)
+            fresh = queue(root, browser_job=fresh_job)
+            contracts_path = root / "state" / "worker-contracts.json"
+            contracts = json.loads(contracts_path.read_text())
+            contracts["contracts"][stale["contractKey"]]["queuedAt"] = "2020-01-01T00:00:00Z"
+            contracts_path.write_text(json.dumps(contracts))
+            _write_intent(root, "intent:stale-booking", end_time=PAST_SESSION_END)
+            _write_intent(root, "intent:fresh-booking", end_time=FUTURE_SESSION_END)
+
+            launched = claim_next(root, worker_id="economical:runner-1")
+
+            self.assertEqual("worker_contract_claimed", launched["action"])
+            self.assertEqual("terry-bogard", launched["launchPacket"]["actorId"])
+            self.assertEqual("intent:fresh-booking", launched["launchPacket"]["intentId"])
+            saved = json.loads(contracts_path.read_text())["contracts"]
+            self.assertEqual("retired", saved[stale["contractKey"]]["status"])
+            self.assertEqual("session_window_elapsed", saved[stale["contractKey"]]["retirementReason"])
+            self.assertEqual("active", saved[fresh["contractKey"]]["status"])
+

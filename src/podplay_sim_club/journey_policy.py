@@ -7,6 +7,7 @@ rate-card work, and price verification are browser journeys with captured
 observable evidence.
 """
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -15,6 +16,8 @@ from .time import isoformat, parse_instant
 
 
 STATE_FILE = "browser-journeys.json"
+INTENT_LEDGER_FILE = "booking-intents.json"
+SESSION_WINDOW_ELAPSED = "session_window_elapsed"
 OBSERVATION_KINDS = {
     "visible_observation",
     "visible_action_completed",
@@ -54,6 +57,44 @@ INVITATION_PLAYBOOK_REVISION = "authenticated-private-invite-member-route-v5"
 # Reservations tab variant which includes a notification label.  This is a
 # narrow retry reason for a check-in that stopped at that visible dialog.
 CHECK_IN_PLAYBOOK_REVISION = "first-use-region-reservations-v1"
+
+
+def explicit_session_end(intent: Dict[str, Any]) -> Optional[datetime]:
+    """Return the first usable session end, or None when every candidate is unusable.
+
+    Order is booking, then preview plan, then event. A missing, blank, or
+    malformed value falls through so it does not hide a later usable end.
+    """
+    if not isinstance(intent, dict):
+        return None
+    for key in ("booking", "previewPlan", "event"):
+        container = intent.get(key)
+        if not isinstance(container, dict) or "endTime" not in container:
+            continue
+        value = container.get("endTime")
+        if not isinstance(value, str) or not value.strip():
+            continue
+        try:
+            return parse_instant(value)
+        except ValueError:
+            continue
+    return None
+
+
+def session_window_has_elapsed(intent: Any, now: datetime) -> bool:
+    if not isinstance(intent, dict):
+        return False
+    end = explicit_session_end(intent)
+    return end is not None and end <= now
+
+
+def _intent(storage: Storage, intent_id: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(intent_id, str) or not intent_id:
+        return None
+    ledger = storage.load_json(storage.state / INTENT_LEDGER_FILE, default={})
+    intents = ledger.get("intents", {}) if isinstance(ledger, dict) else {}
+    intent = intents.get(intent_id) if isinstance(intents, dict) else None
+    return intent if isinstance(intent, dict) else None
 
 
 def _playbook_for(action: str) -> Optional[str]:
@@ -149,8 +190,11 @@ def dispatch(root: Path, *, task: Dict[str, Any], role: str, observed_at: Option
         jobs = state.get("jobs", {}) if isinstance(state, dict) else {}
         jobs = jobs if isinstance(jobs, dict) else {}
         existing = jobs.get(key) if isinstance(jobs.get(key), dict) else {}
+        elapsed = session_window_has_elapsed(_intent(storage, job.get("intentId")), parse_instant(observed))
+        retiring_elapsed = elapsed and existing.get("status") not in {"observed", "active", "retired"}
         reopen_for_revision = (
-            existing.get("status") == "blocked"
+            not retiring_elapsed
+            and existing.get("status") == "blocked"
             and revision is not None
             and existing.get("playbookRevision") != revision
         )
@@ -161,12 +205,18 @@ def dispatch(root: Path, *, task: Dict[str, Any], role: str, observed_at: Option
                 if field in existing
             }
         )
+        if retiring_elapsed:
+            status = "retired"
+        elif reopen_for_revision:
+            status = "queued"
+        else:
+            status = existing.get("status", "queued")
         jobs[key] = {
             # Preserve the runner-owned lifecycle and observation history when
             # a recurring Rally tick rediscovers the same product step.
             **preserved_lifecycle,
             "jobKey": key,
-            "status": "queued" if reopen_for_revision else existing.get("status", "queued"),
+            "status": status,
             "queuedAt": existing.get("queuedAt", observed),
             "lastDispatchedAt": observed,
             "actorId": actor,
@@ -177,6 +227,8 @@ def dispatch(root: Path, *, task: Dict[str, Any], role: str, observed_at: Option
             "playbook": job.get("playbook"),
             "playbookRevision": revision,
         }
+        if retiring_elapsed:
+            jobs[key].update({"retiredAt": observed, "retirementReason": SESSION_WINDOW_ELAPSED})
         if reopen_for_revision:
             jobs[key].update({
                 "retryOfPlaybookRevision": existing.get("playbookRevision", "unversioned"),
@@ -184,7 +236,7 @@ def dispatch(root: Path, *, task: Dict[str, Any], role: str, observed_at: Option
                 "reopenedAt": observed,
             })
         storage.write_json(storage.state / STATE_FILE, {"schemaVersion": 1, "jobs": jobs})
-    return {**job, "jobKey": key, "status": "queued"}
+    return {**job, "jobKey": key, "status": jobs[key]["status"]}
 
 
 def pending_or_new(root: Path, *, task: Dict[str, Any], role: str) -> bool:
@@ -200,9 +252,16 @@ def pending_or_new(root: Path, *, task: Dict[str, Any], role: str) -> bool:
     if job.get("journeyAction") == "pass" or not isinstance(actor, str):
         return False
     key = ":".join(str(job.get(field) or "-") for field in ("role", "journeyAction", "intentId", "actorId"))
-    state = Storage(root).load_json(Storage(root).state / STATE_FILE, default={})
+    storage = Storage(root)
+    state = storage.load_json(storage.state / STATE_FILE, default={})
     jobs = state.get("jobs", {}) if isinstance(state, dict) else {}
     existing = jobs.get(key) if isinstance(jobs, dict) else None
+    if (
+        isinstance(existing, dict)
+        and existing.get("status") in {"queued", "blocked"}
+        and session_window_has_elapsed(_intent(storage, existing.get("intentId")), parse_instant(None))
+    ):
+        return False
     return (
         not isinstance(existing, dict)
         or existing.get("status") in {"queued", "active"}
@@ -228,6 +287,10 @@ def claim(root: Path, *, job_key: str, actor_id: str, observed_at: Optional[str]
             raise ValueError("browser journey is unavailable")
         if job.get("actorId") != actor_id:
             raise ValueError("only the named Sim may claim this browser journey")
+        if job.get("status") == "queued" and session_window_has_elapsed(_intent(storage, job.get("intentId")), parse_instant(observed)):
+            job.update({"status": "retired", "retiredAt": observed, "retirementReason": SESSION_WINDOW_ELAPSED})
+            storage.write_json(storage.state / STATE_FILE, {"schemaVersion": 1, "jobs": jobs})
+            raise ValueError("browser journey is no longer available")
         if job.get("status") not in {"queued", "observed", "active"}:
             raise ValueError("browser journey is no longer available")
         claimed_by = job.get("claimedBy")

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from .journey_policy import STATE_FILE as JOURNEY_STATE_FILE
+from .journey_policy import SESSION_WINDOW_ELAPSED, session_window_has_elapsed
 from .storage import Storage
 from .time import isoformat, parse_instant
 
@@ -64,6 +65,60 @@ def _retire_obsolete_booking_contracts_locked(storage: Storage, contracts: Dict[
             jobs_changed = True
     if jobs_changed:
         storage.write_json(storage.state / JOURNEY_STATE_FILE, {"schemaVersion": 1, "jobs": jobs})
+
+
+def _load_intents(storage: Storage) -> Dict[str, Any]:
+    ledger = storage.load_json(storage.state / INTENTS_FILE, default={})
+    intents = ledger.get("intents", {}) if isinstance(ledger, dict) else {}
+    return intents if isinstance(intents, dict) else {}
+
+
+def _mark_session_elapsed(record: Dict[str, Any], *, observed_at: str) -> None:
+    record.update({
+        "status": "retired",
+        "retiredAt": observed_at,
+        "retirementReason": SESSION_WINDOW_ELAPSED,
+    })
+
+
+def _retire_elapsed_session_work_locked(
+    storage: Storage, contracts: Dict[str, Any], jobs: Dict[str, Any], *, observed_at: str,
+) -> tuple[bool, bool]:
+    """Retire queued browser work whose explicit session end has passed.
+
+    Observations, receipts, and diary fields already on the records stay.
+    A missing or unusable end time is left untouched.
+    """
+    now = parse_instant(observed_at)
+    intents = _load_intents(storage)
+    jobs_changed = False
+    contracts_changed = False
+
+    def elapsed(intent_id: Any) -> bool:
+        intent = intents.get(intent_id) if isinstance(intent_id, str) else None
+        return session_window_has_elapsed(intent, now)
+
+    for contract in contracts.values():
+        if not isinstance(contract, dict) or contract.get("status") != "queued":
+            continue
+        if not elapsed(contract.get("intentId")):
+            continue
+        _mark_session_elapsed(contract, observed_at=observed_at)
+        contracts_changed = True
+        job_key = contract.get("browserJobKey")
+        job = jobs.get(job_key) if isinstance(jobs, dict) and isinstance(job_key, str) else None
+        if isinstance(job, dict) and job.get("status") == "queued":
+            _mark_session_elapsed(job, observed_at=observed_at)
+            jobs_changed = True
+    if isinstance(jobs, dict):
+        for job in jobs.values():
+            if not isinstance(job, dict) or job.get("status") != "queued":
+                continue
+            if not elapsed(job.get("intentId")):
+                continue
+            _mark_session_elapsed(job, observed_at=observed_at)
+            jobs_changed = True
+    return jobs_changed, contracts_changed
 
 
 def _launch_packet(contract: Dict[str, Any]) -> Dict[str, Any]:
@@ -160,6 +215,12 @@ def _agreement_context(storage: Storage, *, browser_job: Dict[str, Any]) -> Dict
     return context
 
 
+def _load_jobs(storage: Storage) -> Dict[str, Any]:
+    journeys = storage.load_json(storage.state / JOURNEY_STATE_FILE, default={})
+    jobs = journeys.get("jobs", {}) if isinstance(journeys, dict) else {}
+    return jobs if isinstance(jobs, dict) else {}
+
+
 def queue(root: Path, *, browser_job: Dict[str, Any]) -> Dict[str, Any]:
     """Queue one idempotent operations-mode worker contract for a browser job."""
     job_key = browser_job.get("jobKey")
@@ -192,14 +253,15 @@ def queue(root: Path, *, browser_job: Dict[str, Any]) -> Dict[str, Any]:
                 "remoteWrites": 0,
             }
         elif existing.get("status") == "reported":
-            journeys = storage.load_json(storage.state / JOURNEY_STATE_FILE, default={})
-            jobs = journeys.get("jobs", {}) if isinstance(journeys, dict) else {}
-            matching_job = jobs.get(job_key) if isinstance(jobs, dict) else None
+            matching_job = _load_jobs(storage).get(job_key)
             # A worker that could not begin has explicitly released its local
             # browser job.  Only that state may create a later retry; an
             # observed browser journey is historical evidence, never a cue to
-            # repeat a potentially stateful product action.
-            if isinstance(matching_job, dict) and matching_job.get("status") == "queued":
+            # repeat a potentially stateful product action. An ended session
+            # is not a retry: leave the reported diary and receipt in place.
+            intent = _load_intents(storage).get(existing.get("intentId")) if isinstance(existing.get("intentId"), str) else None
+            session_open = not session_window_has_elapsed(intent, parse_instant(observed_at))
+            if isinstance(matching_job, dict) and matching_job.get("status") == "queued" and session_open:
                 contracts[contract_key] = {
                     **existing,
                     "status": "queued",
@@ -209,6 +271,12 @@ def queue(root: Path, *, browser_job: Dict[str, Any]) -> Dict[str, Any]:
                 }
                 for field in ("workerId", "claimedAt", "reportedAt", "outcome", "diaryLine", "receiptRef", "launcher"):
                     contracts[contract_key].pop(field, None)
+        jobs = _load_jobs(storage)
+        jobs_changed, _contracts_changed = _retire_elapsed_session_work_locked(
+            storage, contracts, jobs, observed_at=observed_at,
+        )
+        if jobs_changed:
+            storage.write_json(storage.state / JOURNEY_STATE_FILE, {"schemaVersion": 1, "jobs": jobs})
         storage.write_json(storage.state / STATE_FILE, {"schemaVersion": 1, "contracts": contracts})
     contract = contracts[contract_key]
     return {"action": "worker_contract_queued", "contractKey": contract_key, "status": contract["status"], "actorId": actor_id, "remoteWrites": 0}
@@ -226,6 +294,16 @@ def claim(root: Path, *, contract_key: str, worker_id: str) -> Dict[str, Any]:
             raise ValueError("worker contract is unavailable")
         if not _is_economical_worker(worker_id):
             raise ValueError("worker must use the economical worker identity")
+        jobs = _load_jobs(storage)
+        jobs_changed, contracts_changed = _retire_elapsed_session_work_locked(
+            storage, contracts, jobs, observed_at=observed_at,
+        )
+        if jobs_changed:
+            storage.write_json(storage.state / JOURNEY_STATE_FILE, {"schemaVersion": 1, "jobs": jobs})
+        if contract.get("status") != "queued":
+            if contracts_changed:
+                storage.write_json(storage.state / STATE_FILE, {"schemaVersion": 1, "contracts": contracts})
+            raise ValueError("worker contract is unavailable")
         contract.update({"status": "active", "workerId": worker_id, "claimedAt": observed_at})
         storage.write_json(storage.state / STATE_FILE, {"schemaVersion": 1, "contracts": contracts})
     return {"contractKey": contract_key, "actorId": contract["actorId"], "status": "active", "remoteWrites": 0}
@@ -245,13 +323,20 @@ def claim_specific(root: Path, *, contract_key: str, worker_id: str) -> Dict[str
     with storage.writer_lock():
         state = storage.load_json(storage.state / STATE_FILE, default={})
         contracts = state.get("contracts", {}) if isinstance(state, dict) else {}
+        contracts = contracts if isinstance(contracts, dict) else {}
+        jobs = _load_jobs(storage)
+        jobs_changed, contracts_changed = _retire_elapsed_session_work_locked(
+            storage, contracts, jobs, observed_at=observed_at,
+        )
+        if jobs_changed:
+            storage.write_json(storage.state / JOURNEY_STATE_FILE, {"schemaVersion": 1, "jobs": jobs})
         contract = contracts.get(contract_key) if isinstance(contracts, dict) else None
         if not isinstance(contract, dict) or contract.get("status") != "queued":
+            if contracts_changed:
+                storage.write_json(storage.state / STATE_FILE, {"schemaVersion": 1, "contracts": contracts})
             raise ValueError("named worker contract is unavailable")
         job_key, actor_id = contract.get("browserJobKey"), contract.get("actorId")
-        journeys = storage.load_json(storage.state / JOURNEY_STATE_FILE, default={})
-        jobs = journeys.get("jobs", {}) if isinstance(journeys, dict) else {}
-        job = jobs.get(job_key) if isinstance(jobs, dict) and isinstance(job_key, str) else None
+        job = jobs.get(job_key) if isinstance(job_key, str) else None
         if not isinstance(job, dict) or job.get("status") != "queued" or job.get("actorId") != actor_id:
             raise ValueError("named worker contract has no runnable browser job")
         job.update({"status": "active", "claimedBy": actor_id, "claimedAt": observed_at, "lastObservedAt": observed_at})
@@ -277,6 +362,14 @@ def claim_next(root: Path, *, worker_id: str) -> Dict[str, Any]:
         state = storage.load_json(storage.state / STATE_FILE, default={})
         contracts = state.get("contracts", {}) if isinstance(state, dict) else {}
         contracts = contracts if isinstance(contracts, dict) else {}
+        jobs = _load_jobs(storage)
+        jobs_changed, contracts_changed = _retire_elapsed_session_work_locked(
+            storage, contracts, jobs, observed_at=observed_at,
+        )
+        if jobs_changed:
+            storage.write_json(storage.state / JOURNEY_STATE_FILE, {"schemaVersion": 1, "jobs": jobs})
+        if contracts_changed:
+            storage.write_json(storage.state / STATE_FILE, {"schemaVersion": 1, "contracts": contracts})
         queued = [
             contract for contract in contracts.values()
             if isinstance(contract, dict) and contract.get("status") == "queued"
@@ -287,8 +380,6 @@ def claim_next(root: Path, *, worker_id: str) -> Dict[str, Any]:
             queued,
             key=lambda item: (str(item.get("queuedAt") or ""), str(item.get("contractKey") or "")),
         )
-        journeys = storage.load_json(storage.state / JOURNEY_STATE_FILE, default={})
-        jobs = journeys.get("jobs", {}) if isinstance(journeys, dict) else {}
         contract = next(
             (
                 candidate for candidate in ordered
