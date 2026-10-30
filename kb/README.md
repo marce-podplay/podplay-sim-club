@@ -43,6 +43,12 @@ Start here:
 - [Sim browser capability lab](sim-browser-capability-lab.md) — the separation
   between the social engine, a Sim's rendered browser journey, dashboard
   observation, and bounded experiments used to discover reusable routines.
+- [Lead and dispatcher operating model](lead-and-dispatcher-operating-model.md) —
+  the portable coordinator, engine, economical-worker, research, evidence, and
+  browser-isolation agreement.
+- [Operations hand-off — 2026-10-30](current-operations-handoff-2026-10-30.md)
+  — current journey status, verified timing behaviour, and the reconstruction
+  checklist for a fresh chat.
 
 The short version is:
 
