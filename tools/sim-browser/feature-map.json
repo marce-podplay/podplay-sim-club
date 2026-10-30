@@ -154,6 +154,12 @@
       "name": "Continue",
       "evidence": "the visible selected-slot Continue control was activated"
     },
+    "booking.review.back": {
+      "kind": "visible_click",
+      "role": "button",
+      "name": "Back",
+      "evidence": "the visible booking-review Back control was activated"
+    },
     "booking.slot.today_1700": {
       "kind": "visible_click",
       "role": "button",
